@@ -1,5 +1,6 @@
 # BasedBall : A baseball batting simulator
 import pygame
+import pygame.gfxdraw
 import pygame_gui
 import random
 import button
@@ -21,6 +22,9 @@ pygame.mixer.pre_init(44100, 16, 2, 4096)
 pygame.init()
 screen = pygame.display.set_mode((1280, 720))
 clock = pygame.time.Clock()
+icon = pygame.image.load(resource_path('Images/icon.png')).convert_alpha()
+pygame.display.set_icon(icon)
+pygame.display.set_caption('Basedball')
 running = True
 
 #Stuff for the typing effect in main menu and summary screen
@@ -33,6 +37,9 @@ speed = 3
 
 #Some more setup
 manager = pygame_gui.UIManager((1280, 720), 'theme.json')
+manager.preload_fonts([{'name': 'fira_code', 'point_size': 18, 'style': 'regular'},
+                          {'name': 'fira_code', 'point_size': 18, 'style': 'bold'},
+                          {'name': 'fira_code', 'point_size': 18, 'style': 'bold_italic'}])
 player_pos = pygame.Vector2(screen.get_width() / 2, screen.get_height() / 2)
 strikezone = pygame.Rect((565, 400), (130, 165))
 ball_pos = (0,0)
@@ -547,16 +554,17 @@ def contacttiming(swing_starttime, starttime, traveltime):
     
 
 def loc_check(batpos, ballpos):
-    dist = ((ballpos.x - batpos.x)**2 + (ballpos.y - batpos.y)**2)**(1/2)
+    dist = ((ballpos[0] - batpos[0])**2 + (ballpos[1] - batpos[1])**2)**(1/2)
     if dist > 30:
-        return "miss"
+        outcome = "miss"
     elif 20 < dist < 30:
-        return "foul"
+        outcome = "foul"
     elif 10 < dist < 20:
-        return "good"
+        outcome = "good"
     else:
-        return "perfect"
-
+        outcome = "perfect"
+    print(outcome)
+    return outcome
 
 
 
@@ -747,10 +755,10 @@ def yamamoto_lowoutsidefastball():
     return
 def yamamoto_lowinsidefastball():
     vertbreakvariable = random.uniform(0,0.20)
-    horizontalvariation = random.uniform(-0.5,0.5)
+    horizontalvariation = random.uniform(-0.25,0.25)
     global ball_pos
     ball_pos = pygame.Vector2((screen.get_width() / 2) - 52, (screen.get_height() / 3) + 183)
-    simulate(True, ball_pos, 0.035 + horizontalvariation, 0.015, -0.05, 0.200 + vertbreakvariable, 4, 380, 0.350 + vertbreakvariable, -0.15, 100, 'Yamamoto', 'FASTBALL')
+    simulate(True, ball_pos, 0.25, -0.025, -0.05, 0.200 + vertbreakvariable, 4, 380, 0.350 + vertbreakvariable, -0.15 + horizontalvariation, 100, 'Yamamoto', 'FASTBALL')
     return
 def yamamoto_lowcurveball():
     vertbreakvariability = random.uniform(0,0.10)
@@ -798,8 +806,6 @@ def yamamoto_middlemiddlefastball():
     ball_pos = pygame.Vector2((screen.get_width() / 2) - 52, (screen.get_height() / 3) + 183)
     simulate(True, ball_pos, 0.75, 0.05 + horizontalbreakvariable, -0.5 + yoffset, 0.20 + vertbreakvariable, 4, 380, 0.25 + vertbreakvariable, 0.01 + horizontalbreakvariable, 150, 'Yamamoto', 'FASTBALL')
     return
-
-
 
 
 #SASAKI PITCH TYPES
@@ -1480,9 +1486,8 @@ def simulate(yes, ball_pos, horizontalspeed,
             elif swing_started == 0:
                 leg_kick(current_time, starttime + 700)
             #TIMING ON BUT SWING PATH OFF (SWING OVER OR UNDER BALL)
-            if (ball_pos.x < 554 or ball_pos.x > 706) or (ball_pos.y < 385 or ball_pos.y > 480) and swing_started == 2:
-                made_contact = 1
-            elif (ball_pos.x < 554 or ball_pos.x > 706) or (ball_pos.y < 470 or ball_pos.y > 576) and swing_started == 1:
+            outcome = loc_check(mousepos, ball_pos)
+            if outcome == 'miss':
                 made_contact = 1
             #TIMING ON AND PATH ON - FOUL BALL
             else:
@@ -1526,9 +1531,8 @@ def simulate(yes, ball_pos, horizontalspeed,
             elif swing_started == 0:
                 leg_kick(current_time, starttime + 700)
             #PERFECT TIMING BUT SWING PATH OFF
-            if (ball_pos.x < 554 or ball_pos.x > 706) or (ball_pos.y < 385 or ball_pos.y > 480) and swing_started == 2:
-                made_contact = 1
-            elif (ball_pos.x < 554 or ball_pos.x > 706) or (ball_pos.y < 470 or ball_pos.y > 576) and swing_started == 1:
+            outcome = loc_check(mousepos, ball_pos)
+            if outcome == 'miss':
                 made_contact = 1
             #PERFECT TIMING AND SWING PATH ON - SUCCESSFUL HIT
             else:
@@ -1943,7 +1947,7 @@ while running:
                         umpsound = False
                     elif umpsound == False:
                         umpsound = True
-                elif event.ui_element == sasakipitch:
+                elif event.ui_element == yamamotopitch:
                     Yamamoto_AI()
                 elif event.ui_element == backtomainmenu:
                     menu_state = 0
@@ -1970,7 +1974,7 @@ while running:
         draw_static()
         batterone(x,y)
         if first_pitch_thrown:
-            pygame.draw.circle(screen, "white", ball_pos, fourseamballsize, 2)
+            pygame.gfxdraw.aacircle(screen, int(ball_pos[0]), int(ball_pos[1]), fourseamballsize, (255,255,255))
         pygame.display.flip()
 
     elif menu_state == 200:
@@ -2004,7 +2008,7 @@ while running:
         draw_static()
         batterone(x,y)
         for pitch_pos in pitches_display:
-            pygame.draw.circle(screen, "white", pitch_pos, fourseamballsize, 2)
+            pygame.gfxdraw.aacircle(screen, int(pitch_pos[0]), int(pitch_pos[1]), fourseamballsize, (255,255,255))
         pygame.display.flip()
 
     elif menu_state == 100:

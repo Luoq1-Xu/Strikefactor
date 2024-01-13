@@ -1,5 +1,6 @@
 # BasedBall : A baseball batting simulator
 import pygame
+import pygame.gfxdraw
 import pygame_gui
 import random
 import button
@@ -682,7 +683,7 @@ def lefty_pitch_decision_maker():
             else:
                 sale_fastball()
         elif rando > 5.36 and rando <= 8.87:
-            leftyslider()
+            sale_slider()
         else:
             leftychangeup()
     # 1 - 0 OR 2 - 1
@@ -694,7 +695,7 @@ def lefty_pitch_decision_maker():
             else:
                 sale_fastball()
         elif rando > 6.46 and rando <= 9.04:
-            leftyslider()
+            sale_slider()
         else:
             leftychangeup()
     # 0 - 1  OR  2 - 2
@@ -706,7 +707,7 @@ def lefty_pitch_decision_maker():
             else:
                 sale_fastball()
         elif rando > 6.39 and rando <= 8.54:
-            leftyslider()
+            sale_slider()
         else:
             leftychangeup()
     # 2 - 0  OR  3 - 1  OR  3 - 0
@@ -718,7 +719,7 @@ def lefty_pitch_decision_maker():
             else:
                 leftyhighfastball()
         elif rando > 7 and rando <= 9:
-            leftyslider()
+            sale_slider()
         else:
             leftychangeup()
     # 0 - 2  OR  1 - 2
@@ -730,10 +731,11 @@ def lefty_pitch_decision_maker():
             else:
                 sale_fastball()
         elif rando > 4.5 and rando <= 8.5:
-            leftyslider()
+            sale_slider()
         else:
             leftychangeup()
     return
+
 
 
 def sale_fastball():
@@ -741,6 +743,11 @@ def sale_fastball():
                           leftylowinsidefastball,
                           leftyhighmiddlefastball])
     rand()
+    return
+
+def sale_slider():
+    rando = random.choice([leftyslider, leftymiddleinslider, leftyhighinsideslider])
+    rando()
     return
 
 
@@ -913,7 +920,21 @@ def leftyslider():
     horizontalbreakvariability = random.uniform(0,-0.15)
     global ball_pos
     ball_pos = pygame.Vector2((screen.get_width() / 2) + 61, (screen.get_height() / 3) + 209)
-    simulate(True, ball_pos, -0.1, -0.200 + horizontalbreakvariability, -0.75, 0.225 + vertbreakvariability, 4, 480, 0.450 + vertbreakvariability, -0.275 + horizontalbreakvariability, 160, 'chrissale', 'SLIDER')
+    simulate(True, ball_pos, -0.1, -0.200 + horizontalbreakvariability, -0.75, 0.05 + vertbreakvariability, 4, 480, 0.550 + vertbreakvariability, -0.275 + horizontalbreakvariability, 160, 'chrissale', 'SLIDER')
+    return
+def leftymiddleinslider():
+    vertbreakvariability = random.uniform(0,0.10)
+    horizontalbreakvariability = random.uniform(0,-0.15)
+    global ball_pos
+    ball_pos = pygame.Vector2((screen.get_width() / 2) + 61, (screen.get_height() / 3) + 209)
+    simulate(True, ball_pos, -0.1, -0.200 + horizontalbreakvariability, -1.25, 0.125 + vertbreakvariability, 4, 480, 0.250 + vertbreakvariability, -0.275 + horizontalbreakvariability, 160, 'chrissale', 'SLIDER')
+    return
+def leftyhighinsideslider():
+    vertbreakvariability = random.uniform(0,0.10)
+    horizontalbreakvariability = random.uniform(-0.05,-0.15)
+    global ball_pos
+    ball_pos = pygame.Vector2((screen.get_width() / 2) + 61, (screen.get_height() / 3) + 209)
+    simulate(True, ball_pos, -0.15, -0.150 + horizontalbreakvariability, -1.95, -0.050 + vertbreakvariability, 4, 480, 0.150 + vertbreakvariability, -0.285 + horizontalbreakvariability, 160, 'chrissale', 'SLIDER')
     return
 def leftychangeup():
     vertbreakvariable = random.uniform(0,0.10)
@@ -1578,7 +1599,7 @@ def simulate(yes, ball_pos, horizontalspeed,
                     swing_start(timenow, swing_starttime)
                 else:
                     high_swing_start(timenow, swing_starttime)
-            pygame.draw.circle(screen, "white", ball_pos, fourseamballsize, 2)
+            pygame.gfxdraw.aacircle(screen, int(ball_pos[0]), int(ball_pos[1]), fourseamballsize, (255,255,255))
             draw_static()
             manager.update(time_delta)
             manager.draw_ui(screen)
@@ -1723,7 +1744,7 @@ def simulate(yes, ball_pos, horizontalspeed,
                     high_swing_start(timenow, swing_starttime)
             elif swing_started == 0:
                 leg_kick(current_time, starttime + 700)
-            pygame.draw.circle(screen, "white", ball_pos, fourseamballsize, 2)
+            pygame.gfxdraw.aacircle(screen, int(ball_pos[0]), int(ball_pos[1]), fourseamballsize, (255,255,255))
             draw_static()
             manager.update(time_delta)
             manager.draw_ui(screen)
@@ -1807,7 +1828,7 @@ while running:
         draw_static()
         batterone(x,y)
         if first_pitch_thrown:
-            pygame.draw.circle(screen, "white", ball_pos, fourseamballsize, 2)
+            pygame.gfxdraw.aacircle(screen, int(ball_pos[0]), int(ball_pos[1]), fourseamballsize, (255,255,255))
         manager.draw_ui(screen)
         pygame.display.flip()
 
@@ -1863,7 +1884,7 @@ while running:
         draw_static()
         batterone(x,y)
         if first_pitch_thrown:
-            pygame.draw.circle(screen, "white", ball_pos, fourseamballsize, 2)
+            pygame.gfxdraw.aacircle(screen, int(ball_pos[0]), int(ball_pos[1]), fourseamballsize, (255,255,255))
         pygame.display.flip()
 
     elif menu_state == 3:
@@ -1918,7 +1939,7 @@ while running:
         draw_static()
         batterone(x,y)
         if first_pitch_thrown:
-            pygame.draw.circle(screen, "white", ball_pos, fourseamballsize, 2)
+            pygame.gfxdraw.aacircle(screen, int(ball_pos[0]), int(ball_pos[1]), fourseamballsize, (255,255,255))
         pygame.display.flip()
 
     elif menu_state == 4:
@@ -1973,7 +1994,7 @@ while running:
         draw_static()
         batterone(x,y)
         if first_pitch_thrown:
-            pygame.draw.circle(screen, "white", ball_pos, fourseamballsize, 2)
+            pygame.gfxdraw.aacircle(screen, int(ball_pos[0]), int(ball_pos[1]), fourseamballsize, (255,255,255))
         pygame.display.flip()
 
     elif menu_state == 200:
@@ -2007,7 +2028,7 @@ while running:
         draw_static()
         batterone(x,y)
         for pitch_pos in pitches_display:
-            pygame.draw.circle(screen, "white", pitch_pos, fourseamballsize, 2)
+            pygame.gfxdraw.aacircle(screen, int(pitch_pos[0]), int(pitch_pos[1]), fourseamballsize, (255,255,255))
         pygame.display.flip()
 
     elif menu_state == 100:

@@ -13,7 +13,7 @@ def lefty_pitch_decision_maker():
             if highlow >= 1 and highlow <= 6:
                 lowoutsidesinker()
             else:
-                leftyhighfastball()
+                sale_fastball()
         elif rando > 5.36 and rando <= 8.87:
             leftyslider()
         else:
@@ -25,7 +25,7 @@ def lefty_pitch_decision_maker():
             if highlow >= 1 and highlow <= 5:
                 lowoutsidesinker()
             else:
-                leftyhighfastball()
+                sale_fastball()
         elif rando > 6.46 and rando <= 9.04:
             leftyslider()
         else:
@@ -37,7 +37,7 @@ def lefty_pitch_decision_maker():
             if highlow >= 1 and highlow <= 4:
                 lowoutsidesinker()
             else:
-                leftyhighfastball()
+                sale_fastball()
         elif rando > 6.39 and rando <= 8.54:
             leftyslider()
         else:
@@ -61,7 +61,7 @@ def lefty_pitch_decision_maker():
             if highlow >= 1 and highlow <= 3:
                 lowoutsidesinker()
             else:
-                leftyhighfastball()
+                sale_fastball()
         elif rando > 4.5 and rando <= 8.5:
             leftyslider()
         else:
