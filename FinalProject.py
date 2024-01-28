@@ -40,7 +40,9 @@ manager = pygame_gui.UIManager((1280, 720), 'theme.json')
 manager.preload_fonts([{'name': 'fira_code', 'point_size': 18, 'style': 'regular'},
                           {'name': 'fira_code', 'point_size': 18, 'style': 'bold'},
                           {'name': 'fira_code', 'point_size': 18, 'style': 'bold_italic'}])
+batter_hand = "R"
 player_pos = pygame.Vector2(screen.get_width() / 2, screen.get_height() / 2)
+left_player_pos = pygame.Vector2(screen.get_width() / 2, screen.get_height() / 2)
 strikezone = pygame.Rect((565, 400), (130, 165))
 ball_pos = (0,0)
 yes = True
@@ -99,6 +101,8 @@ lefty = loadimg('Images/LEFTY', 9)
 righty = loadimg('Images/RIGHTY', 9)
 batter = loadimg('Images/TROUT', 15)
 batterhigh = loadimg('Images/HIGHSWING', 7)
+batterleft = loadimg('Images/TROUTLEFT', 15)
+batterlefthigh = loadimg('Images/HIGHSWINGLEFT', 7)
 sasaki = loadimg('Sasaki/', 15)
 yamamoto = loadimg('Yamamoto/', 14)
 
@@ -142,6 +146,9 @@ seepitches = pygame_gui.elements.UIButton(relative_rect=pygame.Rect((0, 300), (2
                                             manager=manager)
 return_to_game = pygame_gui.elements.UIButton(relative_rect=pygame.Rect((0, 300), (200,100)),
                                             text = 'RETURN',
+                                            manager=manager)
+togglebatter = pygame_gui.elements.UIButton(relative_rect=pygame.Rect((0, 400), (200,100)),
+                                            text = 'BATTER',
                                             manager=manager)
 container = pygame_gui.core.UIContainer(relative_rect=pygame.Rect((0, 0), (1280,720)),manager=manager, is_window_root_container=False)
 banner = pygame_gui.elements.UILabel(relative_rect=pygame.Rect((440, 0), (400,100)), manager=manager, text="")
@@ -246,7 +253,7 @@ def glovepop():
 c = (screen.get_width() / 2) - 30
 d = (screen.get_height() / 3) + 180
 
-#POSITION FOR BATTER
+#POSITION FOR RIGHT BATTER
 x = 330
 y = 190
 
@@ -328,6 +335,37 @@ def batterfourteen(x,y):
 def batterfifteen(x,y):
     screen.blit(batter[14], (x + 6,y + 24))
 
+def leftbatterone(x,y):
+    screen.blit(batterleft[0], (x,y))
+def leftbattertwo(x,y):
+    screen.blit(batterleft[1], (x + 21,y))
+def leftbatterthree(x,y):
+    screen.blit(batterleft[2], (x + 15,y))
+def leftbatterfour(x,y):
+    screen.blit(batterleft[3], (x - 28,y))
+def leftbatterfive(x,y):
+    screen.blit(batterleft[4], (x - 10,y))
+def leftbattersix(x,y):
+    screen.blit(batterleft[5], (x + 22,y))
+def leftbatterseven(x,y):
+    screen.blit(batterleft[6], (x - 63,y))
+def leftbattereight(x,y):
+    screen.blit(batterleft[7], (x - 71,y))
+def leftbatternine(x,y):
+    screen.blit(batterleft[8], (x + 30,y))
+def leftbatterten(x,y):
+    screen.blit(batterleft[9], (x - 146,y))
+def leftbattereleven(x,y):
+    screen.blit(batterleft[10], (x - 170,y))
+def leftbattertwelve(x,y):
+    screen.blit(batterleft[11], (x - 62,y))
+def leftbatterthirteen(x,y):
+    screen.blit(batterleft[12], (x - 12,y + 27))
+def leftbatterfourteen(x,y):
+    screen.blit(batterleft[13], (x - 8,y + 29))
+def leftbatterfifteen(x,y):
+    screen.blit(batterleft[14], (x - 6,y + 24))
+
 
 def highswingone(x,y):
     screen.blit(batterhigh[0], (x,y))
@@ -343,6 +381,21 @@ def highswingsix(x,y):
     screen.blit(batterhigh[5], (x,y))
 def highswingseven(x,y):
     screen.blit(batterhigh[6], (x,y))
+
+def lefthighswingone(x,y):
+    screen.blit(batterlefthigh[0], (x,y))
+def lefthighswingtwo(x,y):
+    screen.blit(batterlefthigh[1], (x - 87,y))
+def lefthighswingthree(x,y):
+    screen.blit(batterlefthigh[2], (x - 89,y))
+def lefthighswingfour(x,y):
+    screen.blit(batterlefthigh[3], (x + 36,y))
+def lefthighswingfive(x,y):
+    screen.blit(batterlefthigh[4], (x - 99,y))
+def lefthighswingsix(x,y):
+    screen.blit(batterlefthigh[5], (x - 179,y))
+def lefthighswingseven(x,y):
+    screen.blit(batterlefthigh[6], (x - 145,y))
 
 
 def roki1(x,y):
@@ -944,11 +997,11 @@ def leftychangeup():
     simulate(True, ball_pos, -1.25, -0.175 + horizontalbreakvariable, -0.45, 0.225 + vertbreakvariable, 4, 430, 0.525 + vertbreakvariable, 0.15 + horizontalbreakvariable , 175, 'chrissale', 'CHANGEUP')
     return
 def lowoutsidesinker():
-    vertbreakvariable = random.uniform(0,0.10)
-    horizontalbreakvariable = random.uniform(-0.075,0.025)
+    vertbreakvariable = random.uniform(-0.025,0.25)
+    horizontalbreakvariable = random.uniform(-0.1,0.1)
     global ball_pos
     ball_pos = pygame.Vector2((screen.get_width() / 2) + 61, (screen.get_height() / 3) + 209 )
-    simulate(True, ball_pos, -0.5, -0.250 + horizontalbreakvariable, -0.35, 0.15 + vertbreakvariable, 4, 380, 0.45 + vertbreakvariable, 0.075 + horizontalbreakvariable , 100, 'chrissale', 'SINKER')
+    simulate(True, ball_pos, -0.5, -0.150 + horizontalbreakvariable, -0.25, 0.085 + vertbreakvariable, 4, 380, 0.55 + vertbreakvariable, 0.075 + horizontalbreakvariable , 120, 'chrissale', 'SINKER')
     return
 
 
@@ -971,62 +1024,60 @@ def collision(circlex, circley, radius, rectmiddlex, rectmiddley, rectwidth, rec
 #Low swing animation
 def swing_start(timenow, swing_startime):
     if timenow <= swing_startime + 110:
-        battersix(x + 21, y + 25)
+        battersix(x + 21, y + 25) if batter_hand == 'R' else leftbattersix(x - 21,y + 25)
     elif timenow > swing_startime + 110 and timenow <= swing_startime + 150:
-        batterseven(x + 7,y + 84)
+        batterseven(x + 7,y + 84) if batter_hand == 'R' else leftbatterseven(x - 7,y + 84)
     elif timenow > swing_startime + 150 and timenow <= swing_startime + 200:
-        battereight(x + 12,y + 84)
+        battereight(x + 12,y + 84) if batter_hand == 'R' else leftbattereight(x - 12,y + 84)
     elif timenow > swing_startime + 200 and timenow <= swing_startime + 210:
-        batternine(x + 12,y + 84)
+        batternine(x + 12,y + 84) if batter_hand == 'R' else leftbatternine(x - 12,y + 84)
     elif timenow > swing_startime + 210 and timenow <= swing_startime + 225:
-        batterten(x - 150,y + 84)
+        batterten(x - 150,y + 84) if batter_hand == 'R' else leftbatterten(x + 150,y + 84)
     elif timenow > swing_startime + 225 and timenow <= swing_startime + 240:
-        battereleven(x - 177,y - 69)
+        battereleven(x - 177,y - 69) if batter_hand == 'R' else leftbattereleven(x + 177,y - 69)
     elif timenow > swing_startime + 240:
-        battertwelve(x + 28,y + 48)
+        battertwelve(x + 28,y + 48) if batter_hand == 'R' else leftbattertwelve(x - 28,y + 48)
     return
 
 #Default stance if no swing
 def leg_kick(currenttime, start_time):
     if currenttime <= start_time + 50:
-        batterone(x,y)
+        batterone(x,y) if batter_hand == 'R' else leftbatterone(x,y)
     elif currenttime > start_time + 50 and currenttime <= start_time + 200:
-        battertwo(x + 11,y - 5)
+        battertwo(x + 11,y - 5) if batter_hand == 'R' else leftbattertwo(x - 11,y - 5)
     elif currenttime > start_time + 200 and currenttime <= start_time + 300:
-        batterthree(x + 7,y - 10)
+        batterthree(x + 7,y - 10) if batter_hand == 'R' else leftbatterthree(x - 7,y - 10)
     elif currenttime > start_time + 300 and currenttime <= start_time + 475:
-        batterfour(x - 21,y + 11)
+        batterfour(x - 21,y + 11) if batter_hand == 'R' else leftbatterfour(x + 21,y + 11)
     elif currenttime > start_time + 475 and currenttime <= start_time + 550:
-        batterfive(x - 20,y + 21)
+        batterfive(x - 20,y + 21) if batter_hand == 'R' else leftbatterfive(x + 20,y + 21)
     elif currenttime > start_time + 550 and currenttime <= start_time + 940:
-        battersix(x + 21, y + 25)
+        battersix(x + 21, y + 25) if batter_hand == 'R' else leftbattersix(x - 21,y + 25)
     elif currenttime > start_time + 940 and currenttime <= start_time + 1000:
-        batterthirteen(x,y)
+        batterthirteen(x,y) if batter_hand == 'R' else leftbatterthirteen(x,y)
     elif currenttime > start_time + 1000 and currenttime <= start_time + 1100:
-        batterfourteen(x,y)
+        batterfourteen(x,y) if batter_hand == 'R' else leftbatterfourteen(x,y)
     elif currenttime > start_time + 1100:
-        batterfifteen(x,y)
+        batterfifteen(x,y) if batter_hand == 'R' else leftbatterfifteen(x,y)
     return
 
 #High swing animation
 def high_swing_start(timenow, swing_startime):
     if timenow <= swing_startime + 110:
-        highswingone(x + 15, y)
+        highswingone(x + 15, y) if batter_hand == 'R' else lefthighswingone(x - 15,y)
     elif timenow > swing_startime + 110 and timenow <= swing_startime + 150:
-        highswingtwo(x + 14,y + 70)
+        highswingtwo(x + 14,y + 70) if batter_hand == 'R' else lefthighswingtwo(x - 14,y + 70)
     elif timenow > swing_startime + 150 and timenow <= swing_startime + 200:
-        highswingthree(x + 19,y + 70)
+        highswingthree(x + 19,y + 70) if batter_hand == 'R' else lefthighswingthree(x - 19,y + 70)
     elif timenow > swing_startime + 200 and timenow <= swing_startime + 210:
-        highswingfour(x + 14,y + 70)
+        highswingfour(x + 14,y + 70) if batter_hand == 'R' else lefthighswingfour(x - 14,y + 70)
     elif timenow > swing_startime + 210 and timenow <= swing_startime + 225:
-        highswingfive(x - 116,y + 70)
+        highswingfive(x - 116,y + 70) if batter_hand == 'R' else lefthighswingfive(x + 116,y + 70)
     elif timenow > swing_startime + 225 and timenow <= swing_startime + 240:
-        highswingsix(x - 168,y - 1)
+        highswingsix(x - 168,y - 1) if batter_hand == 'R' else lefthighswingsix(x + 168,y - 1)
     elif timenow > swing_startime + 240:
-        highswingseven(x + 31,y + 70)
+        highswingseven(x + 31,y + 70) if batter_hand == 'R' else lefthighswingseven(x - 31,y + 70)
     return
-
-
 
 #GAME LOOP FOR END/SUMMARY SCREEN
 def draw_inning_summary():
@@ -1282,6 +1333,7 @@ def simulate(yes, ball_pos, horizontalspeed,
     banner.hide()
     seepitches.hide()
     toggleumpsound.hide()
+    togglebatter.hide()
 
     soundplayed = 0
     on_time = 0
@@ -1761,12 +1813,25 @@ def simulate(yes, ball_pos, horizontalspeed,
             degrompitch.show()
             toggleumpsound.show()
             seepitches.show()
+            togglebatter.show()
 
     pitches_display.append(ball_pos)
     pygame.mouse.set_cursor(pygame.cursors.Cursor(pygame.SYSTEM_CURSOR_ARROW))
     return
 
 
+
+def hide_buttons():
+    salepitch.hide()
+    strikezonetoggle.hide()
+    backtomainmenu.hide()
+    sasakipitch.hide()
+    yamamotopitch.hide()
+    degrompitch.hide()
+    toggleumpsound.hide()
+    seepitches.hide()
+    togglebatter.hide()
+    return
 
 #Main Game Loop
 while running:
@@ -1808,6 +1873,13 @@ while running:
                     menu_state = 0
                 elif event.ui_element == seepitches:
                     menu_state = 200
+                elif event.ui_element == togglebatter:
+                    if batter_hand == 'L':
+                        batter_hand = 'R'
+                        x = 330
+                    elif batter_hand == 'R':
+                        batter_hand = 'L'
+                        x = 735
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_q:
                     lefty_pitch_decision_maker()
@@ -1826,7 +1898,7 @@ while running:
             current_gamemode = 1
         leftyone(a,b)
         draw_static()
-        batterone(x,y)
+        batterone(x,y) if batter_hand == 'R' else leftbatterone(x,y)
         if first_pitch_thrown:
             pygame.gfxdraw.aacircle(screen, int(ball_pos[0]), int(ball_pos[1]), fourseamballsize, (255,255,255))
         manager.draw_ui(screen)
@@ -1863,6 +1935,13 @@ while running:
                     menu_state = 0
                 elif event.ui_element == seepitches:
                     menu_state = 200
+                elif event.ui_element == togglebatter:
+                    if batter_hand == 'L':
+                        batter_hand = 'R'
+                        x = 330
+                    elif batter_hand == 'R':
+                        batter_hand = 'L'
+                        x = 735
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_q:
                     pitch_decision_maker()
@@ -1882,7 +1961,7 @@ while running:
         manager.draw_ui(screen)
         rightyone(c,d)
         draw_static()
-        batterone(x,y)
+        batterone(x,y) if batter_hand == 'R' else leftbatterone(x,y)
         if first_pitch_thrown:
             pygame.gfxdraw.aacircle(screen, int(ball_pos[0]), int(ball_pos[1]), fourseamballsize, (255,255,255))
         pygame.display.flip()
@@ -1918,6 +1997,13 @@ while running:
                     menu_state = 0
                 elif event.ui_element == seepitches:
                     menu_state = 200
+                elif event.ui_element == togglebatter:
+                    if batter_hand == 'L':
+                        batter_hand = 'R'
+                        x = 330
+                    elif batter_hand == 'R':
+                        batter_hand = 'L'
+                        x = 735
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_q:
                     Sasaki_AI()
@@ -1937,7 +2023,7 @@ while running:
         manager.draw_ui(screen)
         roki1(c,d)
         draw_static()
-        batterone(x,y)
+        batterone(x,y) if batter_hand == 'R' else leftbatterone(x,y)
         if first_pitch_thrown:
             pygame.gfxdraw.aacircle(screen, int(ball_pos[0]), int(ball_pos[1]), fourseamballsize, (255,255,255))
         pygame.display.flip()
@@ -1973,6 +2059,13 @@ while running:
                     menu_state = 0
                 elif event.ui_element == seepitches:
                     menu_state = 200
+                elif event.ui_element == togglebatter:
+                    if batter_hand == 'L':
+                        batter_hand = 'R'
+                        x = 330
+                    elif batter_hand == 'R':
+                        batter_hand = 'L'
+                        x = 735
             if event.type == pygame.KEYDOWN:
                 if event.key == pygame.K_q:
                     Yamamoto_AI()
@@ -1992,7 +2085,7 @@ while running:
         manager.draw_ui(screen)
         yamamoto1(c,d)
         draw_static()
-        batterone(x,y)
+        batterone(x,y) if batter_hand == 'R' else leftbatterone(x,y)
         if first_pitch_thrown:
             pygame.gfxdraw.aacircle(screen, int(ball_pos[0]), int(ball_pos[1]), fourseamballsize, (255,255,255))
         pygame.display.flip()
@@ -2026,7 +2119,7 @@ while running:
         screen.fill("black")
         manager.draw_ui(screen)
         draw_static()
-        batterone(x,y)
+        batterone(x,y) if batter_hand == 'R' else leftbatterone(x,y)
         for pitch_pos in pitches_display:
             pygame.gfxdraw.aacircle(screen, int(pitch_pos[0]), int(pitch_pos[1]), fourseamballsize, (255,255,255))
         pygame.display.flip()
