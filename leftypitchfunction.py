@@ -146,3 +146,63 @@ def Yamamoto_AI():
     else:
         yamamoto_lowcurveball()
     return
+
+
+
+def pitch_decision_maker():
+    global currentballs
+    global currentstrikes
+    rando = random.uniform(1,10)
+    # 0-0  OR  1 - 1  OR 3 - 2
+    if ((currentballs == 0 and currentstrikes == 0) or
+        (currentballs == 4) or
+        (currentstrikes == 3) or
+        (currentballs == 1 and currentstrikes == 1) or
+        (currentballs == 3 and currentstrikes == 2)):
+        if rando >= 1 and rando <= 5:
+            highoutsidefastball()
+        elif rando > 5 and rando <= 7.27:
+            highinsidefastball()
+        elif rando > 7.27:
+            lowslider()
+    # 1 - 0 OR 2 - 1
+    elif (currentballs == 1 and currentstrikes == 0) or (currentballs == 2 and currentstrikes == 1):
+        if rando >= 1 and rando <= 4:
+            highoutsidefastball()
+        elif rando > 4 and rando <= 7.5:
+            highinsidefastball()
+        elif rando > 7.5 and rando <= 9:
+            lowslider()
+        else:
+            lowchangeup()
+    # 0 - 1  OR  2 - 2
+    elif (currentballs == 0 and currentstrikes == 1) or (currentballs == 2 and currentstrikes == 2):
+        if rando >= 1 and rando <= 2:
+            highoutsidefastball()
+        elif rando > 2 and rando <= 6:
+            highinsidefastball()
+        elif rando > 6 and rando <= 9.5:
+            lowslider()
+        else:
+            lowchangeup()
+    # 2 - 0  OR  3 - 1  OR  3 - 0
+    elif (currentballs == 2 and currentstrikes == 0) or (currentballs == 3 and currentstrikes == 1) or (currentballs == 3 and currentstrikes == 0) :
+        if rando >= 1 and rando <= 6:
+            highoutsidefastball()
+        elif rando > 6 and rando <= 7.5:
+            highinsidefastball()
+        elif rando > 7.5 and rando <= 9:
+            lowslider()
+        else:
+            lowchangeup()
+    # 0 - 2  OR  1 - 2
+    elif (currentballs == 0 and currentstrikes == 2) or (currentballs == 1 and currentstrikes == 2):
+        if rando >= 1 and rando <= 2:
+            highoutsidefastball()
+        elif rando > 2 and rando <= 5:
+            highinsidefastball()
+        elif rando > 5 and rando <= 9:
+            lowslider()
+        else:
+            lowchangeup()
+    return

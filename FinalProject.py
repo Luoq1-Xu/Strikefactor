@@ -605,21 +605,19 @@ def contacttiming(swing_starttime, starttime, traveltime):
     else:
         return 0
     
-
-def loc_check(batpos, ballpos):
-    dist = ((ballpos[0] - batpos[0])**2 + (ballpos[1] - batpos[1])**2)**(1/2)
-    if dist > 30:
-        outcome = "miss"
-    elif 20 < dist < 30:
-        outcome = "foul"
-    elif 10 < dist < 20:
-        outcome = "good"
+# Check for contact based on mouse cursor position when ball impacts bat
+def loc_check(batpos, ballpos, ballsize=11):
+    lol = 1 if batter_hand == "R" else -1
+    if collision(ball_pos[0], ballpos[1], ballsize, (batpos[0] - (30 * lol)), (batpos[1]), 100, 20):
+        outcome = "hit"
     else:
-        outcome = "perfect"
+        outcome = "miss"
+    if ballpos[1] - batpos[1] > 20:
+        print("over")
+    elif ballpos[1] - batpos[1] < -20:
+        print("under")
     print(outcome)
     return outcome
-
-
 
 #YAMAMOTO PITCHING AI
 def Yamamoto_AI():
@@ -660,62 +658,9 @@ def Sasaki_AI():
 
 #DEGROM PITCHING AI
 def pitch_decision_maker():
-    global currentballs
-    global currentstrikes
-    rando = random.uniform(1,10)
-    # 0-0  OR  1 - 1  OR 3 - 2
-    if ((currentballs == 0 and currentstrikes == 0) or
-        (currentballs == 4) or
-        (currentstrikes == 3) or
-        (currentballs == 1 and currentstrikes == 1) or
-        (currentballs == 3 and currentstrikes == 2)):
-        if rando >= 1 and rando <= 5:
-            highoutsidefastball()
-        elif rando > 5 and rando <= 7.27:
-            highinsidefastball()
-        elif rando > 7.27:
-            lowslider()
-    # 1 - 0 OR 2 - 1
-    elif (currentballs == 1 and currentstrikes == 0) or (currentballs == 2 and currentstrikes == 1):
-        if rando >= 1 and rando <= 4:
-            highoutsidefastball()
-        elif rando > 4 and rando <= 7.5:
-            highinsidefastball()
-        elif rando > 7.5 and rando <= 9:
-            lowslider()
-        else:
-            lowchangeup()
-    # 0 - 1  OR  2 - 2
-    elif (currentballs == 0 and currentstrikes == 1) or (currentballs == 2 and currentstrikes == 2):
-        if rando >= 1 and rando <= 2:
-            highoutsidefastball()
-        elif rando > 2 and rando <= 6:
-            highinsidefastball()
-        elif rando > 6 and rando <= 9.5:
-            lowslider()
-        else:
-            lowchangeup()
-    # 2 - 0  OR  3 - 1  OR  3 - 0
-    elif (currentballs == 2 and currentstrikes == 0) or (currentballs == 3 and currentstrikes == 1) or (currentballs == 3 and currentstrikes == 0) :
-        if rando >= 1 and rando <= 6:
-            highoutsidefastball()
-        elif rando > 6 and rando <= 7.5:
-            highinsidefastball()
-        elif rando > 7.5 and rando <= 9:
-            lowslider()
-        else:
-            lowchangeup()
-    # 0 - 2  OR  1 - 2
-    elif (currentballs == 0 and currentstrikes == 2) or (currentballs == 1 and currentstrikes == 2):
-        if rando >= 1 and rando <= 2:
-            highoutsidefastball()
-        elif rando > 2 and rando <= 5:
-            highinsidefastball()
-        elif rando > 5 and rando <= 9:
-            lowslider()
-        else:
-            lowchangeup()
-    return
+    random.choice([highoutsidefastball, highinsidefastball, lowslider, lowchangeup, 
+                   degromrightmiddlefastball, degromleftlowfastball,
+                   degrommiddlemiddleslider, degrommiddleupfastball, degromrightlowfastball])()
 
 
 #SALE PITCHING AI
@@ -788,8 +733,6 @@ def lefty_pitch_decision_maker():
         else:
             leftychangeup()
     return
-
-
 
 def sale_fastball():
     rand = random.choice([leftyhighfastball,
@@ -926,7 +869,7 @@ def lowslider():
     horizontalbreakvariability = random.uniform(0,0.10)
     global ball_pos
     ball_pos = pygame.Vector2((screen.get_width() / 2) - 45, (screen.get_height() / 3) + 187)
-    simulate(True, ball_pos, 0.75, 0.200 + horizontalbreakvariability, -0.30, 0.150 + vertbreakvariability, 4, 400, 0.600 + vertbreakvariability, 0.225 + horizontalbreakvariability, 100, 'jacobdegrom', 'SLIDER')
+    simulate(True, ball_pos, 0.75, 0.200 + horizontalbreakvariability, -0.30, 0.150 + vertbreakvariability, 4, 420, 0.600 + vertbreakvariability, 0.225 + horizontalbreakvariability, 100, 'jacobdegrom', 'SLIDER')
     return
 def lowchangeup():
     vertbreakvariability = random.uniform(0,0.15)
@@ -942,7 +885,42 @@ def lowoutsidefastball():
     ball_pos = pygame.Vector2((screen.get_width() / 2) - 45, (screen.get_height() / 3) + 187)
     simulate(True, ball_pos, 1, 0.125 + horizontalbreakvariability, -0.25 , 0.225 + vertbreakvariability, 4, 370, 0.550 + vertbreakvariability, 0.15 + horizontalbreakvariability, 150, 'jacobdegrom', 'FASTBALL')
     return
-
+def degromrightmiddlefastball():
+    vertbreakvariability = random.uniform(0,0.10)
+    horizontalbreakvariability = random.uniform(0,0.20)
+    global ball_pos
+    ball_pos = pygame.Vector2((screen.get_width() / 2) - 45, (screen.get_height() / 3) + 187)
+    simulate(True, ball_pos, 1, 0.05 + horizontalbreakvariability, -0.25 , 0.225 + vertbreakvariability, 4, 370, 0.550 + vertbreakvariability, -0.15 + horizontalbreakvariability, 150, 'jacobdegrom', 'FASTBALL')
+    return
+def degromleftlowfastball():
+    vertbreakvariability = random.uniform(0,0.20)
+    horizontalbreakvariability = random.uniform(0,-0.15)
+    global ball_pos
+    ball_pos = pygame.Vector2((screen.get_width() / 2) - 45, (screen.get_height() / 3) + 187)
+    simulate(True, ball_pos, 0.25, -0.05 + horizontalbreakvariability, -0.25 , 0.145 + vertbreakvariability, 4, 370, 0.650 + vertbreakvariability, -0.15 + horizontalbreakvariability, 150, 'jacobdegrom', 'FASTBALL')
+    return
+def degrommiddlemiddleslider():
+    vertbreakvariability = random.uniform(0,0.15)
+    horizontalbreakvariability = random.uniform(0,0.10)
+    global ball_pos
+    ball_pos = pygame.Vector2((screen.get_width() / 2) - 45, (screen.get_height() / 3) + 187)
+    simulate(True, ball_pos, -0.5, 0.025 + horizontalbreakvariability, -0.30, 0.150 + vertbreakvariability, 4, 420, 0.600 + vertbreakvariability, 0.10 + horizontalbreakvariability, 150, 'jacobdegrom', 'SLIDER')
+    return
+def degrommiddleupfastball():
+    vertbreakvariable = random.uniform(0,0.065)
+    horizontalbreakvariable = random.uniform(0,1.5)
+    yoffset = random.uniform(-0.5,0.25)
+    global ball_pos
+    ball_pos = pygame.Vector2((screen.get_width() / 2) - 45, (screen.get_height() / 3) + 187)
+    simulate(True, ball_pos, 0.25, 0.05, -1.5 + yoffset, 0.005 + vertbreakvariable, 4, 370, 0.075 + vertbreakvariable, 0.15, 150, 'jacobdegrom', 'FASTBALL')
+    return
+def degromrightlowfastball():
+    vertbreakvariability = random.uniform(0,0.20)
+    horizontalbreakvariability = random.uniform(0,0.25)
+    global ball_pos
+    ball_pos = pygame.Vector2((screen.get_width() / 2) - 45, (screen.get_height() / 3) + 187)
+    simulate(True, ball_pos, 0.5, 0.15 + horizontalbreakvariability, -0.25 , 0.145 + vertbreakvariability, 4, 370, 0.650 + vertbreakvariability, 0.25 + horizontalbreakvariability, 100, 'jacobdegrom', 'FASTBALL')
+    return
 
 #SALE PITCH TYPES
 def leftylowinsidefastball():
@@ -1818,8 +1796,6 @@ def simulate(yes, ball_pos, horizontalspeed,
     pitches_display.append(ball_pos)
     pygame.mouse.set_cursor(pygame.cursors.Cursor(pygame.SYSTEM_CURSOR_ARROW))
     return
-
-
 
 def hide_buttons():
     salepitch.hide()
