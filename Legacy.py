@@ -86,6 +86,7 @@ double = pygame.mixer.Sound(resource_path("Sounds/DOUBLE.mp3"))
 triple = pygame.mixer.Sound(resource_path("Sounds/TRIPLE.mp3"))
 homer = pygame.mixer.Sound(resource_path("Sounds/HOMERUN.mp3"))
 called_strike_3 = pygame.mixer.Sound(resource_path("Sounds/CALLEDSTRIKE3.mp3"))
+sizzle = pygame.mixer.Sound(resource_path("Sounds/sss.mp3"))
 
 
 #Load images
@@ -112,6 +113,8 @@ degrombutton = pygame.image.load(resource_path('Images/degrombutton.png')).conve
 sasakibutton = pygame.image.load(resource_path('Images/sasakibutton.png')).convert_alpha()
 yamamotobutton = pygame.image.load(resource_path('Images/yamamotobutton.png')).convert_alpha()
 menu = pygame.image.load(resource_path('Images/MAINMENU.png')).convert_alpha()
+experimental = pygame.image.load(resource_path('Images/experimental.png')).convert_alpha()
+experimentalbutton = button.Button(1050, 650, experimental, 0.5)
 faceoffsasaki = button.Button(600,500,sasakibutton, 0.5)
 faceoffsale = button.Button(400,500, salebutton, 0.5)
 faceoffdegrom = button.Button(400,600, degrombutton, 0.5)
@@ -154,10 +157,10 @@ container = pygame_gui.core.UIContainer(relative_rect=pygame.Rect((0, 0), (1280,
 banner = pygame_gui.elements.UILabel(relative_rect=pygame.Rect((440, 0), (400,100)), manager=manager, text="")
 banner.hide()
 def pitchresult(input):
-    return pygame_gui.elements.UITextBox(input,relative_rect=pygame.Rect((955, 350), (250,150)),
+    return pygame_gui.elements.UITextBox(input,relative_rect=pygame.Rect((1000, 350), (250,150)),
                                         manager=manager)
 def drawscoreboard(results):
-    return pygame_gui.elements.UITextBox(results,relative_rect=pygame.Rect((955, 150), (250,200)),
+    return pygame_gui.elements.UITextBox(results,relative_rect=pygame.Rect((1000, 150), (250,200)),
                                         manager=manager)
 
 #Container to house the scoreboard and textbox - to allow for previous instances to be deleted when new ones are created
@@ -229,7 +232,7 @@ def check_menu():
     global currentouts
     global menu_state
     global textfinished
-    if currentouts == 3:
+    if currentouts == 3 and menu_state != "experimental":
         for event in pygame.event.get():
             if event.type == pygame_gui.UI_TEXT_EFFECT_FINISHED:
                 textfinished += 1
@@ -608,7 +611,7 @@ def contacttiming(swing_starttime, starttime, traveltime):
 # Check for contact based on mouse cursor position when ball impacts bat
 def loc_check(batpos, ballpos, ballsize=11):
     lol = 1 if batter_hand == "R" else -1
-    if collision(ball_pos[0], ballpos[1], ballsize, (batpos[0] - (30 * lol)), (batpos[1]), 100, 20):
+    if collision(ball_pos[0], ballpos[1], ballsize, (batpos[0] - (30 * lol)), (batpos[1]), 120, 30):
         outcome = "hit"
     else:
         outcome = "miss"
@@ -854,7 +857,7 @@ def highoutsidefastball():
     horizontalbreakvariability = random.uniform(0,0.20)
     global ball_pos
     ball_pos = pygame.Vector2((screen.get_width() / 2) - 45, (screen.get_height() / 3) + 187)
-    simulate(True, ball_pos, 1, 0.1 + horizontalbreakvariability, -0.75, 0.05 + vertbreakvariability, 4, 370, 0.15 + vertbreakvariability, 0.05 + horizontalbreakvariability, 150, 'jacobdegrom', 'FASTBALL')
+    simulate(True, ball_pos, 1, 0.05 + horizontalbreakvariability, -0.75, 0.05 + vertbreakvariability, 4, 370, 0.15 + vertbreakvariability, 0.05 + horizontalbreakvariability, 150, 'jacobdegrom', 'FASTBALL')
     return
 def highinsidefastball():
     vertbreakvariable = random.uniform(0,0.065)
@@ -876,7 +879,7 @@ def lowchangeup():
     horizontalbreakvariability = random.uniform(0,-0.05)
     global ball_pos
     ball_pos = pygame.Vector2((screen.get_width() / 2) - 45, (screen.get_height() / 3) + 187)
-    simulate(True, ball_pos, 1, -0.075 + horizontalbreakvariability, -0.25, 0.220 + vertbreakvariability, 4, 450, 0.450 + vertbreakvariability, -0.075 + horizontalbreakvariability, 160, 'jacobdegrom', 'CHANGEUP')
+    simulate(True, ball_pos, 1, -0.075 + horizontalbreakvariability, -0.50, 0.250 + vertbreakvariability, 4, 450, 0.450 + vertbreakvariability, -0.075 + horizontalbreakvariability, 160, 'jacobdegrom', 'CHANGEUP')
     return
 def lowoutsidefastball():
     vertbreakvariability = random.uniform(0,0.10)
@@ -890,14 +893,14 @@ def degromrightmiddlefastball():
     horizontalbreakvariability = random.uniform(0,0.20)
     global ball_pos
     ball_pos = pygame.Vector2((screen.get_width() / 2) - 45, (screen.get_height() / 3) + 187)
-    simulate(True, ball_pos, 1, 0.05 + horizontalbreakvariability, -0.25 , 0.225 + vertbreakvariability, 4, 370, 0.550 + vertbreakvariability, -0.15 + horizontalbreakvariability, 150, 'jacobdegrom', 'FASTBALL')
+    simulate(True, ball_pos, 1, 0.05 + horizontalbreakvariability, -0.50 , 0.150 + vertbreakvariability, 4, 370, 0.550 + vertbreakvariability, -0.10 + horizontalbreakvariability, 150, 'jacobdegrom', 'FASTBALL')
     return
 def degromleftlowfastball():
     vertbreakvariability = random.uniform(0,0.20)
     horizontalbreakvariability = random.uniform(0,-0.15)
     global ball_pos
     ball_pos = pygame.Vector2((screen.get_width() / 2) - 45, (screen.get_height() / 3) + 187)
-    simulate(True, ball_pos, 0.25, -0.05 + horizontalbreakvariability, -0.25 , 0.145 + vertbreakvariability, 4, 370, 0.650 + vertbreakvariability, -0.15 + horizontalbreakvariability, 150, 'jacobdegrom', 'FASTBALL')
+    simulate(True, ball_pos, 0.25, -0.05 + horizontalbreakvariability, -0.50 , 0.145 + vertbreakvariability, 4, 370, 0.675 + vertbreakvariability, -0.15 + horizontalbreakvariability, 150, 'jacobdegrom', 'FASTBALL')
     return
 def degrommiddlemiddleslider():
     vertbreakvariability = random.uniform(0,0.15)
@@ -912,7 +915,7 @@ def degrommiddleupfastball():
     yoffset = random.uniform(-0.5,0.25)
     global ball_pos
     ball_pos = pygame.Vector2((screen.get_width() / 2) - 45, (screen.get_height() / 3) + 187)
-    simulate(True, ball_pos, 0.25, 0.05, -1.5 + yoffset, 0.005 + vertbreakvariable, 4, 370, 0.075 + vertbreakvariable, 0.15, 150, 'jacobdegrom', 'FASTBALL')
+    simulate(True, ball_pos, 0.25, 0.05, -1.5 + yoffset, -0.05 + vertbreakvariable, 4, 370, 0.175 + vertbreakvariable, 0.15, 150, 'jacobdegrom', 'FASTBALL')
     return
 def degromrightlowfastball():
     vertbreakvariability = random.uniform(0,0.20)
@@ -1252,6 +1255,24 @@ def main_menu():
             pitches_display = []
             pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_ARROW)
             return
+        elif experimentalbutton.draw(screen):
+            banner.hide()
+            container.clear()
+            menu_state = "experimental"
+            first_pitch_thrown = False
+            just_refreshed = 1
+            currentballs = 0
+            currentstrikes = 0
+            pitchnumber = 0
+            currentstrikeouts = 0
+            currentwalks = 0
+            currentouts = 0
+            runs_scored = 0
+            runners = 0
+            hits = 0
+            pitches_display = []
+            pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_ARROW)
+            return
         clock.tick(60)/1000.0
         if counter < speed *len(message):
             counter += 1
@@ -1276,7 +1297,6 @@ def main_menu():
         screen.blit(snip, (300, 170 + textoffset))
         pygame.display.flip()
     return
-
 
 #GAME LOOP FOR AT-BAT
 def simulate(yes, ball_pos, horizontalspeed,
@@ -1314,6 +1334,7 @@ def simulate(yes, ball_pos, horizontalspeed,
     togglebatter.hide()
 
     soundplayed = 0
+    sizz = False
     on_time = 0
     made_contact = 0
     contact_time = 0
@@ -1409,6 +1430,9 @@ def simulate(yes, ball_pos, horizontalspeed,
         #From time ball leaves the hand until ball finishes traveling
         if (current_time > starttime + 1100 and current_time < starttime + traveltime + 1150 and (on_time == 0 or (on_time > 0 and made_contact == 1))) or (on_time > 0 and current_time <= contact_time and made_contact == 0):
             screen.fill("black")
+            if not sizz:
+                sizz = True
+                sizzle.play()
             if current_time > starttime + 1100 and current_time <= starttime + 1150:
                 if pitchername == 'chrissale':
                     leftyseven(a + 8,b + 22)
@@ -2098,6 +2122,69 @@ while running:
         batterone(x,y) if batter_hand == 'R' else leftbatterone(x,y)
         for pitch_pos in pitches_display:
             pygame.gfxdraw.aacircle(screen, int(pitch_pos[0]), int(pitch_pos[1]), fourseamballsize, (255,255,255))
+        pygame.display.flip()
+
+    elif menu_state == 'experimental':
+        degrompitch.hide()
+        sasakipitch.hide()
+        yamamotopitch.hide()
+        salepitch.show()
+        backtomainmenu.show()
+        strikezonetoggle.show()
+        toggleumpsound.show()
+        return_to_game.hide()
+        seepitches.show()
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                running = False
+            if event.type == pygame_gui.UI_BUTTON_PRESSED:
+                if event.ui_element == strikezonetoggle:
+                    if strikezonedrawn == 1:
+                        strikezonedrawn = 2
+                    elif strikezonedrawn == 2:
+                        strikezonedrawn = 3
+                    elif strikezonedrawn == 3:
+                        strikezonedrawn = 1
+                elif event.ui_element == toggleumpsound:
+                    if umpsound == True:
+                        umpsound = False
+                    elif umpsound == False:
+                        umpsound = True
+                elif event.ui_element == salepitch:
+                    lefty_pitch_decision_maker()
+                elif event.ui_element == backtomainmenu:
+                    menu_state = 0
+                elif event.ui_element == seepitches:
+                    menu_state = 200
+                elif event.ui_element == togglebatter:
+                    if batter_hand == 'L':
+                        batter_hand = 'R'
+                        x = 330
+                    elif batter_hand == 'R':
+                        batter_hand = 'L'
+                        x = 735
+            if event.type == pygame.KEYDOWN:
+                if event.key == pygame.K_q:
+                    lefty_pitch_decision_maker()
+            manager.process_events(event)
+        manager.update(time_delta)
+        screen.fill("black")
+        if just_refreshed == 1:
+            result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(currentouts, currentstrikeouts, currentwalks, hits, runs_scored)
+            scoreboard = drawscoreboard(result)
+            scoreboard.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': 0.0075})
+            string = "<font size=5><br>COUNT IS {} - {}</font>".format(pitchnumber, currentballs, currentstrikes)
+            textbox = pitchresult(string)
+            textbox.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': 0.0075})
+            containerupdate(textbox, scoreboard)
+            just_refreshed = 0
+            current_gamemode = 1
+        leftyone(a,b)
+        draw_static()
+        batterone(x,y) if batter_hand == 'R' else leftbatterone(x,y)
+        if first_pitch_thrown:
+            pygame.gfxdraw.aacircle(screen, int(ball_pos[0]), int(ball_pos[1]), fourseamballsize, (255,255,255))
+        manager.draw_ui(screen)
         pygame.display.flip()
 
     elif menu_state == 100:
