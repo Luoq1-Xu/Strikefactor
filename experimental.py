@@ -173,7 +173,7 @@ class Game:
     batter_hand = "R"
     player_pos = pygame.Vector2(screen.get_width() / 2, screen.get_height() / 2)
     left_player_pos = pygame.Vector2(screen.get_width() / 2, screen.get_height() / 2)
-    strikezone = pygame.Rect((565, 400), (130, 165))
+    strikezone = pygame.Rect((565, 410), (130, 150))
     fourseamballsize = 11
     strikezonedrawn = 1
     umpsound = True
@@ -204,6 +204,8 @@ class Game:
     pop2 = pygame.mixer.Sound(resource_path("Sounds/POP2.mp3"))
     pop3 = pygame.mixer.Sound(resource_path("Sounds/POP3.mp3"))
     pop4 = pygame.mixer.Sound(resource_path("Sounds/POP4.mp3"))
+    pop5 = pygame.mixer.Sound(resource_path("Sounds/POP5.mp3"))
+    pop6 = pygame.mixer.Sound(resource_path("Sounds/POP6.mp3"))
     strikecall = pygame.mixer.Sound(resource_path("Sounds/STRIKECALL.mp3"))
     ballcall = pygame.mixer.Sound(resource_path("Sounds/BALLCALL.mp3"))
     foulball = pygame.mixer.Sound(resource_path("Sounds/FOULBALL.mp3"))
@@ -211,7 +213,7 @@ class Game:
     double = pygame.mixer.Sound(resource_path("Sounds/DOUBLE.mp3"))
     triple = pygame.mixer.Sound(resource_path("Sounds/TRIPLE.mp3"))
     homer = pygame.mixer.Sound(resource_path("Sounds/HOMERUN.mp3"))
-    called_strike_3 = pygame.mixer.Sound(resource_path("Sounds/CALLEDSTRIKE3.mp3"))
+    called_strike_3 = pygame.mixer.Sound(resource_path("Sounds/strike3.mp3"))
     sizzle = pygame.mixer.Sound(resource_path("Sounds/sss.mp3"))
 
 
@@ -334,6 +336,7 @@ class Game:
         y = 660
         pygame.draw.polygon(self.screen, "white", ((x, y), (x + 130, y), (x + 130, y + 10), (x + 65, y + 25), (x, y + 10)), 0)
 
+    #Draw static components (strikezone, home plate, bases)
     def draw_static(self):
         if self.strikezonedrawn == 2:
             pygame.draw.rect(self.screen, "white", self.strikezone, 1)
@@ -341,8 +344,8 @@ class Game:
             pygame.draw.rect(self.screen, "white", self.strikezone, 1)
             pygame.draw.line(self.screen, "white", (565,455), (694, 455))
             pygame.draw.line(self.screen, "white", (565,510), (694, 510))
-            pygame.draw.line(self.screen, "white", (565 + (130/3), 400), (565 + (130/3), 564))
-            pygame.draw.line(self.screen, "white", (565 + 2*(130/3), 400), (565 + 2*(130/3), 564))
+            pygame.draw.line(self.screen, "white", (565 + (130/3), 410), (565 + (130/3), 559))
+            pygame.draw.line(self.screen, "white", (565 + 2*(130/3), 410), (565 + 2*(130/3), 559))
         self.homeplate()
         self.draw_bases()
         return
@@ -351,21 +354,23 @@ class Game:
     def check_menu(self):
         if self.currentouts == 3:
             for event in pygame.event.get():
+                self.manager.process_events(event)
                 if event.type == pygame_gui.UI_TEXT_EFFECT_FINISHED:
                     self.textfinished += 1
             if self.textfinished == 3:
+                print("HELLO?")
                 pygame.time.delay(500)
                 self.menu_state = 100
         return
 
     def glovepop(self):
-        rand = random.randint(2,4)
+        rand = random.randint(2,5)
         if rand == 2:
             self.pop2.play()
         elif rand == 3:
-            self.pop3.play()
+            self.pop6.play()
         else:
-            self.pop4.play()
+            self.pop5.play()
         return
 
     def Sale(self, number, xoffset=0, yoffset=0):
@@ -487,7 +492,7 @@ class Game:
         random.choice([self.sasakiFastball, self.sasakiSplitter])()
 
     #DEGROM PITCHING AI
-    def degrom_AI(self):
+    def Degrom_AI(self):
         random.choice([self.deGromChangeup, self.deGromFB1, self.deGromFB2, self.deGromFB3, self.deGromSlider])()
     
     #SALE PITCHING AI
@@ -1169,7 +1174,7 @@ class Game:
                 if pitch_results_done == False:
                     pitch_results_done = True
                     #BALL OUTSIDE THE ZONE AND NOT SWUNG AT - BALL
-                    if (not self.collision(self.ball[0], self.ball[1], 11, 630, 482.5, 130, 165)) and self.swing_started == 0:
+                    if (not self.collision(self.ball[0], self.ball[1], 11, 630, 482.5, 130, 150)) and self.swing_started == 0:
                         if self.umpsound:
                             self.ballcall.play()
                         self.currentballs += 1
@@ -1322,16 +1327,16 @@ class Game:
 
     def saleSinker(self):
         sampley = random.uniform(0,10)
-        samplex = random.uniform(-20,10)
-        self.test(self.SALERELEASEPOINT, 'chrissale', 0.01, 0.03, samplex, sampley, 400, 'Fastball')
+        samplex = random.uniform(-25,5)
+        self.test(self.SALERELEASEPOINT, 'chrissale', 0.015, 0.035, samplex, sampley, 400, 'Fastball')
     def saleUpLeftFastball(self):
-        sampley = random.uniform(-15,-25)
-        samplex = random.uniform(-35,-15)
-        self.test(self.SALERELEASEPOINT, 'chrissale', 0.01, 0.02, samplex, sampley, 400, '4 Seam Fastball')  
+        sampley = random.uniform(0,-25)
+        samplex = random.uniform(-45,-15)
+        self.test(self.SALERELEASEPOINT, 'chrissale', 0.005, 0.01, samplex, sampley, 400, '4 Seam Fastball')  
     def saleDownRightFastball(self):
-        sampley = random.uniform(10,25)
-        samplex = random.uniform(-10,5)
-        self.test(self.SALERELEASEPOINT, 'chrissale', 0.01, 0.01, samplex, sampley, 380, '4 Seam Fastball') 
+        sampley = random.uniform(10,30)
+        samplex = random.uniform(-20,5)
+        self.test(self.SALERELEASEPOINT, 'chrissale', 0.015, 0.01, samplex, sampley, 380, '4 Seam Fastball') 
     def saleMiddleMiddleFastball(self):
         sampley = random.uniform(0,20)
         samplex = random.uniform(-10,-30)
@@ -1346,12 +1351,12 @@ class Game:
         self.test(self.SALERELEASEPOINT, 'chrissale', 0.015, 0.01, samplex, sampley, 380, '4 Seam Fastball') 
     def saleChangeup(self):
         sampley = random.uniform(-10,10)
-        samplex = random.uniform(-20,10)
+        samplex = random.uniform(-20,0)
         self.test(self.SALERELEASEPOINT, 'chrissale', 0.01, 0.04, samplex, sampley, 450, 'Changeup')  
     def saleSlider(self):
         sampley = random.uniform(-10,0)
-        samplex = random.uniform(-10,15)
-        self.test(self.SALERELEASEPOINT, 'chrissale', -0.035, 0.04, samplex, sampley, 500, 'Slider')  
+        samplex = random.uniform(-20,25)
+        self.test(self.SALERELEASEPOINT, 'chrissale', -0.040, 0.04, samplex, sampley, 500, 'Slider')  
 
     def sasakiSplitter(self):
         sampley = random.uniform(-5,20)
@@ -1404,257 +1409,102 @@ class Game:
             self.check_menu()
             if self.menu_state == 0:
                 self.main_menu()
-            elif self.menu_state == 'Sale':
-                self.gameButtons(self.salepitch)
-                for event in pygame.event.get():
-                    if event.type == pygame.QUIT:
-                        running = False
-                    if event.type == pygame_gui.UI_BUTTON_PRESSED:
-                        if event.ui_element == self.strikezonetoggle:
-                            if self.strikezonedrawn == 1:
-                                self.strikezonedrawn = 2
-                            elif self.strikezonedrawn == 2:
-                                self.strikezonedrawn = 3
-                            elif self.strikezonedrawn == 3:
-                                self.strikezonedrawn = 1
-                        elif event.ui_element == self.toggleumpsound:
-                            if self.umpsound == True:
-                                self.umpsound = False
-                            elif self.umpsound == False:
-                                self.umpsound = True
-                        elif event.ui_element == self.salepitch:
-                            self.lefty_degrom_AI()
-                        elif event.ui_element == self.backtomainmenu:
-                            self.menu_state = 0
-                        elif event.ui_element == self.seepitches:
-                            self.menu_state = 200
-                        elif event.ui_element == self.togglebatter:
-                            if self.batter_hand == 'L':
-                                self.batter_hand = 'R'
-                                self.x = 330
-                            elif self.batter_hand == 'R':
-                                self.batter_hand = 'L'
-                                self.x = 735
-                    if event.type == pygame.KEYDOWN:
-                        if event.key == pygame.K_q:
-                            self.Sale_AI()
-                    self.manager.process_events(event)
-                self.manager.update(time_delta)
-                self.screen.fill("black")
-                if self.just_refreshed == 1:
-                    result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts, self.currentstrikeouts, self.currentwalks, self.hits, self.runs_scored)
-                    scoreboard = self.drawscoreboard(result)
-                    scoreboard.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': 0.0075})
-                    string = "<font size=5><br>COUNT IS {} - {}</font>".format(self.pitchnumber, self.currentballs, self.currentstrikes)
-                    textbox = self.pitchresult(string)
-                    textbox.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': 0.0075})
-                    self.containerupdate(textbox, scoreboard)
-                    self.just_refreshed = 0
-                    current_gamemode = 'Sale'
-                self.Sale(1)
-                self.draw_static()
-                self.RightBatter(1) if self.batter_hand == 'R' else self.LeftBatter(1)
-                if self.first_pitch_thrown:
-                    pygame.gfxdraw.aacircle(self.screen, int(self.ball[0]), int(self.ball[1]), self.fourseamballsize, (255,255,255))
-                self.manager.draw_ui(self.screen)
-                pygame.display.flip()
-            elif self.menu_state == 'Yamamoto':
-                self.gameButtons(self.yamamotopitch)
-                for event in pygame.event.get():
-                    if event.type == pygame.QUIT:
-                        running = False
-                    if event.type == pygame_gui.UI_BUTTON_PRESSED:
-                        if event.ui_element == self.strikezonetoggle:
-                            if self.strikezonedrawn == 1:
-                                self.strikezonedrawn = 2
-                            elif self.strikezonedrawn == 2:
-                                self.strikezonedrawn = 3
-                            elif self.strikezonedrawn == 3:
-                                self.strikezonedrawn = 1
-                        elif event.ui_element == self.toggleumpsound:
-                            if self.umpsound == True:
-                                self.umpsound = False
-                            elif self.umpsound == False:
-                                self.umpsound = True
-                        elif event.ui_element == self.salepitch:
-                            self.Yamamoto_AI()
-                        elif event.ui_element == self.backtomainmenu:
-                            self.menu_state = 0
-                        elif event.ui_element == self.seepitches:
-                            self.menu_state = 200
-                        elif event.ui_element == self.togglebatter:
-                            if self.batter_hand == 'L':
-                                self.batter_hand = 'R'
-                                self.x = 330
-                            elif self.batter_hand == 'R':
-                                self.batter_hand = 'L'
-                                self.x = 735
-                    if event.type == pygame.KEYDOWN:
-                        if event.key == pygame.K_q:
-                            self.Yamamoto_AI()
-                    self.manager.process_events(event)
-                self.manager.update(time_delta)
-                self.screen.fill("black")
-                if self.just_refreshed == 1:
-                    result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts, self.currentstrikeouts, self.currentwalks, self.hits, self.scoreKeeper.get_score())
-                    scoreboard = self.drawscoreboard(result)
-                    scoreboard.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': 0.0075})
-                    textbox = self.pitchresult("")
-                    textbox.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': 0.0075})
-                    self.containerupdate(textbox, scoreboard)
-                    self.just_refreshed = 0
-                    current_gamemode = 'Yamamoto'
-                self.Yamamoto(1)
-                self.draw_static()
-                self.RightBatter(1) if self.batter_hand == 'R' else self.LeftBatter(1)
-                if self.first_pitch_thrown:
-                    pygame.gfxdraw.aacircle(self.screen, int(self.ball[0]), int(self.ball[1]), self.fourseamballsize, (255,255,255))
-                self.manager.draw_ui(self.screen)
-                pygame.display.flip()
-            elif self.menu_state == 'Degrom':
-                self.gameButtons(self.degrompitch)
-                for event in pygame.event.get():
-                    if event.type == pygame.QUIT:
-                        running = False
-                    if event.type == pygame_gui.UI_BUTTON_PRESSED:
-                        if event.ui_element == self.strikezonetoggle:
-                            if self.strikezonedrawn == 1:
-                                self.strikezonedrawn = 2
-                            elif self.strikezonedrawn == 2:
-                                self.strikezonedrawn = 3
-                            elif self.strikezonedrawn == 3:
-                                self.strikezonedrawn = 1
-                        elif event.ui_element == self.toggleumpsound:
-                            if self.umpsound == True:
-                                self.umpsound = False
-                            elif self.umpsound == False:
-                                self.umpsound = True
-                        elif event.ui_element == self.salepitch:
-                            self.Yamamoto_AI()
-                        elif event.ui_element == self.backtomainmenu:
-                            self.menu_state = 0
-                        elif event.ui_element == self.seepitches:
-                            self.menu_state = 200
-                        elif event.ui_element == self.togglebatter:
-                            if self.batter_hand == 'L':
-                                self.batter_hand = 'R'
-                                self.x = 330
-                            elif self.batter_hand == 'R':
-                                self.batter_hand = 'L'
-                                self.x = 735
-                    if event.type == pygame.KEYDOWN:
-                        if event.key == pygame.K_q:
-                            self.degrom_AI()
-                    self.manager.process_events(event)
-                self.manager.update(time_delta)
-                self.screen.fill("black")
-                if self.just_refreshed == 1:
-                    result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts, self.currentstrikeouts, self.currentwalks, self.hits, self.runs_scored)
-                    scoreboard = self.drawscoreboard(result)
-                    scoreboard.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': 0.0075})
-                    string = "<font size=5><br>COUNT IS {} - {}</font>".format(self.pitchnumber, self.currentballs, self.currentstrikes)
-                    textbox = self.pitchresult(string)
-                    textbox.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': 0.0075})
-                    self.containerupdate(textbox, scoreboard)
-                    self.just_refreshed = 0
-                    current_gamemode = 'Degrom'
-                self.Degrom(1)
-                self.draw_static()
-                self.RightBatter(1) if self.batter_hand == 'R' else self.LeftBatter(1)
-                if self.first_pitch_thrown:
-                    pygame.gfxdraw.aacircle(self.screen, int(self.ball[0]), int(self.ball[1]), self.fourseamballsize, (255,255,255))
-                self.manager.draw_ui(self.screen)
-                pygame.display.flip()
-            elif self.menu_state == 'Sasaki':
-                self.gameButtons(self.sasakipitch)
-                for event in pygame.event.get():
-                    if event.type == pygame.QUIT:
-                        running = False
-                    if event.type == pygame_gui.UI_BUTTON_PRESSED:
-                        if event.ui_element == self.strikezonetoggle:
-                            if self.strikezonedrawn == 1:
-                                self.strikezonedrawn = 2
-                            elif self.strikezonedrawn == 2:
-                                self.strikezonedrawn = 3
-                            elif self.strikezonedrawn == 3:
-                                self.strikezonedrawn = 1
-                        elif event.ui_element == self.toggleumpsound:
-                            if self.umpsound == True:
-                                self.umpsound = False
-                            elif self.umpsound == False:
-                                self.umpsound = True
-                        elif event.ui_element == self.sasakipitch:
-                            self.Sasaki_AI()
-                        elif event.ui_element == self.backtomainmenu:
-                            self.menu_state = 0
-                        elif event.ui_element == self.seepitches:
-                            self.menu_state = 200
-                        elif event.ui_element == self.togglebatter:
-                            if self.batter_hand == 'L':
-                                self.batter_hand = 'R'
-                                self.x = 330
-                            elif self.batter_hand == 'R':
-                                self.batter_hand = 'L'
-                                self.x = 735
-                    if event.type == pygame.KEYDOWN:
-                        if event.key == pygame.K_q:
-                            self.Sasaki_AI()
-                    self.manager.process_events(event)
-                self.manager.update(time_delta)
-                self.screen.fill("black")
-                if self.just_refreshed == 1:
-                    result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts, self.currentstrikeouts, self.currentwalks, self.hits, self.scoreKeeper.get_score())
-                    scoreboard = self.drawscoreboard(result)
-                    scoreboard.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': 0.0075})
-                    string = "<font size=5><br>COUNT IS {} - {}</font>".format(self.pitchnumber, self.currentballs, self.currentstrikes)
-                    textbox = self.pitchresult(string)
-                    textbox.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': 0.0075})
-                    self.containerupdate(textbox, scoreboard)
-                    self.just_refreshed = 0
-                    current_gamemode = 'Sasaki'
-                self.Sasaki(1)
-                self.draw_static()
-                self.RightBatter(1) if self.batter_hand == 'R' else self.LeftBatter(1)
-                if self.first_pitch_thrown:
-                    pygame.gfxdraw.aacircle(self.screen, int(self.ball[0]), int(self.ball[1]), self.fourseamballsize, (255,255,255))
-                self.manager.draw_ui(self.screen)
-                pygame.display.flip()
-            elif self.menu_state == 200:
-                self.salepitch.hide()
-                self.degrompitch.hide()
-                self.sasakipitch.hide()
-                self.yamamotopitch.hide()
-                self.seepitches.hide()
-                self.return_to_game.show()
-                self.backtomainmenu.show()
-                self.strikezonetoggle.show()
-                for event in pygame.event.get():
-                    if event.type == pygame.QUIT:
-                        running = False
-                    if event.type == pygame_gui.UI_BUTTON_PRESSED:
-                        if event.ui_element == self.strikezonetoggle:
-                            if self.strikezonedrawn == 1:
-                                self.strikezonedrawn = 2
-                            elif self.strikezonedrawn == 2:
-                                self.strikezonedrawn = 3
-                            elif self.strikezonedrawn == 3:
-                                self.strikezonedrawn = 1
-                        elif event.ui_element == self.backtomainmenu:
-                            self.menu_state = 0
-                        elif event.ui_element == self.return_to_game:
-                            self.menu_state = current_gamemode
-                    self.manager.process_events(event)
-                self.manager.update(time_delta)
-                self.screen.fill("black")
-                self.manager.draw_ui(self.screen)
-                self.draw_static()
-                self.RightBatter(1) if self.batter_hand == 'R' else self.LeftBatter(1)
-                for pitch_pos in self.pitches_display:
-                    pygame.gfxdraw.aacircle(self.screen, int(pitch_pos[0]), int(pitch_pos[1]), self.fourseamballsize, (255,255,255))
-                pygame.display.flip()
-            
             elif self.menu_state == 100:
                 self.draw_inning_summary()
+            else:
+                for event in pygame.event.get():
+                    self.manager.process_events(event)
+                    if event.type == pygame.QUIT:
+                        running = False
+                    if event.type == pygame_gui.UI_BUTTON_PRESSED:
+                        if event.ui_element == self.strikezonetoggle:
+                            if self.strikezonedrawn == 1:
+                                self.strikezonedrawn = 2
+                            elif self.strikezonedrawn == 2:
+                                self.strikezonedrawn = 3
+                            elif self.strikezonedrawn == 3:
+                                self.strikezonedrawn = 1
+                        elif event.ui_element == self.toggleumpsound:
+                            if self.umpsound == True:
+                                self.umpsound = False
+                            elif self.umpsound == False:
+                                self.umpsound = True
+                        elif event.ui_element == self.salepitch:
+                            self.Sale_AI()
+                        elif event.ui_element == self.degrompitch:
+                            self.Degrom_AI()
+                        elif event.ui_element == self.sasakipitch:
+                            self.Sasaki_AI()
+                        elif event.ui_element == self.yamamotopitch:
+                            self.Yamamoto_AI()
+                        elif event.ui_element == self.backtomainmenu:
+                            self.menu_state = 0
+                        elif event.ui_element == self.seepitches:
+                            self.menu_state = 200
+                        elif event.ui_element == self.return_to_game:
+                            self.menu_state = self.current_gamemode
+                        elif event.ui_element == self.togglebatter:
+                            if self.batter_hand == 'L':
+                                self.batter_hand = 'R'
+                                self.x = 330
+                            elif self.batter_hand == 'R':
+                                self.batter_hand = 'L'
+                                self.x = 735
+                    if event.type == pygame.KEYDOWN:
+                        if event.key == pygame.K_q:
+                            if self.menu_state == 'Sale':
+                                self.Sale_AI()
+                            elif self.menu_state == 'Degrom':
+                                self.Degrom_AI()
+                            elif self.menu_state == 'Sasaki':
+                                self.Sasaki_AI()
+                            elif self.menu_state == 'Yamamoto':
+                                self.Yamamoto_AI()
+                self.manager.update(time_delta)
+                self.screen.fill("black")
+                if self.menu_state == 'Sale':
+                    self.gameButtons(self.salepitch)
+                    self.Sale(1)
+                elif self.menu_state == 'Degrom':
+                    self.gameButtons(self.degrompitch)
+                    self.Degrom(1)
+                elif self.menu_state == 'Sasaki':
+                    self.gameButtons(self.sasakipitch)
+                    self.Sasaki(1)
+                elif self.menu_state == 'Yamamoto':
+                    self.gameButtons(self.yamamotopitch)
+                    self.Yamamoto(1)
+                elif self.menu_state == 200:
+                    self.salepitch.hide()
+                    self.degrompitch.hide()
+                    self.sasakipitch.hide()
+                    self.yamamotopitch.hide()
+                    self.seepitches.hide()
+                    self.return_to_game.show()
+                    self.backtomainmenu.show()
+                    self.strikezonetoggle.show()
+                    for pitch_pos in self.pitches_display:
+                        pygame.gfxdraw.aacircle(self.screen, int(pitch_pos[0]), int(pitch_pos[1]), self.fourseamballsize, (255,255,255))
+                if self.just_refreshed == 1:
+                    result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts, self.currentstrikeouts, self.currentwalks, self.hits, self.scoreKeeper.get_score())
+                    scoreboard = self.drawscoreboard(result)
+                    scoreboard.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': 0.0075})
+                    string = "<font size=5><br>COUNT IS {} - {}</font>".format(self.pitchnumber, self.currentballs, self.currentstrikes)
+                    textbox = self.pitchresult(string)
+                    textbox.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': 0.0075})
+                    self.containerupdate(textbox, scoreboard)
+                    self.just_refreshed = 0
+                    self.current_gamemode = self.menu_state
+                self.draw_static()
+                self.RightBatter(1) if self.batter_hand == 'R' else self.LeftBatter(1)
+                if self.first_pitch_thrown:
+                    pygame.gfxdraw.aacircle(self.screen, int(self.ball[0]), int(self.ball[1]), self.fourseamballsize, (255,255,255))
+                self.manager.draw_ui(self.screen) 
+                
+                    
+                pygame.display.flip()
+            
+            
         print(self.records)
         self.records.to_csv('pitch_data.csv', mode='a', header=False)
 
