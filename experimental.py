@@ -268,7 +268,6 @@ class Game:
     SALERELEASEPOINT = pygame.Vector2((screen.get_width() / 2) + 61, (screen.get_height() / 3) + 209)
     SASAKIRELEASEPOINT = pygame.Vector2((screen.get_width() / 2) - 42, (screen.get_height() / 3) + 164)
     YAMAMOTORELEASEPOINT = pygame.Vector2((screen.get_width() / 2) - 52, (screen.get_height() / 3) + 183)
-    ball = [0,0,4600]
 
 
     #Pygame_gui elements (Buttons, textboxes)
@@ -304,7 +303,6 @@ class Game:
                                                 manager=manager)
     container = pygame_gui.core.UIContainer(relative_rect=pygame.Rect((0, 0), (1280,720)),manager=manager, is_window_root_container=False)
     banner = pygame_gui.elements.UILabel(relative_rect=pygame.Rect((340, 0), (600,100)), manager=manager, text="")
-    banner.hide()
 
     def __init__(self):
         self.run()
@@ -358,7 +356,6 @@ class Game:
                 if event.type == pygame_gui.UI_TEXT_EFFECT_FINISHED:
                     self.textfinished += 1
             if self.textfinished == 3:
-                print("HELLO?")
                 pygame.time.delay(500)
                 self.menu_state = 100
         return
@@ -489,7 +486,7 @@ class Game:
 
     #SASAKI PITCHING AI
     def Sasaki_AI(self):
-        random.choice([self.sasakiFastball, self.sasakiSplitter])()
+        random.choice([self.sasakiFastball, self.sasakiSplitter, self.sasakiLowFastball])()
 
     #DEGROM PITCHING AI
     def Degrom_AI(self):
@@ -649,6 +646,7 @@ class Game:
     #GAME LOOP FOR MAIN MENU
     def main_menu(self):
 
+        self.banner.hide()
         self.scoreKeeper.reset()
         running = True
         done = False
@@ -1506,7 +1504,7 @@ class Game:
             
             
         print(self.records)
-        self.records.to_csv('pitch_data.csv', mode='a', header=False)
+        self.records.to_csv('pitch_data.csv', mode='a', header=False, index=False)
 
 def main():
     Game()
