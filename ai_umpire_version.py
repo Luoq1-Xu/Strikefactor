@@ -6,8 +6,10 @@ import random
 import button
 import sys
 import os
-import numpy as np
 import pandas as pd
+import numpy as np
+import pickle
+from sklearn.svm import SVC
 
 #Setup for Conversion into EXE
 def resource_path(relative_path):
@@ -31,10 +33,8 @@ pygame.gfxdraw.aacircle(surf2, 50, 20, 32, (255,255,255))
 crosshair = pygame.cursors.Cursor((40,15), surf2)
 pygame.mouse.set_cursor(crosshair)
 
-
-
-
-
+# Load a saved model
+model = pickle.load(open("ai_umpire.pkl", "rb"))
 
 class Runner:
 
@@ -63,13 +63,13 @@ class Runner:
         if self.base > 3:
             self.scored = True
             self.onBase = False
-    
+
     def extraBases(self, hit):
         self.base += hit + 1
         if self.base > 3:
             self.scored = True
             self.onBase = False
-    
+
 class ScoreKeeper:
 
     def __init__(self):
@@ -77,7 +77,7 @@ class ScoreKeeper:
         self.bases = ['white', 'white', 'white']
         self.basesfilled = {1: 0, 2: 0, 3: 0}
         self.score = 0
-    
+
     # Takes in hit_type, then returns tuple of (bases, score)
     def update_hit_event(self, hit_type):
         batter = Runner(hit_type)
@@ -98,7 +98,7 @@ class ScoreKeeper:
         self.bases = basesFilled
         self.basesfilled[batter.base] = batter
         return (basesFilled, scored)
-    
+
     def updateScored(self):
         for runner in self.runners[:]:
             if runner.scored:
@@ -117,22 +117,22 @@ class ScoreKeeper:
             prevrunner = currRunner
             base += 1
         self.basesfilled[base] = prevrunner
-        self.bases = ['white' if base == 0 
+        self.bases = ['white' if base == 0
                             else 'yellow' for base in self.basesfilled.values()]
         self.updateScored()
 
     def get_bases(self):
         return self.bases
-    
+
     def get_score(self):
         return self.score
-    
+
     def reset(self):
         self.runners = []
         self.bases = ['white', 'white', 'white']
         self.basesfilled = {1: 0, 2: 0, 3: 0}
         self.score = 0
-    
+
 class Game:
 
     records = pd.DataFrame(
@@ -146,7 +146,11 @@ class Game:
             'FinalX',
             'FinalY',
             'isHit',
-            'isStrike'
+            'called_strike',
+            'foul',
+            'swinging_strike',
+            'ball',
+            'in_zone'
         ]
     )
 
@@ -155,7 +159,7 @@ class Game:
     clock = pygame.time.Clock()
     icon = pygame.image.load(resource_path('Images/icon.png')).convert_alpha()
     pygame.display.set_icon(icon)
-    pygame.display.set_caption('Basedball')
+    pygame.display.set_caption('Basedball Experimental Build')
 
     #Stuff for the typing effect in main menu and summary self.screen
     dt = 0
@@ -169,7 +173,8 @@ class Game:
     manager = pygame_gui.UIManager((1280, 720), 'theme.json')
     manager.preload_fonts([{'name': 'fira_code', 'point_size': 18, 'style': 'regular'},
                             {'name': 'fira_code', 'point_size': 18, 'style': 'bold'},
-                            {'name': 'fira_code', 'point_size': 18, 'style': 'bold_italic'}])
+                            {'name': 'fira_code', 'point_size': 18, 'style': 'bold_italic'},
+                            {'name': 'noto_sans', 'point_size': 18, 'style': 'bold', 'antialiased': '1'}])
     batter_hand = "R"
     player_pos = pygame.Vector2(screen.get_width() / 2, screen.get_height() / 2)
     left_player_pos = pygame.Vector2(screen.get_width() / 2, screen.get_height() / 2)
@@ -310,7 +315,7 @@ class Game:
     def pitchresult(self,input):
         return pygame_gui.elements.UITextBox(input,relative_rect=pygame.Rect((1000, 250), (250,200)),
                                         manager=self.manager)
-    
+
     def drawscoreboard(self,results):
         return pygame_gui.elements.UITextBox(results,relative_rect=pygame.Rect((1000, 50), (250,200)),
                                             manager=self.manager)
@@ -340,8 +345,8 @@ class Game:
             pygame.draw.rect(self.screen, "white", self.strikezone, 1)
         if self.strikezonedrawn == 3:
             pygame.draw.rect(self.screen, "white", self.strikezone, 1)
-            pygame.draw.line(self.screen, "white", (565,455), (694, 455))
-            pygame.draw.line(self.screen, "white", (565,510), (694, 510))
+            pygame.draw.line(self.screen, "white", (565,410 + (150/3)), (694, 410 + (150/3)))
+            pygame.draw.line(self.screen, "white", (565,410 + 2*(150/3)), (694, 410 + 2*(150/3)))
             pygame.draw.line(self.screen, "white", (565 + (130/3), 410), (565 + (130/3), 559))
             pygame.draw.line(self.screen, "white", (565 + 2*(130/3), 410), (565 + 2*(130/3), 559))
         self.homeplate()
@@ -388,7 +393,7 @@ class Game:
     def HighSwing(self, number, xoffset=0, yoffset=0):
         self.screen.blit(self.batterhigh[number - 1], (self.x + xoffset, self.y + yoffset))
 
-    def LeftHighSwing(self, number, xoffset=0, yoffset=0):  
+    def LeftHighSwing(self, number, xoffset=0, yoffset=0):
         self.screen.blit(self.batterlefthigh[number - 1], (self.x + xoffset, self.y + yoffset))
 
     def Yamamoto(self, number, xoffset=0, yoffset=0):
@@ -445,7 +450,7 @@ class Game:
                 self.ishomerun = 'SOLO HOME RUN'
             elif scored == 2:
                 self.ishomerun = 'TWO-RUN HOME RUN'
-            elif scored == 3:   
+            elif scored == 3:
                 self.ishomerun = 'THREE-RUN HOME RUN'
             else:
                 self.ishomerun = 'GRAND SLAM'
@@ -466,7 +471,7 @@ class Game:
             return 2
         else:
             return 0
-        
+
     # Check for contact based on mouse cursor position when self.ball impacts bat
     def loc_check(self, batpos, ballpos, ballsize=11):
         lol = 1 if self.batter_hand == "R" else -1
@@ -482,19 +487,23 @@ class Game:
 
     #YAMAMOTO PITCHING AI
     def Yamamoto_AI(self):
-        random.choice([self.yamamotoSplitter, self.yamamotoFastball, self.yamamotoHighFastball, self.yamamotoCurve])()
+        random.choice([self.yamamotoFastball,
+                       self.yamamotoCutter,
+                       self.yamamotoCurve,
+                       self.yamamotoHighFastball,
+                       self.yamamotoSplitter])()
 
     #SASAKI PITCHING AI
     def Sasaki_AI(self):
-        random.choice([self.sasakiFastball, self.sasakiSplitter, self.sasakiLowFastball])()
+        self.sasakiFastball3()
 
     #DEGROM PITCHING AI
     def Degrom_AI(self):
         random.choice([self.deGromChangeup, self.deGromFB1, self.deGromFB2, self.deGromFB3, self.deGromSlider])()
-    
+
     #SALE PITCHING AI
     def Sale_AI(self):
-        random.choice([self.saleUpRightFastball, self.saleUpLeftFastball, self.saleChangeup, 
+        random.choice([self.saleUpRightFastball, self.saleUpLeftFastball, self.saleChangeup,
                        self.saleSlider, self.saleDownLeftFastball, self.saleDownRightFastball])()
 
     # CREDIT TO e-James -> https://stackoverflow.com/questions/401847/circle-rectangle-self.collision-detection-intersection
@@ -573,7 +582,7 @@ class Game:
     #GAME LOOP FOR END/SUMMARY SCREEN
     def draw_inning_summary(self):
 
-        
+
         self.textfinished = 0
         done = False
         counter = 0
@@ -667,8 +676,8 @@ class Game:
                     pygame.quit()
                     sys.exit()
             mousepos = pygame.mouse.get_pos()
-            if (pygame.Rect((400,500), (174,24)).collidepoint(mousepos) or 
-            pygame.Rect((400,600), (112, 24)).collidepoint(mousepos) or 
+            if (pygame.Rect((400,500), (174,24)).collidepoint(mousepos) or
+            pygame.Rect((400,600), (112, 24)).collidepoint(mousepos) or
             pygame.Rect((600,500), (191, 24)).collidepoint(mousepos) or
             pygame.Rect((600,600), (191, 24)).collidepoint(mousepos)):
                 pygame.mouse.set_cursor(pygame.SYSTEM_CURSOR_HAND)
@@ -811,7 +820,11 @@ class Game:
             'FinalX':0,
             'FinalY':0,
             'isHit':"false",
-            'isStrike':False
+            'called_strike':False,
+            'foul': False,
+            'swinging_strike': False,
+            'ball': False,
+            'in_zone': False
         }
 
         starttime = pygame.time.get_ticks()
@@ -829,7 +842,7 @@ class Game:
                     new_entry['SecondX'] = self.ball[0]
                     new_entry['SecondY'] = self.ball[1]
 
-            
+
             #Pitcher Windup
             if current_time <= starttime + 1100:
                 self.screen.fill("black")
@@ -912,9 +925,9 @@ class Game:
                 pygame.display.flip()
 
             #From time self.ball leaves the hand until self.ball finishes traveling
-            if ((current_time > starttime + 1100 
-                and current_time < starttime + traveltime + 1100 
-                and (on_time == 0 or (on_time > 0 and made_contact == 1))) 
+            if ((current_time > starttime + 1100
+                and current_time < starttime + traveltime + 1100
+                and (on_time == 0 or (on_time > 0 and made_contact == 1)))
                 or (on_time > 0 and current_time <= contact_time and made_contact == 0)):
                 self.screen.fill("black")
                 if not sizz:
@@ -1002,7 +1015,7 @@ class Game:
                     self.leg_kick(current_time, starttime + 700)
                 dist = self.ball[2]/301
                 if dist > 1:
-                    pygame.draw.ellipse(self.screen,(255,255,255),(self.ball[0], self.ball[1],max(11/dist, 4), max(11/dist, 5)))
+                    pygame.draw.ellipse(self.screen,(255,255,255),(self.ball[0], self.ball[1],max(11/dist, 3), max(11/dist, 4)))
                     self.ball[1] += vy * (1/dist)
                     self.ball[2] -= (4300 * 1000)/(60 * traveltime)
                     self.ball[0] += vx * (1/dist)
@@ -1014,14 +1027,14 @@ class Game:
                 pygame.display.flip()
 
 
-                if (current_time > (starttime + traveltime + 1050) 
+                if (current_time > (starttime + traveltime + 1050)
                     and soundplayed == 0 and on_time == 0) or (current_time > contact_time and soundplayed == 0 and (on_time > 0 and made_contact == 1)):
                     self.glovepop()
                     soundplayed += 1
 
             # BALL HAS CONTACTED BAT
             elif (on_time > 0
-                  and current_time > contact_time 
+                  and current_time > contact_time
                   and current_time <= starttime + traveltime + 1800
                   and made_contact != 1):
                 self.screen.fill("black")
@@ -1049,13 +1062,13 @@ class Game:
                 if (made_contact == 0):
                     # FOUL BALL TIMING
                     if (on_time == 1 and pitch_results_done == False):
-                        #TIMING ON BUT SWING PATH OFF (SWING OVER OR UNDER BALL)
+                        #TIMING ON BUT SWING PATH OFF (SWING OVER OR UNDER BALL) - MISS
                         outcome = self.loc_check(mousepos, (self.ball[0], self.ball[1]))
                         if outcome == 'miss':
                             made_contact = 1
                         #TIMING ON AND PATH ON - FOUL BALL
                         else:
-                            new_entry['isStrike'] = True
+                            new_entry['foul'] = True
                             made_contact = 2
                             pitch_results_done = True
                             self.pitchnumber += 1
@@ -1064,10 +1077,10 @@ class Game:
                                 string = "<font size=5>PITCH {}: {}<br>FOUL<br>COUNT IS {} - {}</font>".format(self.pitchnumber, pitchtype, self.currentballs, self.currentstrikes)
                                 textbox = self.pitchresult(string)
                                 textbox.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': 0.0085})
-                                result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts, 
-                                                                                                                                                         self.currentstrikeouts, 
-                                                                                                                                                         self.currentwalks, 
-                                                                                                                                                         self.hits, 
+                                result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts,
+                                                                                                                                                         self.currentstrikeouts,
+                                                                                                                                                         self.currentwalks,
+                                                                                                                                                         self.hits,
                                                                                                                                                          self.scoreKeeper.get_score())
                                 scoreboard = self.drawscoreboard(result)
                                 self.containerupdate(textbox,scoreboard)
@@ -1077,16 +1090,17 @@ class Game:
                                 string = "<font size=5>PITCH {}: {}<br>FOUL<br>COUNT IS {} - {}</font>".format(self.pitchnumber, pitchtype, self.currentballs, self.currentstrikes)
                                 textbox = self.pitchresult(string)
                                 textbox.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': 0.0085})
-                                result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts, 
-                                                                                                                                                         self.currentstrikeouts, 
-                                                                                                                                                         self.currentwalks, 
-                                                                                                                                                         self.hits, 
+                                result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts,
+                                                                                                                                                         self.currentstrikeouts,
+                                                                                                                                                         self.currentwalks,
+                                                                                                                                                         self.hits,
                                                                                                                                                          self.scoreKeeper.get_score())
                                 scoreboard = self.drawscoreboard(result)
                                 self.containerupdate(textbox,scoreboard)
-                    # PERFECT TIMING
+                    #PERFECT TIMING
                     elif (on_time == 2 and pitch_results_done == False):
                         outcome = self.loc_check(mousepos, (self.ball[0], self.ball[1]))
+                        #PERFECT TIMING AND LOCATION MISS - MISS
                         if outcome == 'miss':
                             made_contact = 1
                         #PERFECT TIMING AND SWING PATH ON - SUCCESSFUL HIT
@@ -1109,10 +1123,10 @@ class Game:
                             textbox = self.pitchresult(string)
                             self.hits += 1
                             textbox.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': 0.0085})
-                            result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts, 
-                                                                                                                                                    self.currentstrikeouts, 
-                                                                                                                                                    self.currentwalks, 
-                                                                                                                                                    self.hits, 
+                            result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts,
+                                                                                                                                                    self.currentstrikeouts,
+                                                                                                                                                    self.currentwalks,
+                                                                                                                                                    self.hits,
                                                                                                                                                     self.scoreKeeper.get_score())
                             scoreboard = self.drawscoreboard(result)
                             scoreboard.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': 0.0075})
@@ -1122,7 +1136,7 @@ class Game:
                             self.currentballs = 0
                             new_entry['isHit'] = hit_string
                 # FOLLOW THROUGH - PLAY REST OF SWING ANIMATION
-                elif (on_time > 0 
+                elif (on_time > 0
                       and made_contact == 2
                       and pitch_results_done == True):
                     #Play sounds
@@ -1141,7 +1155,7 @@ class Game:
                         soundplayed += 1
 
             # FOLLOW THROUGH IF NO CONTACT MADE
-            elif (current_time > starttime + traveltime + 1100 
+            elif (current_time > starttime + traveltime + 1100
                   and current_time <= starttime + traveltime + 1800
                   and (on_time == 0 or (on_time > 0 and made_contact == 1))):
                 self.screen.fill("black")
@@ -1172,7 +1186,8 @@ class Game:
                 if pitch_results_done == False:
                     pitch_results_done = True
                     #BALL OUTSIDE THE ZONE AND NOT SWUNG AT - BALL
-                    if (not self.collision(self.ball[0], self.ball[1], 11, 630, 482.5, 130, 150)) and self.swing_started == 0:
+                    if not model.predict(np.array([[self.ball[0], self.ball[1]]])) and self.swing_started == 0:
+                        new_entry['ball'] = True
                         if self.umpsound:
                             self.ballcall.play()
                         self.currentballs += 1
@@ -1188,10 +1203,10 @@ class Game:
                             self.currentstrikes = 0
                             self.currentballs = 0
                             self.scoreKeeper.update_walk_event()
-                            result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts, 
-                                                                                                                                                    self.currentstrikeouts, 
-                                                                                                                                                    self.currentwalks, 
-                                                                                                                                                    self.hits, 
+                            result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts,
+                                                                                                                                                    self.currentstrikeouts,
+                                                                                                                                                    self.currentwalks,
+                                                                                                                                                    self.hits,
                                                                                                                                                     self.scoreKeeper.get_score())
                             scoreboard = self.drawscoreboard(result)
                             scoreboard.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': 0.0075})
@@ -1199,24 +1214,26 @@ class Game:
                             self.banner.set_text("WALK")
                             self.banner.show()
                             self.banner.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR,{'time_per_letter': 0.1})
+                        #Normal Ball
                         else:
-                            #Normal Ball
                             self.container.clear()
                             string = "<font size=5>PITCH {}: {}<br>BALL<br>COUNT IS {} - {}</font>".format(self.pitchnumber, pitchtype, self.currentballs, self.currentstrikes)
                             textbox = self.pitchresult(string)
                             textbox.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': 0.0085})
-                            result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts, 
-                                                                                                                                                     self.currentstrikeouts, 
-                                                                                                                                                     self.currentwalks, 
-                                                                                                                                                     self.hits, 
+                            result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts,
+                                                                                                                                                     self.currentstrikeouts,
+                                                                                                                                                     self.currentwalks,
+                                                                                                                                                     self.hits,
                                                                                                                                                      self.scoreKeeper.get_score())
                             scoreboard = self.drawscoreboard(result)
                             self.containerupdate(textbox,scoreboard)
-                    #STRIKE (CALLED OR SWINGING STRIKE)
+                    #CALLED STRIKE OR SWINGING STRIKE
                     else:
-                        new_entry['isStrike'] = True
+                        if self.collision(self.ball[0], self.ball[1], 11, 630, 482.5, 130, 150):
+                            new_entry['in_zone'] = True
                         self.pitchnumber += 1
                         self.currentstrikes += 1
+                        #Play Sounds
                         if self.swing_started == 0 and self.currentstrikes == 3 and self.umpsound:
                             self.called_strike_3.play()
                         elif self.swing_started == 0 and self.currentstrikes != 3 and self.umpsound:
@@ -1225,17 +1242,19 @@ class Game:
                         if self.currentstrikes == 3:
                             self.container.clear()
                             if self.swing_started == 0:
+                                new_entry['called_strike'] = True
                                 string = "<font size=5>PITCH {}: {}<br>CALLED STRIKE<br>COUNT IS {} - {}<br><b>STRIKEOUT</b></font>".format(self.pitchnumber, pitchtype, self.currentballs, self.currentstrikes)
                             else:
+                                new_entry['swinging_strike'] = True
                                 string = "<font size=5>PITCH {}: {}<br>SWINGING STRIKE<br>COUNT IS {} - {}<br><b>STRIKEOUT</b></font>".format(self.pitchnumber, pitchtype, self.currentballs, self.currentstrikes)
                             textbox = self.pitchresult(string)
                             textbox.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': 0.0085})
                             self.currentstrikeouts += 1
                             self.currentouts +=1
-                            result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts, 
-                                                                                                                                                    self.currentstrikeouts, 
-                                                                                                                                                    self.currentwalks, 
-                                                                                                                                                    self.hits, 
+                            result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts,
+                                                                                                                                                    self.currentstrikeouts,
+                                                                                                                                                    self.currentwalks,
+                                                                                                                                                    self.hits,
                                                                                                                                                     self.scoreKeeper.get_score())
                             scoreboard = self.drawscoreboard(result)
                             scoreboard.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': 0.0075})
@@ -1250,15 +1269,17 @@ class Game:
                             #Normal Strike
                             self.container.clear()
                             if self.swing_started == 0:
+                                new_entry['called_strike'] = True
                                 string = "<font size=5>PITCH {}: {}<br>CALLED STRIKE<br>COUNT IS {} - {}<br></font>".format(self.pitchnumber, pitchtype, self.currentballs, self.currentstrikes)
                             else:
+                                new_entry['swinging_strike'] = True
                                 string = "<font size=5>PITCH {}: {}<br>SWINGING STRIKE<br>COUNT IS {} - {}<br></font>".format(self.pitchnumber, pitchtype, self.currentballs, self.currentstrikes)
                             textbox = self.pitchresult(string)
                             textbox.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': 0.0085})
-                            result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts, 
-                                                                                                                                                     self.currentstrikeouts, 
-                                                                                                                                                     self.currentwalks, 
-                                                                                                                                                     self.hits, 
+                            result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts,
+                                                                                                                                                     self.currentstrikeouts,
+                                                                                                                                                     self.currentwalks,
+                                                                                                                                                     self.hits,
                                                                                                                                                      self.scoreKeeper.get_score())
                             scoreboard = self.drawscoreboard(result)
                             self.containerupdate(textbox,scoreboard)
@@ -1305,87 +1326,104 @@ class Game:
     def deGromFB1(self):
         sampley = random.uniform(0,10)
         samplex = random.uniform(-10,10)
-        self.test(self.DEGROMRELEASEPOINT, 'jacobdegrom', -0.015, 0.015, samplex, sampley, 370, 'Fastball')
+        self.test(self.DEGROMRELEASEPOINT, 'jacobdegrom', -0.015, 0.015, samplex, sampley, 370, 'FF')
     def deGromFB2(self):
         sampley = random.uniform(10,30)
         samplex = random.uniform(15,35)
-        self.test(self.DEGROMRELEASEPOINT, 'jacobdegrom', -0.015, 0.0075, samplex, sampley, 370, 'Fastball')
+        self.test(self.DEGROMRELEASEPOINT, 'jacobdegrom', -0.015, 0.0075, samplex, sampley, 370, 'FF')
     def deGromFB3(self):
         sampley = random.uniform(-25,-5)
         samplex = random.uniform(0,20)
-        self.test(self.DEGROMRELEASEPOINT, 'jacobdegrom', -0.015, 0.01, samplex, sampley, 370, 'Fastball')
+        self.test(self.DEGROMRELEASEPOINT, 'jacobdegrom', -0.015, 0.01, samplex, sampley, 370, 'FF')
     def deGromSlider(self):
         sampley = random.uniform(5,-5)
         samplex = random.uniform(-20,20)
-        self.test(self.DEGROMRELEASEPOINT, 'jacobdegrom', 0.025, 0.04, samplex, sampley, 410, 'Slider')
+        self.test(self.DEGROMRELEASEPOINT, 'jacobdegrom', 0.025, 0.04, samplex, sampley, 410, 'SL')
     def deGromChangeup(self):
         sampley = random.uniform(10,20)
         samplex = random.uniform(-10,30)
-        self.test(self.DEGROMRELEASEPOINT, 'jacobdegrom', -0.015, 0.040, samplex, sampley, 400, 'Changeup')
+        self.test(self.DEGROMRELEASEPOINT, 'jacobdegrom', -0.015, 0.040, samplex, sampley, 400, 'CH')
 
     def saleSinker(self):
         sampley = random.uniform(0,10)
         samplex = random.uniform(-25,5)
-        self.test(self.SALERELEASEPOINT, 'chrissale', 0.015, 0.035, samplex, sampley, 400, 'Fastball')
+        self.test(self.SALERELEASEPOINT, 'chrissale', 0.015, 0.035, samplex, sampley, 400, 'FF')
     def saleUpLeftFastball(self):
         sampley = random.uniform(0,-25)
         samplex = random.uniform(-45,-15)
-        self.test(self.SALERELEASEPOINT, 'chrissale', 0.005, 0.01, samplex, sampley, 400, '4 Seam Fastball')  
+        self.test(self.SALERELEASEPOINT, 'chrissale', 0.005, 0.01, samplex, sampley, 400, 'FF')
     def saleDownRightFastball(self):
         sampley = random.uniform(10,30)
         samplex = random.uniform(-20,5)
-        self.test(self.SALERELEASEPOINT, 'chrissale', 0.015, 0.01, samplex, sampley, 380, '4 Seam Fastball') 
+        self.test(self.SALERELEASEPOINT, 'chrissale', 0.015, 0.01, samplex, sampley, 380, 'FF')
     def saleMiddleMiddleFastball(self):
         sampley = random.uniform(0,20)
         samplex = random.uniform(-10,-30)
-        self.test(self.SALERELEASEPOINT, 'chrissale', 0.01, 0.01, samplex, sampley, 380, '4 Seam Fastball') 
+        self.test(self.SALERELEASEPOINT, 'chrissale', 0.01, 0.01, samplex, sampley, 380, 'FF')
     def saleDownLeftFastball(self):
         sampley = random.uniform(10,25)
         samplex = random.uniform(-35,-50)
-        self.test(self.SALERELEASEPOINT, 'chrissale', 0.01, 0.01, samplex, sampley, 380, '4 Seam Fastball') 
+        self.test(self.SALERELEASEPOINT, 'chrissale', 0.01, 0.01, samplex, sampley, 380, 'FF')
     def saleUpRightFastball(self):
         sampley = random.uniform(10, -20)
         samplex = random.uniform(-25,0)
-        self.test(self.SALERELEASEPOINT, 'chrissale', 0.015, 0.01, samplex, sampley, 380, '4 Seam Fastball') 
+        self.test(self.SALERELEASEPOINT, 'chrissale', 0.015, 0.01, samplex, sampley, 380, 'FF')
     def saleChangeup(self):
         sampley = random.uniform(-10,10)
         samplex = random.uniform(-20,0)
-        self.test(self.SALERELEASEPOINT, 'chrissale', 0.01, 0.04, samplex, sampley, 450, 'Changeup')  
+        self.test(self.SALERELEASEPOINT, 'chrissale', 0.01, 0.04, samplex, sampley, 450, 'CH')
     def saleSlider(self):
-        sampley = random.uniform(-10,0)
+        sampley = random.uniform(-15,5)
         samplex = random.uniform(-20,25)
-        self.test(self.SALERELEASEPOINT, 'chrissale', -0.040, 0.04, samplex, sampley, 500, 'Slider')  
+        self.test(self.SALERELEASEPOINT, 'chrissale', -0.045, 0.04, samplex, sampley, 500, 'SL')
 
     def sasakiSplitter(self):
         sampley = random.uniform(-5,20)
         samplex = random.uniform(-10,20)
         horizontalBreak = random.uniform(-0.01, 0.01)
-        self.test(self.SASAKIRELEASEPOINT, 'rokisasaki', horizontalBreak, 0.05, samplex, sampley, 450, 'Splitter')  
+        self.test(self.SASAKIRELEASEPOINT, 'rokisasaki', horizontalBreak, 0.05, samplex, sampley, 450, 'FS')
     def sasakiFastball(self):
         sampley = random.uniform(-5,15)
         samplex = random.uniform(-10,20)
-        self.test(self.SASAKIRELEASEPOINT, 'rokisasaki', -0.015, 0.01, samplex, sampley, 370, 'Fastball')
+        self.test(self.SASAKIRELEASEPOINT, 'rokisasaki', -0.015, 0.01, samplex, sampley, 370, 'FF')
     def sasakiLowFastball(self):
         sampley = random.uniform(20,35)
         samplex = random.uniform(0,45)
-        self.test(self.SASAKIRELEASEPOINT, 'rokisasaki', -0.02, 0.015, samplex, sampley, 370, 'Fastball')
+        self.test(self.SASAKIRELEASEPOINT, 'rokisasaki', -0.02, 0.015, samplex, sampley, 370, 'FF')
+
+    def sasakiFastball2(self):
+        sampley = random.uniform(-5,5)
+        samplex = random.uniform(0, 15)
+        self.test(self.SASAKIRELEASEPOINT, 'rokisasaki', -0.005, 0.055, samplex, sampley, 370, 'FF')
+
+    def sasakiFastball3(self):
+        sampley = random.uniform(-5,5)
+        samplex = random.uniform(-25, 25)
+        ivb = random.uniform(0.005, 0.095)
+        ihb = random.uniform(-0.005, 0.005)
+        self.test(self.SASAKIRELEASEPOINT, 'rokisasaki', ihb, ivb, (ihb*50), (ivb*5), 380, 'SI')
 
     def yamamotoCurve(self):
         sampley = random.uniform(0,-20)
         samplex = random.uniform(-10,20)
-        self.test(self.YAMAMOTORELEASEPOINT, 'Yamamoto', 0, 0.06, samplex, sampley, 450, 'Curveball')
+        self.test(self.YAMAMOTORELEASEPOINT, 'Yamamoto', 0, 0.06, samplex, sampley, 450, 'CB')
     def yamamotoHighFastball(self):
         sampley = random.uniform(0,-20)
         samplex = random.uniform(-10,20)
-        self.test(self.YAMAMOTORELEASEPOINT, 'Yamamoto', -0.01, 0.01, samplex, sampley, 450, 'Fastball')
+        self.test(self.YAMAMOTORELEASEPOINT, 'Yamamoto', -0.01, 0.01, samplex, sampley, 450, 'FF')
     def yamamotoFastball(self):
         sampley = random.uniform(0, 40)
         samplex = random.uniform(0,40)
-        self.test(self.YAMAMOTORELEASEPOINT, 'Yamamoto', -0.01, 0.01, samplex, sampley, 380, 'Fastball')
+        self.test(self.YAMAMOTORELEASEPOINT, 'Yamamoto', -0.015, 0.005, samplex, sampley, 380, 'FF')
     def yamamotoSplitter(self):
         sampley = random.uniform(-5, 10)
         samplex = random.uniform(-10,20)
-        self.test(self.YAMAMOTORELEASEPOINT, 'Yamamoto', random.uniform(-0.02, 0), 0.05, samplex, sampley, 450, 'Splitter')
+        self.test(self.YAMAMOTORELEASEPOINT, 'Yamamoto', random.uniform(-0.02, 0), 0.05, samplex, sampley, 450, 'FS')
+    def yamamotoCutter(self):
+        sampley = random.uniform(-10, 30)
+        samplex = random.uniform(-10,30)
+        self.test(self.YAMAMOTORELEASEPOINT, 'Yamamoto', 0.0025, 0.015, samplex, sampley, 400, 'FC')
+
 
     def gameButtons(self, toHide):
         self.degrompitch.hide()
@@ -1497,14 +1535,14 @@ class Game:
                 self.RightBatter(1) if self.batter_hand == 'R' else self.LeftBatter(1)
                 if self.first_pitch_thrown:
                     pygame.gfxdraw.aacircle(self.screen, int(self.ball[0]), int(self.ball[1]), self.fourseamballsize, (255,255,255))
-                self.manager.draw_ui(self.screen) 
-                
-                    
+                self.manager.draw_ui(self.screen)
+
+
                 pygame.display.flip()
-            
-            
+
+
         print(self.records)
-        self.records.to_csv('pitch_data.csv', mode='a', header=False, index=False)
+        self.records.to_csv('ai_ump_pitch_data.csv', mode='a', header=False, index=False)
 
 def main():
     Game()
