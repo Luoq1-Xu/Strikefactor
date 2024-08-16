@@ -41,7 +41,7 @@ crosshair = pygame.cursors.Cursor((40,15), surf2)
 pygame.mouse.set_cursor(crosshair)
 
 # Load a saved model
-model = pickle.load(open("ai_umpire.pkl", "rb"))
+model = pickle.load(open("AI/ai_umpire.pkl", "rb"))
 
 class Runner:
 
@@ -193,10 +193,39 @@ class Game:
             counter += 1
         return storage
 
+    def loadball():
+        out = []
+        for filename in os.listdir('ball'):
+            out.append(pygame.image.load(f'ball/{filename}').convert_alpha())
+        return out
+
     batter = loadimg('Images/TROUT', 15)
     batterhigh = loadimg('Images/HIGHSWING', 7)
     batterleft = loadimg('Images/TROUTLEFT', 15)
     batterlefthigh = loadimg('Images/HIGHSWINGLEFT', 7)
+    ball = [0, 0, 4600]
+    ball_list = loadball()
+
+    def blitball():
+        counter = 0
+        def blit(self):
+            nonlocal counter
+            max_distance = 4600
+            min_size = 3
+            max_size = 11
+
+            dist = self.ball[2] / max_distance
+
+            # Linear interpolation to calculate the size
+            size = min_size + (max_size - min_size) * (1 - dist)
+            ratio = size / 54
+
+            image = pygame.transform.scale(self.ball_list[counter], (int(ratio * 64), int(ratio * 66)))
+            self.screen.blit(image, (self.ball[0] - (29.22 * ratio), self.ball[1] - (32.62 * ratio)))
+            counter = (counter + 1) % len(self.ball_list)
+        return blit
+    
+    blitfunc = blitball()
 
     # Buttons for main menu
     salebutton = pygame.image.load(resource_path('Images/salebutton.png')).convert_alpha()
@@ -222,14 +251,18 @@ class Game:
     if use_new:
         sale_ai = ERAI(sale.get_pitch_names())
         degrom_ai = ERAI(degrom.get_pitch_names())
+        yamamoto_ai = ERAI(yamamoto.get_pitch_names())
+        sasaki_ai = ERAI(sasaki.get_pitch_names())
     else:
-        sale_ai = pickle.load(open("sale_ai.pkl", "rb"))
-        degrom_ai = pickle.load(open("degrom_ai.pkl", "rb"))
-        yamamoto_ai = pickle.load(open("yamamoto_ai.pkl", "rb"))
+        sale_ai = pickle.load(open("AI/sale_ai.pkl", "rb"))
+        degrom_ai = pickle.load(open("AI/degrom_ai.pkl", "rb"))
+        yamamoto_ai = pickle.load(open("AI/yamamoto_ai.pkl", "rb"))
+        sasaki_ai = pickle.load(open("AI/sasaki_ai.pkl", "rb"))
 
     sale.attach_ai(sale_ai)
     degrom.attach_ai(degrom_ai)
     yamamoto.attach_ai(yamamoto_ai)
+    sasaki.attach_ai(sasaki_ai)
 
     # State = (outs, strikes, balls, runners_on_base, hits_allowed, score)
     current_state = (0, 0, 0, 0, 0, 0)
@@ -699,7 +732,7 @@ class Game:
         self.pitch_trajectories = []
         self.last_pitch_information = []
 
-        messages = ["BASED BALL",
+        messages = ["StrikeFactor",
                     "A Baseball At-Bat Simulator"]
 
         active_message = 0
@@ -886,9 +919,9 @@ class Game:
                         self.high_swing_start(timenow, swing_starttime)
                 elif self.swing_started == 0:
                     self.leg_kick(current_time, starttime + 700)
-                dist = self.ball[2]/301
+                dist = self.ball[2]/300
                 if dist > 1:
-                    pygame.draw.ellipse(self.screen,(255,255,255),(self.ball[0], self.ball[1],max(11/dist, 3), max(11/dist, 4)))
+                    self.blitfunc()
                     self.ball[1] += vy * (1/dist)
                     self.ball[2] -= (4300 * 1000)/(60 * traveltime)
                     self.ball[0] += vx * (1/dist)
@@ -1304,6 +1337,47 @@ class Game:
         current_time = pygame.time.get_ticks()
         last_time = current_time
         x = 0
+        if not self.last_pitch_information:
+            for event in pygame.event.get():
+                self.manager.process_events(event)
+                if event.type == pygame.QUIT:
+                    return
+                if event.type == pygame_gui.UI_BUTTON_PRESSED:
+                    if event.ui_element == self.strikezonetoggle:
+                        if self.strikezonedrawn == 1:
+                            self.strikezonedrawn = 2
+                        elif self.strikezonedrawn == 2:
+                            self.strikezonedrawn = 3
+                        elif self.strikezonedrawn == 3:
+                            self.strikezonedrawn = 1
+                    elif event.ui_element == self.toggleumpsound:
+                        if self.umpsound == True:
+                            self.umpsound = False
+                        elif self.umpsound == False:
+                            self.umpsound = True
+                    elif event.ui_element == self.salepitch:
+                        self.Sale_AI()
+                    elif event.ui_element == self.degrompitch:
+                        self.Degrom_AI()
+                    elif event.ui_element == self.sasakipitch:
+                        self.Sasaki_AI()
+                    elif event.ui_element == self.yamamotopitch:
+                        self.Yamamoto_AI()
+                    elif event.ui_element == self.backtomainmenu:
+                        self.menu_state = 0
+                    elif event.ui_element == self.seepitches:
+                        self.menu_state = 200
+                    elif event.ui_element == self.visualise:
+                        self.menu_state = self.current_gamemode
+                    elif event.ui_element == self.return_to_game:
+                        self.menu_state = self.current_gamemode
+                    elif event.ui_element == self.togglebatter:
+                        if self.batter_hand == 'L':
+                            self.batter_hand = 'R'
+                            self.x = 330
+                        elif self.batter_hand == 'R':
+                            self.batter_hand = 'L'
+                            self.x = 735
         while x <= len(self.last_pitch_information) - 1:
             for event in pygame.event.get():
                 self.manager.process_events(event)
@@ -1345,20 +1419,6 @@ class Game:
                         elif self.batter_hand == 'R':
                             self.batter_hand = 'L'
                             self.x = 735
-                if event.type == pygame.KEYDOWN:
-                    if event.key == pygame.K_q:
-                        if self.menu_state == 'Sale':
-                                selection = self.sale_ai.choose_action(self.current_state)
-                                self.pitch_chosen = selection
-                                self.current_pitcher.pitch(self.main_simulation, selection)
-                        elif self.menu_state == 'Degrom':
-                            selection = self.degrom_ai.choose_action(self.current_state)
-                            self.pitch_chosen = selection
-                            self.current_pitcher.pitch(self.main_simulation, selection)
-                        elif self.menu_state == 'Yamamoto':
-                            selection = self.yamamoto_ai.choose_action(self.current_state)
-                            self.pitch_chosen = selection
-                            self.current_pitcher.pitch(self.main_simulation, selection)
             time_delta = self.clock.tick_busy_loop(60)/1000.0
             self.manager.update(time_delta)
             self.screen.fill("black")
@@ -1551,21 +1611,23 @@ class Game:
 
         # Quit cleanup
         print(self.records)
-        with open('sale_ai.pkl', 'wb') as f:
+        with open('AI/sale_ai.pkl', 'wb') as f:
             pickle.dump(self.sale_ai, f, pickle.HIGHEST_PROTOCOL)
             print("Sale model updated.")
-        with open('degrom_ai.pkl', 'wb') as f:
+        with open('AI/degrom_ai.pkl', 'wb') as f:
             pickle.dump(self.degrom_ai, f, pickle.HIGHEST_PROTOCOL)
             print("Degrom model updated.")
-        with open('yamamoto_ai.pkl', 'wb') as f:
+        with open('AI/yamamoto_ai.pkl', 'wb') as f:
             print("Yamamoto model updated")
+            pickle.dump(self.yamamoto_ai, f, pickle.HIGHEST_PROTOCOL)
+        with open('AI/sasaki_ai.pkl', 'wb') as f:
+            print("Sasaki model updated")
             pickle.dump(self.yamamoto_ai, f, pickle.HIGHEST_PROTOCOL)
         # Update stats to cloud postgres server
         if self.update:
             for pitcher in self.pitchers:
                 update_info(pitcher.name, pitcher.get_basic_stats())
         self.records.to_csv('new_pitch_data.csv', mode='a', header=False, index=False)
-
 
 def main():
     Game()

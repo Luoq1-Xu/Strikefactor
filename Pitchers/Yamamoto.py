@@ -6,20 +6,21 @@ class Yamamoto(pitcher.Pitcher):
 
     def __init__(self, screen, loadfunc) -> None:
         super().__init__((screen.get_width() / 2) - 30,
-                         (screen.get_height() / 3) + 180,
+                         (screen.get_height() / 3) + 175,
                          pygame.Vector2((screen.get_width() / 2) - 52, (screen.get_height() / 3) + 183),
                          screen,
                          'Yoshinobu Yamamoto')
         self.load_img(loadfunc, 'Yamamoto/', 14)
+        self.add_pitch_type(self.yamamotoCutter, "FC")
         self.add_pitch_type(self.yamamotoCurve, "CB")
         self.add_pitch_type(self.yamamotoHighFastball, "FF")
         self.add_pitch_type(self.yamamotoSplitter, "FS")
+        
 
     def yamamotoCurve(self, simulation_func):
         sampley = random.uniform(0,-20)
         samplex = random.uniform(-10,20)
         simulation_func(self.release_point, 'Yamamoto', 0, 0.06, samplex, sampley, 460, 'CB')
-
 
     def draw_pitcher(self, start_time, current_time):
         if current_time == 0 and start_time == 0:
@@ -57,7 +58,7 @@ class Yamamoto(pitcher.Pitcher):
     def yamamotoCurve(self, main_simulation):
         sampley = random.uniform(0,-20)
         samplex = random.uniform(-10,20)
-        main_simulation(self.release_point, 'Yamamoto', 0, 0.06, samplex, sampley, 460, 'CB')
+        main_simulation(self.release_point, 'Yamamoto', 0.001, 0.055, samplex, sampley, 460, 'CB')
     def yamamotoHighFastball(self, main_simulation):
         sampley = random.uniform(0,-20)
         samplex = random.uniform(-10,20)
@@ -69,8 +70,8 @@ class Yamamoto(pitcher.Pitcher):
     def yamamotoSplitter(self, main_simulation):
         sampley = random.uniform(-5, 10)
         samplex = random.uniform(-10,20)
-        main_simulation(self.release_point, 'Yamamoto', random.uniform(-0.02, 0), 0.05, samplex, sampley, 420, 'FS')
+        main_simulation(self.release_point, 'Yamamoto', random.uniform(-0.02, 0.001), 0.045, samplex, sampley, 420, 'FS')
     def yamamotoCutter(self, main_simulation):
         sampley = random.uniform(-10, 30)
         samplex = random.uniform(-10,30)
-        main_simulation(self.release_point, 'Yamamoto', 0.0025, 0.015, samplex, sampley, 400, 'FC')
+        main_simulation(self.release_point, 'Yamamoto', 0.00125, 0.015, samplex, sampley, 400, 'FC')

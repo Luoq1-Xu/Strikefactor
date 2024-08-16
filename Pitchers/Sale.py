@@ -74,12 +74,12 @@ class Sale(pitcher.Pitcher):
         main_simulation(self.release_point, 'chrissale', 0.015, 0.01, samplex, sampley, 380, 'FF')
     def saleChangeup(self, main_simulation):
         sampley = random.uniform(-10,10)
-        samplex = random.uniform(-20,0)
-        main_simulation(self.release_point, 'chrissale', 0.01, 0.04, samplex, sampley, 450, 'CH')
+        samplex = random.uniform(-30,5)
+        main_simulation(self.release_point, 'chrissale', 0.01, 0.0225, samplex, sampley, 450, 'CH')
     def saleSlider(self, main_simulation):
-        sampley = random.uniform(-15,5)
-        samplex = random.uniform(-20,25)
-        main_simulation(self.release_point, 'chrissale', -0.045, 0.04, samplex, sampley, 500, 'SL')
+        sampley = random.uniform(-20,5)
+        samplex = random.uniform(-40,25)
+        main_simulation(self.release_point, 'chrissale', -0.015, 0.05, samplex, sampley, 500, 'SL')
 
 
 

@@ -6,7 +6,7 @@ class Degrom(pitcher.Pitcher):
 
     def __init__(self, screen, loadfunc) -> None:
         super().__init__((screen.get_width() / 2) - 30,
-                         (screen.get_height() / 3) + 180,
+                         (screen.get_height() / 3) + 175,
                          pygame.Vector2((screen.get_width() / 2) - 45, (screen.get_height() / 3) + 187),
                          screen,
                          'Jacob deGrom')
@@ -65,7 +65,7 @@ class Degrom(pitcher.Pitcher):
         samplex = random.uniform(-20,20)
         main_simulation(self.release_point, 'jacobdegrom', 0.025, 0.04, samplex, sampley, 410, 'SL')
     def deGromChangeup(self, main_simulation):
-        sampley = random.uniform(10,20)
+        sampley = random.uniform(0,20)
         samplex = random.uniform(-10,30)
-        main_simulation(self.release_point, 'jacobdegrom', -0.015, 0.040, samplex, sampley, 390, 'CH')
+        main_simulation(self.release_point, 'jacobdegrom', -0.015, 0.0255, samplex, sampley, 420, 'CH')
 

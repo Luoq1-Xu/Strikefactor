@@ -11,7 +11,10 @@ class Sasaki(pitcher.Pitcher):
                          screen,
                          'Roki Sasaki')
         self.load_img(loadfunc, 'Sasaki/', 14)
+        self.add_pitch_type(self.sasakiFastball, "FF")
+        
         self.add_pitch_type(self.sasakiSplitter, "FS")
+
 
     def sasakiSplitter(self, main_simulation):
         sampley = random.uniform(-5,20)
