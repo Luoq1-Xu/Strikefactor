@@ -11,7 +11,10 @@ class Sale(pitcher.Pitcher):
                          screen,
                          'Chris Sale')
         self.load_img(loadfunc, 'Images/LEFTY', 9)
-        self.add_pitch_type(self.saleMiddleMiddleFastball, 'FF')
+        self.add_pitch_type(self.saleMiddleMiddleFastball, 'FFM')
+        self.add_pitch_type(self.saleSinker, 'SI')
+        self.add_pitch_type(self.saleUpLeftFastball, 'FFL')
+        self.add_pitch_type(self.saleDownRightFastball, 'FFD')
         self.add_pitch_type(self.saleChangeup, 'CH')
         self.add_pitch_type(self.saleSlider, 'SL')
 
@@ -50,12 +53,12 @@ class Sale(pitcher.Pitcher):
     def saleSinker(self, main_simulation):
         sampley = random.uniform(0,10)
         samplex = random.uniform(-25,5)
-        main_simulation(self.release_point, 'chrissale', 0.015, 0.035, samplex, sampley, 400, 'FF')
+        main_simulation(self.release_point, 'chrissale', 0.01, 0.015, samplex, sampley, 380, 'SI')
 
     def saleUpLeftFastball(self, main_simulation):
         sampley = random.uniform(0,-25)
         samplex = random.uniform(-45,-15)
-        main_simulation(self.release_point, 'chrissale', 0.005, 0.01, samplex, sampley, 400, 'FF')
+        main_simulation(self.release_point, 'chrissale', 0.005, 0.01, samplex, sampley, 380, 'FF')
     def saleDownRightFastball(self, main_simulation):
         sampley = random.uniform(10,30)
         samplex = random.uniform(-20,5)

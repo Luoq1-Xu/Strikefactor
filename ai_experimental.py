@@ -15,7 +15,7 @@ from Pitchers.Degrom import Degrom
 from Pitchers.Yamamoto import Yamamoto
 from Pitchers.Sasaki import Sasaki
 from db_helper import update_info, get_pitcher_stats
-from AI import ERAI
+from AI_2 import ERAI
 import numpy as np
 
 #Setup for Conversion into EXE
@@ -42,6 +42,9 @@ pygame.mouse.set_cursor(crosshair)
 
 # Load a saved model
 model = pickle.load(open("AI/ai_umpire.pkl", "rb"))
+
+# Directory containing AI models
+AI_DIR = "AI_2"
 
 class Runner:
 
@@ -254,10 +257,10 @@ class Game:
         yamamoto_ai = ERAI(yamamoto.get_pitch_names())
         sasaki_ai = ERAI(sasaki.get_pitch_names())
     else:
-        sale_ai = pickle.load(open("AI/sale_ai.pkl", "rb"))
-        degrom_ai = pickle.load(open("AI/degrom_ai.pkl", "rb"))
-        yamamoto_ai = pickle.load(open("AI/yamamoto_ai.pkl", "rb"))
-        sasaki_ai = pickle.load(open("AI/sasaki_ai.pkl", "rb"))
+        sale_ai = pickle.load(open("{}/sale_ai.pkl".format(AI_DIR), "rb"))
+        degrom_ai = pickle.load(open("{}/degrom_ai.pkl".format(AI_DIR), "rb"))
+        yamamoto_ai = pickle.load(open("{}/yamamoto_ai.pkl".format(AI_DIR), "rb"))
+        sasaki_ai = pickle.load(open("{}/sasaki_ai.pkl".format(AI_DIR), "rb"))
 
     sale.attach_ai(sale_ai)
     degrom.attach_ai(degrom_ai)
@@ -1490,7 +1493,7 @@ class Game:
                         elif event.ui_element == self.seepitches:
                             self.menu_state = 200
                         elif event.ui_element == self.visualise_last_pitch:
-                            self.menu_state = 'visualise'
+                            self.menu_state = self.current_gamemode
                         elif event.ui_element == self.return_to_game:
                             self.menu_state = self.current_gamemode
                         elif event.ui_element == self.togglebatter:
@@ -1611,18 +1614,19 @@ class Game:
 
         # Quit cleanup
         print(self.records)
-        with open('AI/sale_ai.pkl', 'wb') as f:
-            pickle.dump(self.sale_ai, f, pickle.HIGHEST_PROTOCOL)
-            print("Sale model updated.")
-        with open('AI/degrom_ai.pkl', 'wb') as f:
-            pickle.dump(self.degrom_ai, f, pickle.HIGHEST_PROTOCOL)
-            print("Degrom model updated.")
-        with open('AI/yamamoto_ai.pkl', 'wb') as f:
-            print("Yamamoto model updated")
-            pickle.dump(self.yamamoto_ai, f, pickle.HIGHEST_PROTOCOL)
-        with open('AI/sasaki_ai.pkl', 'wb') as f:
-            print("Sasaki model updated")
-            pickle.dump(self.yamamoto_ai, f, pickle.HIGHEST_PROTOCOL)
+        if not self.use_new:
+            with open('{}/sale_ai.pkl'.format(AI_DIR), 'wb') as f:
+                pickle.dump(self.sale_ai, f, pickle.HIGHEST_PROTOCOL)
+                print("Sale model updated.")
+            with open('{}/degrom_ai.pkl'.format(AI_DIR), 'wb') as f:
+                pickle.dump(self.degrom_ai, f, pickle.HIGHEST_PROTOCOL)
+                print("Degrom model updated.")
+            with open('{}/yamamoto_ai.pkl'.format(AI_DIR), 'wb') as f:
+                print("Yamamoto model updated")
+                pickle.dump(self.yamamoto_ai, f, pickle.HIGHEST_PROTOCOL)
+            with open('{}/sasaki_ai.pkl'.format(AI_DIR), 'wb') as f:
+                print("Sasaki model updated")
+                pickle.dump(self.yamamoto_ai, f, pickle.HIGHEST_PROTOCOL)
         # Update stats to cloud postgres server
         if self.update:
             for pitcher in self.pitchers:

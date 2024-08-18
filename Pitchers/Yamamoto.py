@@ -74,4 +74,4 @@ class Yamamoto(pitcher.Pitcher):
     def yamamotoCutter(self, main_simulation):
         sampley = random.uniform(-10, 30)
         samplex = random.uniform(-10,30)
-        main_simulation(self.release_point, 'Yamamoto', 0.00125, 0.015, samplex, sampley, 400, 'FC')
+        main_simulation(self.release_point, 'Yamamoto', 0.001, 0.0175, samplex, sampley, 400, 'FC')
