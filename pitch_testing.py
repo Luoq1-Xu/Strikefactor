@@ -3,6 +3,9 @@ import pygame
 import pygame.gfxdraw
 import pygame_gui
 import random
+
+import pygame_gui.core.ui_container
+import pygame_gui.elements.ui_window
 import button
 import sys
 import os
@@ -10,13 +13,16 @@ import pandas as pd
 import numpy as np
 import pickle
 from sklearn.svm import SVC
-from Pitchers.Sale import Sale
-from Pitchers.Degrom import Degrom
-from Pitchers.Yamamoto import Yamamoto
-from Pitchers.Sasaki import Sasaki
+from Pitchers_Test.Sale import Sale
+from Pitchers_Test.Degrom import Degrom
+from Pitchers_Test.Yamamoto import Yamamoto
+from Pitchers_Test.Sasaki import Sasaki
 from db_helper import update_info, get_pitcher_stats
 from AI_2 import ERAI
 import numpy as np
+from pygame_gui.ui_manager import UIManager
+from pygame_gui.elements.ui_window import UIWindow
+from pygame_gui.elements.ui_image import UIImage
 
 #Setup for Conversion into EXE
 def resource_path(relative_path):
@@ -30,6 +36,7 @@ def resource_path(relative_path):
 
 pygame.mixer.pre_init(44100, 16, 2, 4096)
 pygame.init()
+    
 
 # Circular PCI cursor
 surf2 = pygame.Surface((100, 40), pygame.SRCALPHA)
@@ -146,11 +153,31 @@ class ScoreKeeper:
     def get_runners_on_base(self):
         return len(self.runners)
 
+PONG_WINDOW_SELECTED = pygame.event.custom_type()
+
+class StatSwing(UIWindow):
+
+
+    def __init__(self, position, ui_manager):
+        super().__init__(pygame.Rect(position, (520, 340)), ui_manager,
+                         window_display_title='StatSwing',
+                         object_id='#view_window')
+
+        game_surface_size = self.get_container().get_size()
+        self.game_surface_element = UIImage(pygame.Rect((0, 0),
+                                                        game_surface_size),
+                                            pygame.Surface(game_surface_size).convert(),
+                                            manager=ui_manager,
+                                            container=self,
+                                            parent_element=self)
+        self.is_active = False
+
+
 class Game:
 
     # Update pitcher stats after game ends?
     update = False
-    use_new = False
+    use_new = True
 
     records = pd.DataFrame
     batradius = 40
@@ -365,6 +392,9 @@ class Game:
                                                 manager=manager)
     container = pygame_gui.core.UIContainer(relative_rect=pygame.Rect((0, 0), (1280,720)),manager=manager, is_window_root_container=False)
     banner = pygame_gui.elements.UILabel(relative_rect=pygame.Rect((340, 0), (600,100)), manager=manager, text="")
+    window = pygame_gui.core.ui_container.UIContainer(relative_rect=pygame.Rect((0, 0), (1280,720)),manager=manager, is_window_root_container=True)
+    view_window = StatSwing((25, 25), manager)
+
 
     def __init__(self):
         self.run()
@@ -1545,24 +1575,6 @@ class Game:
 
         # Quit cleanup
         print(self.records)
-        if not self.use_new:
-            with open('{}/sale_ai.pkl'.format(AI_DIR), 'wb') as f:
-                pickle.dump(self.sale_ai, f, pickle.HIGHEST_PROTOCOL)
-                print("Sale model updated.")
-            with open('{}/degrom_ai.pkl'.format(AI_DIR), 'wb') as f:
-                pickle.dump(self.degrom_ai, f, pickle.HIGHEST_PROTOCOL)
-                print("Degrom model updated.")
-            with open('{}/yamamoto_ai.pkl'.format(AI_DIR), 'wb') as f:
-                print("Yamamoto model updated")
-                pickle.dump(self.yamamoto_ai, f, pickle.HIGHEST_PROTOCOL)
-            with open('{}/sasaki_ai.pkl'.format(AI_DIR), 'wb') as f:
-                print("Sasaki model updated")
-                pickle.dump(self.yamamoto_ai, f, pickle.HIGHEST_PROTOCOL)
-        # Update stats to cloud postgres server
-        if self.update:
-            for pitcher in self.pitchers:
-                update_info(pitcher.name, pitcher.get_basic_stats())
-        self.records.to_csv('new_pitch_data.csv', mode='a', header=False, index=False)
 
 def main():
     Game()
