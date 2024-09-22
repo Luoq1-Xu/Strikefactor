@@ -3,7 +3,7 @@ import random
 
 class Pitcher:
 
-    def __init__(self, xpos, ypos, release_point, screen, name) -> None:
+    def __init__(self, xpos, ypos, release_point, screen, name, windup_time) -> None:
         self.name = name
         self.xpos = xpos
         self.ypos = ypos
@@ -29,6 +29,7 @@ class Pitcher:
             'runs_allowed': 0,
             'home_runs_allowed': 0
         }
+        self.windup = windup_time
 
     def load_img(self, loadfunc, name, number):
         self.sprites = loadfunc(name, number)
@@ -114,3 +115,6 @@ class Pitcher:
 
     def get_ai(self):
         return self.ai
+    
+    def get_windup(self):
+        return self.windup

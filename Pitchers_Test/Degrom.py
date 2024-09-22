@@ -9,7 +9,8 @@ class Degrom(pitcher.Pitcher):
                          (screen.get_height() / 3) + 175,
                          pygame.Vector2((screen.get_width() / 2) - 45, (screen.get_height() / 3) + 187),
                          screen,
-                         'Jacob deGrom')
+                         'Jacob deGrom',
+                         1100)
         self.load_img(loadfunc, 'Images/RIGHTY', 9)
         self.add_pitch_type(self.deGromFBD, "FFD")
         self.add_pitch_type(self.deGromFBU, "FFU")

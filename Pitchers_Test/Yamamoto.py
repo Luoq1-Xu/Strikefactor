@@ -9,12 +9,10 @@ class Yamamoto(pitcher.Pitcher):
                          (screen.get_height() / 3) + 175,
                          pygame.Vector2((screen.get_width() / 2) - 52, (screen.get_height() / 3) + 183),
                          screen,
-                         'Yoshinobu Yamamoto')
+                         'Yoshinobu Yamamoto',
+                         1100)
         self.load_img(loadfunc, 'Yamamoto/', 14)
-        self.add_pitch_type(self.yamamotoCutter, "FC")
-        self.add_pitch_type(self.yamamotoCurve, "CB")
-        self.add_pitch_type(self.yamamotoHighFastball, "FF")
-        self.add_pitch_type(self.yamamotoSplitter, "FS")
+        self.add_pitch_type(self.yamamoto_middle_fastball, "FFM")
         
 
     def yamamotoCurve(self, simulation_func):
@@ -67,10 +65,18 @@ class Yamamoto(pitcher.Pitcher):
         sampley = random.uniform(0, 40)
         samplex = random.uniform(0,40)
         main_simulation(self.release_point, 'Yamamoto', -0.015, 0.005, samplex, sampley, 380, 'FF')
+    def yamamoto_middle_fastball(self, main_simulation):
+        sampley = random.uniform(-10,30)
+        samplex = random.uniform(0,40)
+        main_simulation(self.release_point, 'Yamamoto', -0.015, 0.005, samplex, sampley, 380, 'FF')
     def yamamotoSplitter(self, main_simulation):
         sampley = random.uniform(-5, 10)
         samplex = random.uniform(-10,20)
         main_simulation(self.release_point, 'Yamamoto', random.uniform(-0.02, 0.001), 0.045, samplex, sampley, 420, 'FS')
+    def yamamoto_high_splitter(self, main_simulation):
+        sampley = random.uniform(-20, -5)
+        samplex = random.uniform(-15,25)
+        main_simulation(self.release_point, 'Yamamoto', random.uniform(-0.02, 0.001), 0.045, samplex, sampley, 420, 'FSH')
     def yamamotoCutter(self, main_simulation):
         sampley = random.uniform(-10, 30)
         samplex = random.uniform(-10,30)

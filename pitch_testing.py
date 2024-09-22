@@ -6,13 +6,13 @@ import random
 
 import pygame_gui.core.ui_container
 import pygame_gui.elements.ui_window
+
 import button
 import sys
 import os
 import pandas as pd
-import numpy as np
 import pickle
-from sklearn.svm import SVC
+from Pitchers_Test.Mcclanahan import Mcclanahan
 from Pitchers_Test.Sale import Sale
 from Pitchers_Test.Degrom import Degrom
 from Pitchers_Test.Yamamoto import Yamamoto
@@ -20,7 +20,6 @@ from Pitchers_Test.Sasaki import Sasaki
 from db_helper import update_info, get_pitcher_stats
 from AI_2 import ERAI
 import numpy as np
-from pygame_gui.ui_manager import UIManager
 from pygame_gui.elements.ui_window import UIWindow
 from pygame_gui.elements.ui_image import UIImage
 
@@ -187,7 +186,7 @@ class Game:
     clock = pygame.time.Clock()
     icon = pygame.image.load(resource_path('Images/icon.png')).convert_alpha()
     pygame.display.set_icon(icon)
-    pygame.display.set_caption('Basedball Experimental Build')
+    pygame.display.set_caption('StrikeFactor Pitch Test Version')
 
     # Stuff for the typing effect in main menu and summary self.screen
     dt = 0
@@ -220,6 +219,15 @@ class Game:
         storage = []
         while counter <= number:
             storage.append(pygame.image.load(resource_path(f'{name}{counter}.png')).convert_alpha())
+            counter += 1
+        return storage
+    
+    def loadimg_experimental(name,number):
+        counter = 1
+        storage = []
+        while counter <= number:
+            image = pygame.image.load(resource_path(f'{name}{counter}.png')).convert_alpha()
+            storage.append(pygame.transform.scale_by(image, 118 / image.get_height()))
             counter += 1
         return storage
 
@@ -277,6 +285,7 @@ class Game:
     degrom = Degrom(screen, loadimg)
     yamamoto = Yamamoto(screen, loadimg)
     sasaki = Sasaki(screen, loadimg)
+    mcclanahan = Mcclanahan(screen, loadimg_experimental)
     pitchers = [sale, degrom, yamamoto, sasaki]
     current_pitcher = sale
     if use_new:
@@ -284,16 +293,17 @@ class Game:
         degrom_ai = ERAI(degrom.get_pitch_names())
         yamamoto_ai = ERAI(yamamoto.get_pitch_names())
         sasaki_ai = ERAI(sasaki.get_pitch_names())
+        mcclanahan_ai = ERAI(mcclanahan.get_pitch_names())
     else:
         sale_ai = pickle.load(open("{}/sale_ai.pkl".format(AI_DIR), "rb"))
         degrom_ai = pickle.load(open("{}/degrom_ai.pkl".format(AI_DIR), "rb"))
         yamamoto_ai = pickle.load(open("{}/yamamoto_ai.pkl".format(AI_DIR), "rb"))
         sasaki_ai = pickle.load(open("{}/sasaki_ai.pkl".format(AI_DIR), "rb"))
-
     sale.attach_ai(sale_ai)
     degrom.attach_ai(degrom_ai)
     yamamoto.attach_ai(yamamoto_ai)
     sasaki.attach_ai(sasaki_ai)
+    mcclanahan.attach_ai(mcclanahan_ai)
 
     # State = (outs, strikes, balls, runners_on_base, hits_allowed, score)
     current_state = (0, 0, 0, 0, 0, 0)
@@ -531,18 +541,20 @@ class Game:
                 self.ishomerun = 'GRAND SLAM'
 
     #Function to check quality of timing
-    def powertiming(self, swing_starttime, starttime, traveltime):
-        if abs((swing_starttime + 150) - (starttime + traveltime + 1150)) > 15 and abs((swing_starttime + 150) - (starttime + traveltime + 1150)) < 30:
+    def powertiming(self, swing_starttime, starttime, traveltime, windup_time):
+        diff = abs((swing_starttime + 150) - (starttime + windup_time + traveltime))
+        if 15 < diff < 30:
             return 1
-        elif abs((swing_starttime + 150) - (starttime + traveltime + 1150)) <= 15:
+        elif diff <= 15:
             return 2
         else:
             return 0
 
-    def contacttiming(self, swing_starttime, starttime, traveltime):
-        if abs((swing_starttime + 150) - (starttime + traveltime + 1150)) > 30 and abs((swing_starttime + 150) - (starttime + traveltime + 1150)) < 60:
+    def contacttiming(self, swing_starttime, starttime, traveltime, windup_time):
+        diff = abs((swing_starttime + 150) - (starttime + windup_time + traveltime))
+        if 30 < diff < 60:
             return 1
-        elif abs((swing_starttime + 150) - (starttime + traveltime + 1150)) <= 30:
+        elif diff <= 30:
             return 2
         else:
             return 0
@@ -799,6 +811,9 @@ class Game:
             elif self.faceoffyamamoto.draw(self.screen):
                 self.enter_gamemode('Yamamoto', self.yamamoto)
                 return
+            elif self.experimentalbutton.draw(self.screen):
+                self.enter_gamemode('Experimental', self.mcclanahan)
+                return
             if counter < self.speed * len(message):
                 counter += 1
             elif counter >= self.speed * len(message):
@@ -865,6 +880,7 @@ class Game:
         current_time = starttime
         last_time = starttime
         dist = self.ball[2]/300
+        windup = self.current_pitcher.get_windup()
 
         while running:
             self.screen.fill("black")
@@ -874,19 +890,19 @@ class Game:
             self.current_pitcher.draw_pitcher(starttime, current_time)
 
             # RECORD PITCH TRAJECTORY INFORMATION
-            if elapsed_time >= 10 and current_time - starttime > 1100 or (current_time - starttime > 1100 and not pitch_results_done):
+            if elapsed_time >= 10 and current_time - starttime > windup or (current_time - starttime > windup and not pitch_results_done):
                 last_time = current_time
-                if current_time > starttime + traveltime + 1100 and is_hit:
+                if current_time > starttime + traveltime + windup and is_hit:
                     entry = [self.ball[0], self.ball[1], self.fourseamballsize, (71, 204, 252),"hit"]
-                elif current_time > starttime + traveltime + 1100  and pitch_results_done and is_strike:
+                elif current_time > starttime + traveltime + windup  and pitch_results_done and is_strike:
                     entry = [self.ball[0], self.ball[1], self.fourseamballsize, (227, 75, 80),"strike"]
-                elif current_time > starttime + traveltime + 1100  and pitch_results_done and not is_strike:
+                elif current_time > starttime + traveltime + windup  and pitch_results_done and not is_strike:
                     entry = [self.ball[0], self.ball[1], self.fourseamballsize, (75, 227, 148),"ball"]
                 else:
                     entry = [self.ball[0], self.ball[1], min(max(11/dist, 4), 11), (255,255,255),""]
                 self.last_pitch_information.append(entry)
 
-            if recording_state == 0 and 1100 < (current_time - starttime) < 1300:
+            if recording_state == 0 and windup < (current_time - starttime) < windup + 200:
                     recording_state += 1
                     new_entry['FirstX'] = self.ball[0]
                     new_entry['FirstY'] = self.ball[1]
@@ -896,7 +912,7 @@ class Game:
                     new_entry['SecondY'] = self.ball[1]
 
             #Pitcher Windup
-            if current_time <= starttime + 1100:
+            if current_time <= starttime + windup:
                 self.leg_kick(current_time, starttime + 700)
                 self.draw_static()
                 self.manager.update(time_delta)
@@ -904,8 +920,8 @@ class Game:
                 pygame.display.flip()
 
             # From time self.ball leaves the hand until self.ball finishes traveling
-            if ((current_time > starttime + 1100
-                and current_time < starttime + traveltime + 1100
+            if ((current_time > starttime + windup
+                and current_time < starttime + traveltime + windup
                 and (on_time == 0 or (on_time > 0 and made_contact == 1)))
                 or (on_time > 0 and current_time <= contact_time and made_contact == 0)):
                 if not sizz:
@@ -918,33 +934,27 @@ class Game:
                             swing_type = 1
                             mousepos = pygame.mouse.get_pos()
                             #LOW SWING
+                            swing_starttime = pygame.time.get_ticks()
+                            contact_time = swing_starttime + 150
+                            on_time = self.contacttiming(swing_starttime,starttime,traveltime, windup)
                             if mousepos[1] > 500:
-                                swing_starttime = pygame.time.get_ticks()
                                 self.swing_started = 1
-                                contact_time = swing_starttime + 150
-                                on_time = self.contacttiming(swing_starttime,starttime,traveltime)
                             #HIGH SWING
                             elif mousepos[1] < 500:
-                                swing_starttime = pygame.time.get_ticks()
                                 self.swing_started = 2
-                                contact_time = swing_starttime + 150
-                                on_time = self.contacttiming(swing_starttime,starttime,traveltime)
                         #POWER SWING
                         elif event.key == pygame.K_e and self.swing_started == 0:
                             swing_type = 2
                             mousepos = pygame.mouse.get_pos()
                             #LOW SWING
+                            swing_starttime = pygame.time.get_ticks()
+                            contact_time = swing_starttime + 150
+                            on_time = self.powertiming(swing_starttime,starttime,traveltime, windup)
                             if mousepos[1] > 500:
-                                swing_starttime = pygame.time.get_ticks()
                                 self.swing_started = 1
-                                contact_time = swing_starttime + 150
-                                on_time = self.powertiming(swing_starttime,starttime,traveltime)
                             #HIGH SWING
                             elif mousepos[1] < 500:
-                                swing_starttime = pygame.time.get_ticks()
                                 self.swing_started = 2
-                                contact_time = swing_starttime + 150
-                                on_time = self.powertiming(swing_starttime,starttime,traveltime)
                 if self.swing_started > 0:
                     timenow = current_time
                     if self.swing_started == 1:
@@ -967,7 +977,7 @@ class Game:
                 pygame.display.flip()
 
                 # Ball reach glove
-                if (current_time > (starttime + traveltime + 1050)
+                if (current_time > (starttime + windup + traveltime - 50)
                     and soundplayed == 0 and on_time == 0) or (current_time > contact_time and soundplayed == 0 and (on_time > 0 and made_contact == 1)):
                     self.glovepop()
                     soundplayed += 1
@@ -975,7 +985,7 @@ class Game:
             # BALL HAS CONTACTED BAT
             elif (on_time > 0
                   and current_time > contact_time
-                  and current_time <= starttime + traveltime + 1800
+                  and current_time <= starttime + windup + traveltime + 700
                   and made_contact != 1):
                 if self.swing_started > 0:
                     timenow = current_time
@@ -1093,8 +1103,8 @@ class Game:
                         soundplayed += 1
 
             # FOLLOW THROUGH IF NO CONTACT MADE
-            elif (current_time > starttime + traveltime + 1100
-                  and current_time <= starttime + traveltime + 1800
+            elif (current_time > starttime + traveltime + windup
+                  and current_time <= starttime + windup + traveltime + 700
                   and (on_time == 0 or (on_time > 0 and made_contact == 1))):
                 if (current_time > contact_time and soundplayed == 0 and (on_time > 0 and made_contact == 1)):
                     self.glovepop()
@@ -1221,7 +1231,7 @@ class Game:
                             self.containerupdate(textbox,scoreboard)
 
             # END LOOP (END OF PITCH)
-            elif current_time > starttime + traveltime + 1800:
+            elif current_time > starttime + windup + traveltime + 700:
                 running = False
                 self.show_buttons()
                 pygame.mouse.set_cursor(crosshair)
@@ -1544,6 +1554,8 @@ class Game:
                     self.gameButtons(self.sasakipitch)
                 elif self.menu_state == 'Yamamoto':
                     self.gameButtons(self.yamamotopitch)
+                elif self.menu_state == 'Experimental':
+                    self.gameButtons(self.degrompitch)
                 elif self.menu_state == 200:
                     self.salepitch.hide()
                     self.degrompitch.hide()
@@ -1574,7 +1586,6 @@ class Game:
                 pygame.display.flip()
 
         # Quit cleanup
-        print(self.records)
 
 def main():
     Game()

@@ -9,7 +9,8 @@ class Sasaki(pitcher.Pitcher):
                          (screen.get_height() / 3) + 180,
                          pygame.Vector2((screen.get_width() / 2) - 42, (screen.get_height() / 3) + 164),
                          screen,
-                         'Roki Sasaki')
+                         'Roki Sasaki',
+                         1100)
         self.load_img(loadfunc, 'Sasaki/', 14)
         self.add_pitch_type(self.sasakiFastball, "FF")
         

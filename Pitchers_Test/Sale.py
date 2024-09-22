@@ -9,7 +9,8 @@ class Sale(pitcher.Pitcher):
                          (screen.get_height() / 3) + 180,
                          pygame.Vector2((screen.get_width() / 2) + 61, (screen.get_height() / 3) + 209),
                          screen,
-                         'Chris Sale')
+                         'Chris Sale',
+                         1100)
         self.load_img(loadfunc, 'Images/LEFTY', 9)
         self.add_pitch_type(self.saleMiddleMiddleFastball, 'FFM')
         self.add_pitch_type(self.saleSinker, 'SI')
