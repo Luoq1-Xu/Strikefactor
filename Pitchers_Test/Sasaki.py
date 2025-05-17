@@ -12,16 +12,14 @@ class Sasaki(pitcher.Pitcher):
                          'Roki Sasaki',
                          1100)
         self.load_img(loadfunc, 'Sasaki/', 14)
-        self.add_pitch_type(self.sasakiFastball, "FF")
-        
+        #self.add_pitch_type(self.CUI, "CUI")
+        #self.add_pitch_type(self.FBI, "FBI")
+        #self.add_pitch_type(self.sasakiSplitter, "FS")
+        #self.add_pitch_type(self.sasakiFastball, "FF")
+        #self.add_pitch_type(self.CUI, "CU")
+        self.add_pitch_type(self.FBO, "FF")
         self.add_pitch_type(self.sasakiSplitter, "FS")
 
-
-    def sasakiSplitter(self, main_simulation):
-        sampley = random.uniform(-5,20)
-        samplex = random.uniform(-10,20)
-        horizontalBreak = random.uniform(-0.01, 0.01)
-        main_simulation(self.release_point, 'rokisasaki', horizontalBreak, 0.05, samplex, sampley, 450, 'FS')
 
     def draw_pitcher(self, start_time, current_time):
         if current_time == 0 and start_time == 0:
@@ -55,11 +53,6 @@ class Sasaki(pitcher.Pitcher):
         elif current_time > start_time + 1120:
             self.draw(self.screen, 14, -9, 12)
 
-    def sasakiSplitter(self, main_simulation):
-        sampley = random.uniform(-5,20)
-        samplex = random.uniform(-10,20)
-        horizontalBreak = random.uniform(-0.01, 0.01)
-        main_simulation(self.release_point, 'rokisasaki', horizontalBreak, 0.05, samplex, sampley, 450, 'FS')
     def sasakiFastball(self, main_simulation):
         sampley = random.uniform(-5,15)
         samplex = random.uniform(-10,20)
@@ -78,6 +71,21 @@ class Sasaki(pitcher.Pitcher):
         ivb = random.uniform(0.005, 0.095)
         ihb = random.uniform(-0.005, 0.005)
         main_simulation(self.release_point, 'rokisasaki', ihb, ivb, (ihb*50), (ivb*5), 380, 'SI')
+    def FBI(self, main_simulation):
+        sampley = random.uniform(-10,20)
+        samplex = random.uniform(-15, 40)
+        main_simulation(self.release_point, 'rokisasaki', -0.035, 0.05, samplex, sampley, 380, 'SI')
+    def CUI(self, main_simulation):
+        sampley = random.uniform(-17,15)
+        samplex = random.uniform(-14, -5)
+        main_simulation(self.release_point, 'rokisasaki', 0.003, 0.02, samplex, sampley, 400, 'CU')
+    def sasakiSplitter(self, main_simulation):
+        sampley = random.uniform(-5,15)
+        samplex = random.uniform(-10,20)
+        horizontalBreak = random.uniform(-0.01, 0.01)
+        main_simulation(self.release_point, 'rokisasaki', horizontalBreak, 0.045, samplex, sampley, 400, 'FS')
 
-
-
+    def FBO(self, main_simulation):
+        sampley = random.uniform(-10,20)
+        samplex = random.uniform(-15, 40)
+        main_simulation(self.release_point, 'rokisasaki', -0.0175, 0.045, samplex, sampley, 380, 'FF')

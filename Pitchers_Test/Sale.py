@@ -12,12 +12,15 @@ class Sale(pitcher.Pitcher):
                          'Chris Sale',
                          1100)
         self.load_img(loadfunc, 'Images/LEFTY', 9)
-        self.add_pitch_type(self.saleMiddleMiddleFastball, 'FFM')
-        self.add_pitch_type(self.saleSinker, 'SI')
-        self.add_pitch_type(self.saleUpLeftFastball, 'FFL')
-        self.add_pitch_type(self.saleDownRightFastball, 'FFD')
-        self.add_pitch_type(self.saleChangeup, 'CH')
+        #self.add_pitch_type(self.saleSinker, 'SI')
+        #self.add_pitch_type(self.saleMiddleMiddleFastball, 'FFM')
+        #self.add_pitch_type(self.saleUpLeftFastball, 'FFL')
+        #self.add_pitch_type(self.saleDownRightFastball, 'FFD')
         self.add_pitch_type(self.saleSlider, 'SL')
+        # self.add_pitch_type(self.saleChangeup, 'CH')
+        # self.add_pitch_type(self.saleSliderRight, 'SLR')
+        # self.add_pitch_type(self.saleDownLeftFastball, 'FFDL')
+
 
     def saleMiddleMiddleFastball(self, simulation_func):
         sampley = random.uniform(0,20)
@@ -69,21 +72,25 @@ class Sale(pitcher.Pitcher):
         samplex = random.uniform(-10,-40)
         main_simulation(self.release_point, 'chrissale', 0.005, 0.01, samplex, sampley, 380, 'FF')
     def saleDownLeftFastball(self, main_simulation):
-        sampley = random.uniform(10,25)
-        samplex = random.uniform(-35,-50)
+        sampley = random.uniform(0,25)
+        samplex = random.uniform(-25,-50)
         main_simulation(self.release_point, 'chrissale', 0.005, 0.01, samplex, sampley, 380, 'FF')
     def saleUpRightFastball(self, main_simulation):
         sampley = random.uniform(10, -20)
         samplex = random.uniform(-25,0)
         main_simulation(self.release_point, 'chrissale', 0.005, 0.01, samplex, sampley, 380, 'FF')
     def saleChangeup(self, main_simulation):
-        sampley = random.uniform(-10,10)
-        samplex = random.uniform(-30,5)
-        main_simulation(self.release_point, 'chrissale', 0.01, 0.02, samplex, sampley, 450, 'CH')
+        sampley = random.uniform(-5,10)
+        samplex = random.uniform(-35,5)
+        main_simulation(self.release_point, 'chrissale', 0.0075, 0.02, samplex, sampley, 450, 'CH')
     def saleSlider(self, main_simulation):
         sampley = random.uniform(-30,5)
         samplex = random.uniform(-40,25)
         main_simulation(self.release_point, 'chrissale', -0.015, 0.045, samplex, sampley, 500, 'SL')
+    def saleSliderRight(self, main_simulation):
+        sampley = random.uniform(-15,5)
+        samplex = random.uniform(-15, 10)
+        main_simulation(self.release_point, 'chrissale', -0.0175, 0.0355, samplex, sampley, 500, 'SL')
 
 
 

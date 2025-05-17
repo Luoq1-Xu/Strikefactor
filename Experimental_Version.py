@@ -4,11 +4,11 @@ import pygame.gfxdraw
 import pygame_gui
 import random
 import math
+import json
 
 import pygame_gui.core.ui_container
-import pygame_gui.elements.ui_window
 
-from helpers import Button, ScoreKeeper, StatSwing
+from helpers import Button, ScoreKeeper, StatSwing, pitchDataManager
 import sys
 import os
 import pandas as pd
@@ -18,8 +18,12 @@ from Pitchers_Test.Sale import Sale
 from Pitchers_Test.Degrom import Degrom
 from Pitchers_Test.Yamamoto import Yamamoto
 from Pitchers_Test.Sasaki import Sasaki
-from db_helper import update_info, get_pitcher_stats
 from AI_2 import ERAI
+
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+
+def get_path(orig_path):
+    return os.path.join(SCRIPT_DIR, orig_path)
 
 #Setup for Conversion into EXE
 def resource_path(relative_path):
@@ -45,7 +49,7 @@ crosshair = pygame.cursors.Cursor((40,15), surf2)
 pygame.mouse.set_cursor(crosshair)
 
 # Load a saved model
-model = pickle.load(open("AI/ai_umpire.pkl", "rb"))
+model = pickle.load(open(get_path("AI/ai_umpire.pkl"), "rb"))
 
 # Directory containing AI models
 AI_DIR = "AI_2"
@@ -62,37 +66,38 @@ class Game:
     # Pygame setup
     screen = pygame.display.set_mode((1280, 720), pygame.RESIZABLE)
     clock = pygame.time.Clock()
-    icon = pygame.image.load(resource_path('Images/icon.png')).convert_alpha()
+    icon = pygame.image.load(get_path("Images/icon.png")).convert_alpha()
     pygame.display.set_icon(icon)
-    pygame.display.set_caption('StrikeFactor Pitch Test Version')
+    pygame.display.set_caption('StrikeFactor 0.1')
 
     # Stuff for the typing effect in main menu and summary self.screen
     dt = 0
-    font = pygame.font.Font(resource_path("8bitoperator_jve.ttf"), 40)
-    bigfont = pygame.font.Font(resource_path("8bitoperator_jve.ttf"), 70)
+    font = pygame.font.Font(resource_path(get_path("8bitoperator_jve.ttf")), 40)
+    bigfont = pygame.font.Font(resource_path(get_path("8bitoperator_jve.ttf")), 70)
     snip = font.render('', True, 'white')
     counter = 0
     speed = 3
 
     # Load Sounds
-    pop1 = pygame.mixer.Sound(resource_path("Sounds/POPSFX.mp3"))
-    pop2 = pygame.mixer.Sound(resource_path("Sounds/POP2.mp3"))
-    pop3 = pygame.mixer.Sound(resource_path("Sounds/POP3.mp3"))
-    pop4 = pygame.mixer.Sound(resource_path("Sounds/POP4.mp3"))
-    pop5 = pygame.mixer.Sound(resource_path("Sounds/POP5.mp3"))
-    pop6 = pygame.mixer.Sound(resource_path("Sounds/POP6.mp3"))
-    strikecall = pygame.mixer.Sound(resource_path("Sounds/STRIKECALL.mp3"))
-    ballcall = pygame.mixer.Sound(resource_path("Sounds/BALLCALL.mp3"))
-    foulball = pygame.mixer.Sound(resource_path("Sounds/FOULBALL.mp3"))
-    single = pygame.mixer.Sound(resource_path("Sounds/SINGLE.mp3"))
-    double = pygame.mixer.Sound(resource_path("Sounds/DOUBLE.mp3"))
-    triple = pygame.mixer.Sound(resource_path("Sounds/TRIPLE.mp3"))
-    homer = pygame.mixer.Sound(resource_path("Sounds/HOMERUN.mp3"))
-    called_strike_3 = pygame.mixer.Sound(resource_path("Sounds/strike3.mp3"))
-    sizzle = pygame.mixer.Sound(resource_path("Sounds/sss.mp3"))
+    pop1 = pygame.mixer.Sound(resource_path(get_path("Sounds/POPSFX.mp3")))
+    pop2 = pygame.mixer.Sound(resource_path(get_path("Sounds/POP2.mp3")))
+    pop3 = pygame.mixer.Sound(resource_path(get_path("Sounds/POP3.mp3")))
+    pop4 = pygame.mixer.Sound(resource_path(get_path("Sounds/POP4.mp3")))
+    pop5 = pygame.mixer.Sound(resource_path(get_path("Sounds/POP5.mp3")))
+    pop6 = pygame.mixer.Sound(resource_path(get_path("Sounds/POP6.mp3")))
+    strikecall = pygame.mixer.Sound(resource_path(get_path("Sounds/STRIKECALL.mp3")))
+    ballcall = pygame.mixer.Sound(resource_path(get_path("Sounds/BALLCALL.mp3")))
+    foulball = pygame.mixer.Sound(resource_path(get_path("Sounds/FOULBALL.mp3")))
+    single = pygame.mixer.Sound(resource_path(get_path("Sounds/SINGLE.mp3")))
+    double = pygame.mixer.Sound(resource_path(get_path("Sounds/DOUBLE.mp3")))
+    triple = pygame.mixer.Sound(resource_path(get_path("Sounds/TRIPLE.mp3")))
+    homer = pygame.mixer.Sound(resource_path(get_path("Sounds/HOMERUN.mp3")))
+    called_strike_3 = pygame.mixer.Sound(resource_path(get_path("Sounds/CALLEDSTRIKE3.mp3")))
+    sizzle = pygame.mixer.Sound(resource_path(get_path("Sounds/sss.mp3")))
 
     # Load images
     def loadimg(name,number):
+        name = get_path(name)
         counter = 1
         storage = []
         while counter <= number:
@@ -103,6 +108,7 @@ class Game:
     def loadimg_experimental(name,number):
         counter = 1
         storage = []
+        name = get_path(name)
         while counter <= number:
             image = pygame.image.load(resource_path(f'{name}{counter}.png')).convert_alpha()
             storage.append(pygame.transform.scale_by(image, 118 / image.get_height()))
@@ -111,8 +117,9 @@ class Game:
 
     def loadball():
         out = []
-        for filename in os.listdir('ball'):
-            out.append(pygame.image.load(f'ball/{filename}').convert_alpha())
+        ball_dir = get_path('ball')
+        for filename in os.listdir(ball_dir):
+            out.append(pygame.image.load(f'{ball_dir}/{filename}').convert_alpha())
         return out
 
     batter = loadimg('Images/TROUT', 15)
@@ -142,17 +149,16 @@ class Game:
             self.screen.blit(image, (self.ball[0] - (29.22 * ratio), self.ball[1] - (32.62 * ratio)))
             counter = (counter + 1) % len(self.ball_list)
         return blit
-    
 
     blitfunc = blitball()
 
     # Buttons for main menu
-    salebutton = pygame.image.load(resource_path('Images/salebutton.png')).convert_alpha()
-    degrombutton = pygame.image.load(resource_path('Images/degrombutton.png')).convert_alpha()
-    sasakibutton = pygame.image.load(resource_path('Images/sasakibutton.png')).convert_alpha()
-    yamamotobutton = pygame.image.load(resource_path('Images/yamamotobutton.png')).convert_alpha()
-    menu = pygame.image.load(resource_path('Images/MAINMENU.png')).convert_alpha()
-    experimental = pygame.image.load(resource_path('Images/experimental.png')).convert_alpha()
+    salebutton = pygame.image.load(resource_path(get_path("Images/salebutton.png"))).convert_alpha()
+    degrombutton = pygame.image.load(resource_path(get_path("Images/degrombutton.png"))).convert_alpha()
+    sasakibutton = pygame.image.load(resource_path(get_path("Images/sasakibutton.png"))).convert_alpha()
+    yamamotobutton = pygame.image.load(resource_path(get_path("Images/yamamotobutton.png"))).convert_alpha()
+    menu = pygame.image.load(resource_path(get_path("Images/MAINMENU.png"))).convert_alpha()
+    experimental = pygame.image.load(resource_path(get_path("Images/experimental.png"))).convert_alpha()
     experimentalbutton = Button(1050, 650, experimental, 0.5)
     faceoffsasaki = Button(600,500,sasakibutton, 0.5)
     faceoffsale = Button(400,500, salebutton, 0.5)
@@ -202,8 +208,16 @@ class Game:
         'HOME RUN': -3
     }
 
-    # Some more setup
-    manager = pygame_gui.UIManager((1280, 720), 'theme.json')
+    # Preprocess dynamic font paths for theme dictionary
+    theme_file = get_path('theme.json')
+    with open(theme_file, 'r') as f:
+        theme_data = json.load(f)
+    dynamic_font_path = resource_path(get_path('8bitoperator_jve.ttf'))
+    theme_data["label"]["font"]["regular_path"] = dynamic_font_path
+    theme_data["button"]["font"]["regular_path"] = dynamic_font_path
+
+
+    manager = pygame_gui.UIManager((1280, 720), theme_data)
     manager.preload_fonts([{'name': 'noto_sans', 'point_size': 18, 'style': 'regular', 'antialiased': '1'},
                            {'name': 'noto_sans', 'point_size': 18, 'style': 'bold', 'antialiased': '1'}])
     player_pos = pygame.Vector2(screen.get_width() / 2, screen.get_height() / 2)
@@ -232,9 +246,11 @@ class Game:
     currentwalks = 0
     homeruns_allowed = 0
     scoreKeeper = ScoreKeeper()
+    pitchDataManager = pitchDataManager()
     swing_started = 0
     hits = 0
     ishomerun = ''
+    last_pitch_type_thrown = None
     first_pitch_thrown = False
 
     current_gamemode = 0
@@ -278,6 +294,7 @@ class Game:
     view_window.hide()
 
     def __init__(self):
+        self.pending_sounds = []
         self.run()
 
     def pitchresult(self,input):
@@ -539,6 +556,7 @@ class Game:
     #GAME LOOP FOR END/SUMMARY SCREEN
     def draw_inning_summary(self):
 
+        print("\n <--- INNING SUMMARY ---> \n")
         print(self.current_pitcher.name + " stats")
         self.current_pitcher.update_stats({
             'strikeouts': self.currentstrikeouts,
@@ -560,7 +578,7 @@ class Game:
             'pitch_count': self.current_pitches
         })
         self.current_pitcher.print_stats()
-        print("\n <--- Basic Stats ---> \n")
+        print("\n <--- Accumulated Stats ---> \n")
         self.current_pitcher.print_basic_stats()
         print()
 
@@ -731,8 +749,33 @@ class Game:
             self.screen.blit(snip, (300, 170 + textoffset))
             pygame.display.flip()
             self.clock.tick(60)/1000.0
+        self.cleanUp()
+
+    def schedule_sound(self, sound, delay=1000):
+        """Schedule sound.play() to happen delay ms in the future."""
+        play_time = pygame.time.get_ticks() + delay
+        self.pending_sounds.append((play_time, sound))
+
+    def _process_scheduled_sounds(self, current_time):
+        """Call .play() on any sounds whose time has come."""
+        for play_time, sound in list(self.pending_sounds):
+            if current_time >= play_time:
+                sound.play()
+                self.pending_sounds.remove((play_time, sound))
+
 
     # GAME LOOP FOR AT-BAT SIMULATION
+    """
+    The main simulation function.
+    Params:
+    release_point
+    x axis acceleration
+    y axis acceleration
+    x axis initial velocity
+    y axis initial velocity
+    Traveltime
+    Pitchtype
+    """
     def main_simulation(self, release_point, pitchername, ax, ay, vx, vy, traveltime, pitchtype):
         self.hide_buttons()
         running = True
@@ -751,9 +794,6 @@ class Game:
         is_hit = False
         previous_state = self.current_state
         loops = 0
-
-        swing_button_pressed_time = 0
-
         recording_state = 0
         new_entry = {
             'Pitcher':pitchername,
@@ -770,6 +810,19 @@ class Game:
             'swinging_strike': False,
             'ball': False,
             'in_zone': False
+        }
+
+        new_data_entry = {
+            'Pitcher': pitchername,
+            'PrevPitch': self.last_pitch_type_thrown,
+            'Strikes': self.currentstrikes,
+            'Balls': self.currentballs,
+            'Outs': self.currentouts,
+            'Handedness': self.batter_hand,
+            'RunnerFirst': self.scoreKeeper.isRunnerOnBase(1),
+            'RunnerSecond': self.scoreKeeper.isRunnerOnBase(2),
+            'RunnerThird': self.scoreKeeper.isRunnerOnBase(3),
+            'PitchResult': pitchtype,
         }
 
         self.last_pitch_information = []
@@ -805,6 +858,7 @@ class Game:
                 vx += (ax*300) * (1/dist)
 
         while running:
+            self._process_scheduled_sounds(current_time)
             self.screen.fill("black")
             time_delta = self.clock.tick_busy_loop(60)/1000.0
             current_time = pygame.time.get_ticks()
@@ -867,7 +921,7 @@ class Game:
                                 if mousepos[1] > 500:
                                     self.swing_started = 1
                                 #HIGH SWING
-                                elif mousepos[1] < 500:
+                                else:
                                     self.swing_started = 2
                             #POWER SWING
                             elif event.key == pygame.K_e and self.swing_started == 0:
@@ -880,7 +934,7 @@ class Game:
                                 if mousepos[1] > 500:
                                     self.swing_started = 1
                                 #HIGH SWING
-                                elif mousepos[1] < 500:
+                                else:
                                     self.swing_started = 2
                 draw_batter()
                 update_ball_pos_and_draw()
@@ -992,7 +1046,7 @@ class Game:
                             self.homer.play()
                         soundplayed += 1
 
-            # FOLLOW THROUGH IF NO CONTACT MADE (No more swings allowed)
+            # FOLLOW THROUGH IF NO CONTACT MADE (No more swings allowed to start)
             elif (current_time > arrival_time 
                   and current_time <= arrival_time + 700
                   and (on_time == 0 or (on_time > 0 and made_contact == "swung_and_miss"))):
@@ -1012,7 +1066,7 @@ class Game:
                         self.balls += 1
                         new_entry['ball'] = True
                         if self.umpsound:
-                            self.ballcall.play()
+                            self.schedule_sound(self.ballcall, delay=200)
                         self.currentballs += 1
                         self.pitchnumber += 1
                         # WALK OCCURS
@@ -1062,9 +1116,9 @@ class Game:
                         self.currentstrikes += 1
                         #Play Sounds
                         if self.swing_started == 0 and self.currentstrikes == 3 and self.umpsound:
-                            self.called_strike_3.play()
+                            self.schedule_sound(self.called_strike_3, delay=200)
                         elif self.swing_started == 0 and self.currentstrikes != 3 and self.umpsound:
-                            self.strikecall.play()
+                            self.schedule_sound(self.strikecall, delay=200)
                         #STRIKEOUT OCCURS
                         if self.currentstrikes == 3:
                             outcome = 'strikeout'
@@ -1125,21 +1179,18 @@ class Game:
                 else:
                     self.records = pd.concat([self.records, pd.DataFrame([new_entry])], ignore_index = True)
         
-        print(traveltime)
         calculated_loops = traveltime / (0.016 * 1000)
-
-        print()
-        print("PRESSED TIME: ", str(swing_button_pressed_time))
-        print("CONTACT TIME: ", str(contact_time))
-        print("END TIME: ", str(arrival_time))
-        print("TOTAL LOOPS: ", str(loops))
-        print("CALCULATED LOOPS: ", str(calculated_loops))
-        print()
 
         last_ball = self.last_pitch_information[-1]
         for pitch in self.last_pitch_information:
             if pitch[0] == last_ball[0] and pitch[1] == last_ball[1]:
                 pitch[3] = last_ball[3]
+
+
+
+        self.last_pitch_type_thrown = pitchtype
+        self.pitchDataManager.insert_row(new_data_entry)
+
 
         new_state = (self.currentouts, self.currentstrikes, self.currentballs,self.scoreKeeper.get_runners_on_base(), self.hits, self.scoreKeeper.get_score())
         self.current_pitcher.get_ai().update(previous_state, self.pitch_chosen, new_state, self.outcome_value[outcome])
@@ -1150,12 +1201,9 @@ class Game:
         return (self.ball[0], self.ball[1])
 
     def hide_buttons(self):
-        self.salepitch.hide()
+        self.pitch_button.hide()
         self.strikezonetoggle.hide()
         self.backtomainmenu.hide()
-        self.sasakipitch.hide()
-        self.yamamotopitch.hide()
-        self.degrompitch.hide()
         self.toggleumpsound.hide()
         self.seepitches.hide()
         self.togglebatter.hide()
@@ -1163,112 +1211,23 @@ class Game:
         self.banner.hide()
 
     def show_buttons(self):
-        self.salepitch.show()
         self.strikezonetoggle.show()
         self.backtomainmenu.show()
-        self.sasakipitch.show()
-        self.yamamotopitch.show()
-        self.degrompitch.show()
         self.toggleumpsound.show()
         self.seepitches.show()
         self.togglebatter.show()
         self.visualise.show()
 
     def draw_buttons(self, pitcherbutton):
-        self.degrompitch.hide()
-        self.sasakipitch.hide()
-        self.yamamotopitch.hide()
-        self.salepitch.show()
         pitcherbutton.show()
 
-    def gameButtons(self, toHide):
-        self.degrompitch.hide()
-        self.sasakipitch.hide()
-        self.yamamotopitch.hide()
-        self.salepitch.hide()
+    def gameButtons(self):
         self.return_to_game.hide()
         self.backtomainmenu.show()
         self.strikezonetoggle.show()
         self.toggleumpsound.show()
         self.seepitches.show()
-        toHide.show()
-
-    def visualise_last_pitch(self):
-        time_delta = self.clock.tick_busy_loop(60)/1000.0
-        current_time = pygame.time.get_ticks()
-        last_time = current_time
-        x = 0
-        while x <= len(self.last_pitch_information) - 1:
-            for event in pygame.event.get():
-                    self.manager.process_events(event)
-                    if event.type == pygame.QUIT:
-                        running = False
-                    if event.type == pygame_gui.UI_BUTTON_PRESSED:
-                        if event.ui_element == self.strikezonetoggle:
-                            if self.strikezonedrawn == 1:
-                                self.strikezonedrawn = 2
-                            elif self.strikezonedrawn == 2:
-                                self.strikezonedrawn = 3
-                            elif self.strikezonedrawn == 3:
-                                self.strikezonedrawn = 1
-                        elif event.ui_element == self.toggleumpsound:
-                            if self.umpsound == True:
-                                self.umpsound = False
-                            elif self.umpsound == False:
-                                self.umpsound = True
-                        elif event.ui_element == self.salepitch:
-                            self.Sale_AI()
-                        elif event.ui_element == self.degrompitch:
-                            self.Degrom_AI()
-                        elif event.ui_element == self.sasakipitch:
-                            self.Sasaki_AI()
-                        elif event.ui_element == self.yamamotopitch:
-                            self.Yamamoto_AI()
-                        elif event.ui_element == self.backtomainmenu:
-                            self.menu_state = 0
-                        elif event.ui_element == self.seepitches:
-                            self.menu_state = 200
-                        elif event.ui_element == self.visualise:
-                            self.menu_state = self.current_gamemode
-                        elif event.ui_element == self.return_to_game:
-                            self.menu_state = self.current_gamemode
-                        elif event.ui_element == self.togglebatter:
-                            if self.batter_hand == 'L':
-                                self.batter_hand = 'R'
-                                self.x = 330
-                            elif self.batter_hand == 'R':
-                                self.batter_hand = 'L'
-                                self.x = 735
-                    if event.type == pygame.KEYDOWN:
-                        if event.key == pygame.K_q:
-                            if self.menu_state == 'Sale':
-                                self.Sale_AI()
-                            elif self.menu_state == 'Degrom':
-                                self.Degrom_AI()
-                            elif self.menu_state == 'Sasaki':
-                                self.Sasaki_AI()
-                            elif self.menu_state == 'Yamamoto':
-                                self.Yamamoto_AI()
-            time_delta = self.clock.tick_busy_loop(60)/1000.0
-            self.manager.update(time_delta)
-            self.screen.fill("black")
-            current_time = pygame.time.get_ticks()
-            if x <= len(self.last_pitch_information) - 1:
-                pygame.draw.ellipse(self.screen,
-                                    (255,255,255),
-                                    (int(self.last_pitch_information[x][0]),
-                                    int(self.last_pitch_information[x][1]),
-                                    int(self.last_pitch_information[x][2]),
-                                    int(self.last_pitch_information[x][2])))
-            time_elapsed = current_time - last_time
-            if time_elapsed > 20:
-                x += 1
-                last_time = current_time
-            self.draw_static()
-            self.RightBatter(1) if self.batter_hand == 'R' else self.LeftBatter(1)
-            self.manager.draw_ui(self.screen)
-            pygame.display.flip()
-        return
+        self.pitch_button.show()
 
     def visualise_lasttwo_pitch(self):
         time_delta = self.clock.tick_busy_loop(60)/1000.0
@@ -1412,6 +1371,10 @@ class Game:
                     self.current_pitcher.pitch(self.main_simulation, selection)
         return True
 
+    def cleanUp(self):
+        # self.pitchDataManager.append_to_file("pitchPredict/data.csv")
+        print("DONE")
+
     # Main Game Loop
     def run(self):
         running = True
@@ -1434,16 +1397,8 @@ class Game:
                 self.manager.update(time_delta)
                 self.screen.fill("black")
                 self.current_pitcher.draw_pitcher(0,0)
-                if self.menu_state == 'Sale':
-                    self.gameButtons(self.salepitch)
-                elif self.menu_state == 'Degrom':
-                    self.gameButtons(self.degrompitch)
-                elif self.menu_state == 'Sasaki':
-                    self.gameButtons(self.sasakipitch)
-                elif self.menu_state == 'Yamamoto':
-                    self.gameButtons(self.yamamotopitch)
-                elif self.menu_state == 'Experimental':
-                    self.gameButtons(self.degrompitch)
+                if self.menu_state != 200:
+                    self.gameButtons()
                 elif self.menu_state == 200:
                     self.pitch_button.hide()
                     self.seepitches.hide()
@@ -1472,6 +1427,8 @@ class Game:
                 pygame.display.flip()
 
         # Quit cleanup
+        self.cleanUp()
+        
 
 def main():
     Game()
@@ -1479,3 +1436,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
+

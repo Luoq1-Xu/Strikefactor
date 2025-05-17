@@ -11,10 +11,12 @@ class Mcclanahan(pitcher.Pitcher):
                          screen,
                          'Shane Mcclanahan', 
                          1200)
-        self.load_img(loadfunc, 'Mcclanahan/', 17)
-        self.add_pitch_type(self.FFU, "FFU")
+        self.load_img(loadfunc, 'Mcclanahan Test/', 17)
+        self.add_pitch_type(self.CB, "CB")
+        self.add_pitch_type(self.SLD, "FFU")
         self.add_pitch_type(self.CHD, "CHD")
-        self.add_pitch_type(self.SLD, "SLD")
+        self.add_pitch_type(self.FFI, "FFI")
+        self.add_pitch_type(self.FFU, "FFU")
 
     def draw_pitcher(self, start_time, current_time):
         if current_time == 0 and start_time == 0:
@@ -59,6 +61,11 @@ class Mcclanahan(pitcher.Pitcher):
             samplex = random.uniform(-25,10)
             simulation_func(self.release_point, 'shanemcclanahan', 0.015, 0.010, samplex, sampley, 375, 'FF')
 
+    def FFI(self, simulation_func):
+            sampley = random.uniform(-15,0)
+            samplex = random.uniform(-45,0)
+            simulation_func(self.release_point, 'shanemcclanahan', 0.005, 0.010, samplex, sampley, 375, 'FF')
+
     def SLD(self, simulation_func):
             sampley = random.uniform(-10, 15)
             samplex = random.uniform(-25,15)
@@ -68,4 +75,9 @@ class Mcclanahan(pitcher.Pitcher):
         sampley = random.uniform(-5,15)
         samplex = random.uniform(-20,10)
         main_simulation(self.release_point, 'shanemcclanahan', 0.015, 0.0275, samplex, sampley, 420, 'CH')
+
+    def CB(self, simulation_func):
+            sampley = random.uniform(-25, 5)
+            samplex = random.uniform(-25,15)
+            simulation_func(self.release_point, 'shanemcclanahan', -0.01, 0.0450, samplex, sampley, 470, 'CB')
 

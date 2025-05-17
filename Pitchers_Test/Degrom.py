@@ -13,8 +13,9 @@ class Degrom(pitcher.Pitcher):
                          1100)
         self.load_img(loadfunc, 'Images/RIGHTY', 9)
         self.add_pitch_type(self.deGromFBD, "FFD")
+        self.add_pitch_type(self.deGromSlider, "SLD")
+        self.add_pitch_type(self.deGromChangeup, "CH")
         self.add_pitch_type(self.deGromFBU, "FFU")
-        self.add_pitch_type(self.deGromFBM, "FFM")
 
     def draw_pitcher(self, start_time, current_time):
         if current_time == 0 and start_time == 0:
@@ -45,7 +46,7 @@ class Degrom(pitcher.Pitcher):
 
     def deGromFBU(self, simulation_func):
             sampley = random.uniform(-25,5)
-            samplex = random.uniform(-5,10)
+            samplex = random.uniform(-5,15)
             simulation_func(self.release_point, 'jacobdegrom', -0.015, 0.010, samplex, sampley, 370, 'FF')
 
     def deGromFB1(self, main_simulation):
@@ -66,9 +67,9 @@ class Degrom(pitcher.Pitcher):
         main_simulation(self.release_point, 'jacobdegrom', -0.015, 0.005, samplex, sampley, 370, 'FF')
     
     def deGromSlider(self, main_simulation):
-        sampley = random.uniform(5,-5)
-        samplex = random.uniform(-20,20)
-        main_simulation(self.release_point, 'jacobdegrom', 0.025, 0.04, samplex, sampley, 410, 'SL')
+        sampley = random.uniform(10,-10)
+        samplex = random.uniform(-20,25)
+        main_simulation(self.release_point, 'jacobdegrom', 0.0125, 0.025, samplex, sampley, 400, 'SL')
     def deGromChangeup(self, main_simulation):
         sampley = random.uniform(0,20)
         samplex = random.uniform(-10,30)
