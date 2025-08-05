@@ -89,6 +89,11 @@ class UIManager:
                 relative_rect=pygame.Rect((800, 500), (190, 50)),
                 text='S. Mcclanahan', manager=manager),
 
+            # Random scenario button
+            'random_scenario': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((500, 400), (280, 50)),
+                text='Random Scenario', manager=manager),
+
             # Button for summary screen
             'back_to_main_menu': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((540, 530), (200, 50)),
@@ -232,6 +237,7 @@ class UIManager:
             self.buttons['sasaki'].show()
             self.buttons['yamamoto'].show()
             self.buttons['mcclanahan'].show()
+            self.buttons['random_scenario'].show()
             self.banner.hide()
             self.scoreboard.hide()
             self.pitch_result.hide()

@@ -12,11 +12,14 @@ class Mcclanahan(Pitcher):
                          'Shane Mcclanahan', 
                          1200)
         self.load_img(loadfunc, 'assets/images/mcclanahan/', 17)
-        self.add_pitch_type(self.CB, "CB")
-        self.add_pitch_type(self.SLD, "FFU")
-        self.add_pitch_type(self.CHD, "CHD")
+        #self.add_pitch_type(self.CB, "CB")
+        self.add_pitch_type(self.SLD, "SLD")
+        #self.add_pitch_type(self.CHD, "CHD")
         self.add_pitch_type(self.FFI, "FFI")
-        self.add_pitch_type(self.FFU, "FFU")
+        #self.add_pitch_type(self.FFU, "FFU")
+        #self.add_pitch_type(self.CHI, "CHI")
+        #self.add_pitch_type(self.CBO, "CBO")
+        #self.add_pitch_type(self.FFO, "FFO")
 
     def draw_pitcher(self, start_time, current_time):
         if current_time == 0 and start_time == 0:
@@ -62,9 +65,14 @@ class Mcclanahan(Pitcher):
             simulation_func(self.release_point, 'shanemcclanahan', 0.015, 0.010, samplex, sampley, 375, 'FF')
 
     def FFI(self, simulation_func):
-            sampley = random.uniform(-15,0)
-            samplex = random.uniform(-45,0)
-            simulation_func(self.release_point, 'shanemcclanahan', 0.005, 0.010, samplex, sampley, 375, 'FF')
+        sampley = random.uniform(-15,15)
+        samplex = random.uniform(-30,-35)
+        simulation_func(self.release_point, 'shanemcclanahan', 0.005, 0.010, samplex, sampley, 375, 'FF')
+
+    def FFO(self, simulation_func):
+        sampley = random.uniform(10,25)
+        samplex = random.uniform(8,10)
+        simulation_func(self.release_point, 'shanemcclanahan', 0.005, 0.010, samplex, sampley, 375, 'FF')
 
     def SLD(self, simulation_func):
             sampley = random.uniform(-10, 15)
@@ -81,3 +89,13 @@ class Mcclanahan(Pitcher):
             samplex = random.uniform(-25,15)
             simulation_func(self.release_point, 'shanemcclanahan', -0.01, 0.0450, samplex, sampley, 470, 'CB')
 
+    def CBO(self, simulation_func):
+            sampley = random.uniform(-20, 5)
+            samplex = random.uniform(10,15)
+            simulation_func(self.release_point, 'shanemcclanahan', -0.01, 0.0450, samplex, sampley, 470, 'CB')
+
+    # CHI - Changeup Inside
+    def CHI(self, simulation_func):
+        sampley = random.uniform(-5, 20)
+        samplex = random.uniform(-45, 0)
+        simulation_func(self.release_point, 'shanemcclanahan', 0.015, 0.0275, samplex, sampley, 375, 'CH')

@@ -19,10 +19,10 @@ class HitOutcomeManager:
         if rand <= 8:
             self.hit_type = 1
             hit_result = "SINGLE"
-        elif rand <= 9:
+        elif rand <= 9.5:
             self.hit_type = 2
             hit_result = "DOUBLE"
-        elif rand <= 9.3:
+        elif rand <= 9.8:
             self.hit_type = 3
             hit_result = "TRIPLE"
         else:
