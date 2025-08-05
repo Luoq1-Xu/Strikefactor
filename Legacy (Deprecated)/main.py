@@ -558,7 +558,44 @@ class Game:
         # Cleanup after if exit the game
         self.cleanUp()
 
-    # GAME LOOP FOR AT-BAT SIMULATION
+    def _update_pitch_trajectory(self, starttime, current_time, last_time, traveltime, windup, is_hit, is_strike, pitch_results_done, dist, recording_state, new_entry):
+        """
+        Update the pitch trajectory tracking information.
+        """
+        elapsed_time = current_time - last_time
+
+        # UPDATE PITCH TRAJECTORY INFORMATION
+        if elapsed_time >= 10 and current_time - starttime > windup or (current_time - starttime > windup and not pitch_results_done):
+            last_time = current_time
+            if current_time > starttime + traveltime + windup and is_hit:
+                entry = [self.ball[0], self.ball[1], self.fourseamballsize, (71, 204, 252),"hit"]
+            elif current_time > starttime + traveltime + windup  and pitch_results_done and is_strike:
+                entry = [self.ball[0], self.ball[1], self.fourseamballsize, (227, 75, 80),"strike"]
+            elif current_time > starttime + traveltime + windup  and pitch_results_done and not is_strike:
+                entry = [self.ball[0], self.ball[1], self.fourseamballsize, (75, 227, 148),"ball"]
+            else:
+                entry = [self.ball[0], self.ball[1], min(max(11/dist, 4), 11), (255,255,255),""]
+            self.last_pitch_information.append(entry)
+        if recording_state == 0 and windup < (current_time - starttime) < windup + 200:
+                recording_state += 1
+                new_entry['FirstX'] = self.ball[0]
+                new_entry['FirstY'] = self.ball[1]
+        if recording_state == 1 and (current_time - starttime) > 1500:
+                recording_state += 1
+                new_entry['SecondX'] = self.ball[0]
+                new_entry['SecondY'] = self.ball[1]
+
+    def _display_pitch_results(self, outcome: str, pitchtype: str):
+        pitch_result_string = "<font size=5>PITCH {}: {}<br>{}<br>COUNT IS {} - {}</font>".format(self.pitchnumber, pitchtype, outcome, self.currentballs, self.currentstrikes)
+        game_status_result_string = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts,
+                                                                                                                                    self.currentstrikeouts,
+                                                                                                                                    self.currentwalks,
+                                                                                                                                    self.hits,
+                                                                                                                                    self.scoreKeeper.get_score())
+        self.ui_manager.clear_pitch_result()
+        self.ui_manager.update_pitch_result(pitch_result_string)
+        self.ui_manager.update_scoreboard(game_status_result_string)
+
     def main_simulation(self, release_point, pitchername, ax, ay, vx, vy, traveltime, pitchtype):
         """
             The main simulation function.
@@ -659,40 +696,20 @@ class Game:
             self.ui_manager.draw()
             self.ui_manager.update(time_delta)
             current_time = pygame.time.get_ticks()
-            elapsed_time = current_time - last_time
             self.current_pitcher.draw_pitcher(starttime, current_time)
             if starttime + windup < current_time < arrival_time:
                 loops += 1
 
-
-            # RECORD PITCH TRAJECTORY INFORMATION
-            if elapsed_time >= 10 and current_time - starttime > windup or (current_time - starttime > windup and not pitch_results_done):
-                last_time = current_time
-                if current_time > starttime + traveltime + windup and is_hit:
-                    entry = [self.ball[0], self.ball[1], self.fourseamballsize, (71, 204, 252),"hit"]
-                elif current_time > starttime + traveltime + windup  and pitch_results_done and is_strike:
-                    entry = [self.ball[0], self.ball[1], self.fourseamballsize, (227, 75, 80),"strike"]
-                elif current_time > starttime + traveltime + windup  and pitch_results_done and not is_strike:
-                    entry = [self.ball[0], self.ball[1], self.fourseamballsize, (75, 227, 148),"ball"]
-                else:
-                    entry = [self.ball[0], self.ball[1], min(max(11/dist, 4), 11), (255,255,255),""]
-                self.last_pitch_information.append(entry)
-            if recording_state == 0 and windup < (current_time - starttime) < windup + 200:
-                    recording_state += 1
-                    new_entry['FirstX'] = self.ball[0]
-                    new_entry['FirstY'] = self.ball[1]
-            if recording_state == 1 and (current_time - starttime) > 1500:
-                    recording_state += 1
-                    new_entry['SecondX'] = self.ball[0]
-                    new_entry['SecondY'] = self.ball[1]
-
+            # Update the ball position and draw it
+            self._update_pitch_trajectory(starttime, current_time, last_time, traveltime, windup, is_hit, is_strike, pitch_results_done, dist, recording_state, new_entry)
+            
             # Pitcher Windup
             if current_time <= starttime + windup:
                 self.batter.leg_kick(current_time, starttime + windup - 300)
                 self.draw_static()
                 pygame.display.flip()
 
-            # From time self.ball leaves the hand until self.ball finishes traveling (no contact made yet)
+            # From time ball leaves the hand until ball finishes traveling (no contact made yet)
             if ((current_time > starttime + windup
                 and current_time < arrival_time
                 # Did not swing OR swung and missed
@@ -704,7 +721,6 @@ class Game:
                 for event in pygame.event.get():
                     if event.type == pygame.KEYDOWN:
                         if current_time < arrival_time - 100:
-                            swing_button_pressed_time = current_time
                             #CONTACT SWING
                             if event.key == pygame.K_w and self.swing_started == 0:
                                 swing_type = 1
@@ -768,15 +784,8 @@ class Game:
                         self.pitchnumber += 1
                         if self.currentstrikes < 2:
                             self.currentstrikes += 1 
-                        self.ui_manager.clear_pitch_result()
-                        string = "<font size=5>PITCH {}: {}<br>FOUL<br>COUNT IS {} - {}</font>".format(self.pitchnumber, pitchtype, self.currentballs, self.currentstrikes)
-                        result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts,
-                                                                                                                                                    self.currentstrikeouts,
-                                                                                                                                                    self.currentwalks,
-                                                                                                                                                    self.hits,
-                                                                                                                                                    self.scoreKeeper.get_score())
-                        self.ui_manager.update_pitch_result(string)
-                        self.ui_manager.update_scoreboard(result)
+                        
+                        self._display_pitch_results("FOUL", pitchtype)
 
                 # PERFECT TIMING
                 elif (on_time == 2 and pitch_results_done == False):
@@ -792,30 +801,27 @@ class Game:
                             pitch_results_done = True
                             self.pitchnumber += 1
                             self.hits += 1
-                            self.pitchnumber = 0
-                            self.currentstrikes = 0
-                            self.currentballs = 0
+
                             if swing_type == 1:
-                                hit_string = self.hit_outcome_manager.get_power_hit_outcome()
-                            elif swing_type == 2:
                                 hit_string = self.hit_outcome_manager.get_contact_hit_outcome()
+                            elif swing_type == 2:
+                                hit_string = self.hit_outcome_manager.get_power_hit_outcome()
                             if self.hit_outcome_manager.get_homerun_text() != '':
                                 self.ui_manager.show_banner("{}".format(self.hit_outcome_manager.get_homerun_text()))
                                 self.homeruns_allowed += 1
                             else:
                                 self.ui_manager.show_banner("{}".format(hit_string))
-                            string = "<font size=5>PITCH {}: {}<br>HIT - {}<br>COUNT IS {} - {}</font>".format(self.pitchnumber, pitchtype, hit_string, self.currentballs, self.currentstrikes)
-                            
-                            result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts,
-                                                                                                                                                    self.currentstrikeouts,
-                                                                                                                                                    self.currentwalks,
-                                                                                                                                                    self.hits,
-                                                                                                                                                    self.scoreKeeper.get_score())
-                            self.ui_manager.clear_pitch_result()
-                            self.ui_manager.update_pitch_result(string)
-                            self.ui_manager.update_scoreboard(result)
+
+                            # Display hit results
+                            self._display_pitch_results(f"HIT - {hit_string}", pitchtype)
                             new_entry['isHit'] = hit_string
                             outcome = hit_string
+
+                            # Reset pitch counts after a hit
+                            self.pitchnumber = 0
+                            self.currentstrikes = 0
+                            self.currentballs = 0
+                            
                 # Play Bat Contact Sounds
                 if (current_time > contact_time and soundplayed == 0 and pitch_results_done == True):
                     if on_time == 1:
@@ -850,16 +856,7 @@ class Game:
                         if self.currentballs == 4:
                             outcome = 'walk'
                             self.currentwalks += 1
-
-                            string = "<font size=5>PITCH {}: {}<br>BALL<br>COUNT IS {} - {}<br><b>WALK</b></font>".format(self.pitchnumber, pitchtype, self.currentballs, self.currentstrikes)
-                            result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts,
-                                                                                                                                                    self.currentstrikeouts,
-                                                                                                                                                    self.currentwalks,
-                                                                                                                                                    self.hits,
-                                                                                                                                                    self.scoreKeeper.get_score())
-                            self.ui_manager.clear_pitch_result()
-                            self.ui_manager.update_pitch_result(string)
-                            self.ui_manager.update_scoreboard(result)
+                            self._display_pitch_results("WALK", pitchtype)
                             self.ui_manager.show_banner("WALK")
                            
 
@@ -869,19 +866,11 @@ class Game:
                             self.pitchnumber = 0
                             self.scoreKeeper.update_walk_event()
                             
-                        #Normal Ball
+                        # Normal Ball
                         else:
                             outcome = 'ball'
+                            self._display_pitch_results("BALL", pitchtype)
 
-                            string = "<font size=5>PITCH {}: {}<br>BALL<br>COUNT IS {} - {}</font>".format(self.pitchnumber, pitchtype, self.currentballs, self.currentstrikes)
-                            result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts,
-                                                                                                                                                     self.currentstrikeouts,
-                                                                                                                                                     self.currentwalks,
-                                                                                                                                                     self.hits,
-                                                                                                                                                     self.scoreKeeper.get_score())
-                            self.ui_manager.clear_pitch_result()
-                            self.ui_manager.update_pitch_result(string)
-                            self.ui_manager.update_scoreboard(result)
                     # CALLED STRIKE OR SWINGING STRIKE
                     else:
                         self.strikes += 1
@@ -890,11 +879,13 @@ class Game:
                             new_entry['in_zone'] = True
                         self.pitchnumber += 1
                         self.currentstrikes += 1
+
                         # Play Sounds
                         if self.swing_started == 0 and self.currentstrikes == 3 and self.umpsound:
                             self.sound_manager.schedule_sound('strike3', delay=200)
                         elif self.swing_started == 0 and self.currentstrikes != 3 and self.umpsound:
                             self.sound_manager.schedule_sound('strike', delay=200)
+    
                         # STRIKEOUT OCCURS
                         if self.currentstrikes == 3:
                             outcome = 'strikeout'
@@ -903,21 +894,13 @@ class Game:
 
                             if self.swing_started == 0:
                                 new_entry['called_strike'] = True
-                                string = "<font size=5>PITCH {}: {}<br>CALLED STRIKE<br>COUNT IS {} - {}<br><b>STRIKEOUT</b></font>".format(self.pitchnumber, pitchtype, self.currentballs, self.currentstrikes)
+                                self._display_pitch_results("CALLED STRIKE", pitchtype)
                             else:
                                 new_entry['swinging_strike'] = True
-                                string = "<font size=5>PITCH {}: {}<br>SWINGING STRIKE<br>COUNT IS {} - {}<br><b>STRIKEOUT</b></font>".format(self.pitchnumber, pitchtype, self.currentballs, self.currentstrikes)
-                            result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts,
-                                                                                                                                                    self.currentstrikeouts,
-                                                                                                                                                    self.currentwalks,
-                                                                                                                                                    self.hits,
-                                                                                                                                                    self.scoreKeeper.get_score())
+                                self._display_pitch_results("SWINGING STRIKE", pitchtype)
 
-                            self.ui_manager.clear_pitch_result()
-                            self.ui_manager.update_pitch_result(string)
-                            self.ui_manager.update_scoreboard(result)
                             self.ui_manager.show_banner("STRIKEOUT")
-
+                
                             # Reset counts after printing result
                             self.pitchnumber = 0
                             self.currentstrikes = 0
@@ -928,20 +911,10 @@ class Game:
                             outcome = 'strike'
                             if self.swing_started == 0:
                                 new_entry['called_strike'] = True
-                                string = "<font size=5>PITCH {}: {}<br>CALLED STRIKE<br>COUNT IS {} - {}<br></font>".format(self.pitchnumber, pitchtype, self.currentballs, self.currentstrikes)
+                                self._display_pitch_results("CALLED STRIKE", pitchtype)
                             else:
                                 new_entry['swinging_strike'] = True
-                                string = "<font size=5>PITCH {}: {}<br>SWINGING STRIKE<br>COUNT IS {} - {}<br></font>".format(self.pitchnumber, pitchtype, self.currentballs, self.currentstrikes)
-                            result = "<font size=5>CURRENT OUTS : {}<br>STRIKEOUTS : {}<br>WALKS : {}<br>HITS : {}<br>RUNS SCORED: {}</font>".format(self.currentouts,
-                                                                                                                                                     self.currentstrikeouts,
-                                                                                                                                                     self.currentwalks,
-                                                                                                                                                     self.hits,
-                                                                                                                                                     self.scoreKeeper.get_score())
-                            
-                            self.ui_manager.clear_pitch_result()
-                            self.ui_manager.update_pitch_result(string)
-                            self.ui_manager.update_scoreboard(result)
-
+                                self._display_pitch_results("SWINGING STRIKE", pitchtype)
 
             # END LOOP (END OF PITCH)
             elif current_time > arrival_time + 700:
@@ -955,15 +928,15 @@ class Game:
                 else:
                     self.records = pd.concat([self.records, pd.DataFrame([new_entry])], ignore_index = True)
         
-        calculated_loops = traveltime / (0.016 * 1000)
 
+        # Update the last pitch information with the final ball position and color if the position is the last ball
         last_ball = self.last_pitch_information[-1]
         for pitch in self.last_pitch_information:
             if pitch[0] == last_ball[0] and pitch[1] == last_ball[1]:
                 pitch[3] = last_ball[3]
 
 
-
+        # Update the pitch data manager with the new data entry
         self.last_pitch_type_thrown = pitchtype
         self.pitchDataManager.insert_row(new_data_entry)
 
