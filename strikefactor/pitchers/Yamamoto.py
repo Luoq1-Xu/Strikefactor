@@ -12,21 +12,17 @@ class Yamamoto(Pitcher):
                          'Yoshinobu Yamamoto',
                          1100)
         self.load_img(loadfunc, 'assets/images/yamamoto/', 14)
-        #self.add_pitch_type(self.yamamoto_middle_fastball, "FFM")
-        #self.add_pitch_type(self.yamamotoHighFastball, "FFH")
+        self.add_pitch_type(self.yamamoto_middle_fastball, "FFM")
+        self.add_pitch_type(self.yamamotoHighFastball, "FFH")
         self.add_pitch_type(self.yamamotoFastball, "FF")
         self.add_pitch_type(self.yamamotoSplitter, "FS")
         self.add_pitch_type(self.yamamotoCurve, "CB")
         self.add_pitch_type(self.yamamotoCutter, "FC")
-        #self.add_pitch_type(self.yamamotoSlider, "SL")
-        #self.add_pitch_type(self.yamamoto_high_splitter, "FSH")
-        # self.add_pitch_type(self.yamamotoSinker, "SI")
-        
-
-    def yamamotoCurve(self, simulation_func):
-        sampley = random.uniform(0,-20)
-        samplex = random.uniform(-10,20)
-        simulation_func(self.release_point, 'Yamamoto', 0, 0.06, samplex, sampley, 460, 'CB')
+        self.add_pitch_type(self.yamamotoSlider, "SL")
+        self.add_pitch_type(self.yamamoto_high_splitter, "FSH")
+        self.add_pitch_type(self.yamamotoSinker, "SI")
+        self.add_pitch_type(self.yamamoto_low_fastball, "FFL")
+        self.add_pitch_type(self.yamamoto_low_splitter, "FSL")
 
     def draw_pitcher(self, start_time, current_time):
         if current_time == 0 and start_time == 0:
@@ -88,12 +84,22 @@ class Yamamoto(Pitcher):
     def yamamotoCutter(self, main_simulation):
         sampley = random.uniform(-10,20)
         samplex = random.uniform(-10,30)
-        main_simulation(self.release_point, 'Yamamoto', 0.005, 0.0195, samplex, sampley, 400, 'FC')
+        main_simulation(self.release_point, 'Yamamoto', 0.005, 0.015, samplex, sampley, 400, 'FC')
     def yamamotoSlider(self, main_simulation):
         sampley = random.uniform(-10, 30)
         samplex = random.uniform(-10,30)
-        main_simulation(self.release_point, 'Yamamoto', 0.0175, 0.0175, samplex, sampley, 430, 'FC')
+        main_simulation(self.release_point, 'Yamamoto', 0.0195, 0.025, samplex, sampley, 430, 'SL')
     def yamamotoSinker(self, main_simulation):
         sampley = random.uniform(-10,20)
         samplex = random.uniform(-10,30)
         main_simulation(self.release_point, 'Yamamoto', -0.015, 0.025, samplex, sampley, 390, 'SI')
+
+    def yamamoto_low_fastball(self, main_simulation):
+        sampley = random.uniform(33,33)
+        samplex = random.uniform(10,15)
+        main_simulation(self.release_point, 'Yamamoto', -0.01, 0.005, samplex, sampley, 380, 'FF')
+
+    def yamamoto_low_splitter(self, main_simulation):
+        sampley = random.uniform(33,34)
+        samplex = random.uniform(10,15)
+        main_simulation(self.release_point, 'Yamamoto', -0.015, 0.045, samplex, sampley, 380, 'FS')

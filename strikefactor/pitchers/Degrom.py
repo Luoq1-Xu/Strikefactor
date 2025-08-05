@@ -16,6 +16,8 @@ class Degrom(Pitcher):
         self.add_pitch_type(self.deGromSlider, "SLD")
         self.add_pitch_type(self.deGromChangeup, "CH")
         self.add_pitch_type(self.deGromFBU, "FFU")
+        self.add_pitch_type(self.deGromFBM, "FFM")
+        
 
     def draw_pitcher(self, start_time, current_time):
         if current_time == 0 and start_time == 0:
@@ -38,11 +40,6 @@ class Degrom(Pitcher):
             self.draw(self.screen, 8, 0, 27)
         elif current_time > start_time + 1140:
             self.draw(self.screen, 9, -11, 25)
-
-    def deGromFB1(self, simulation_func):
-            sampley = random.uniform(0,10)
-            samplex = random.uniform(-10,10)
-            simulation_func(self.release_point, 'jacobdegrom', -0.015, 0.015, samplex, sampley, 370, 'FF')
 
     def deGromFBU(self, simulation_func):
             sampley = random.uniform(-25,5)

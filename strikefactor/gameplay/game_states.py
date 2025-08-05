@@ -152,7 +152,7 @@ class GameplayState(GameState):
                 f"RUNS SCORED: {self.game.scoreKeeper.get_score()}</font>"
             )
             count_string = (
-                f"<font size=5><br>COUNT IS {self.game.pitchnumber} - "
+                f"<font size=5><br>COUNT IS "
                 f"{self.game.currentballs} - {self.game.currentstrikes}</font>"
             )
             self.game.ui_manager.update_scoreboard(result)

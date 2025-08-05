@@ -23,6 +23,7 @@ from gameplay.hit_outcome_manager import HitOutcomeManager
 from ui.ui_manager import UIManager
 from helpers import ScoreKeeper, PitchDataManager
 from gameplay.game_state_manager import GameStateManager
+from gameplay.random_scenario import RandomScenarioGenerator
 
 
 class AssetManager:
@@ -197,6 +198,9 @@ class Game:
         self.hit_outcome_manager = HitOutcomeManager(self.scoreKeeper, self.sound_manager)
         self.ui_manager = UIManager(self.screen, (1280, 720), theme_path=get_path("assets/theme.json"))
         
+        # Random scenario generator
+        self.random_scenario_generator = RandomScenarioGenerator()
+        
         # State management
         self.state_manager = GameStateManager(self)
         self.state_manager.change_state('menu')
@@ -228,6 +232,7 @@ class Game:
         self.ui_manager.register_button_callback('sasaki', lambda: self.enter_gamemode('Sasaki', 'sasaki'))
         self.ui_manager.register_button_callback('yamamoto', lambda: self.enter_gamemode('Yamamoto', 'yamamoto'))
         self.ui_manager.register_button_callback('mcclanahan', lambda: self.enter_gamemode('Experimental', 'mcclanahan'))
+        self.ui_manager.register_button_callback('random_scenario', lambda: self.enter_random_scenario())
         
         # Navigation callbacks
         self.ui_manager.register_button_callback('main_menu', lambda: self.set_menu_state(0))
@@ -385,6 +390,44 @@ class Game:
         crosshair = create_pci_cursor()
         pygame.mouse.set_cursor(crosshair)
         self.state_manager.handle_menu_state_change(gamemode_name)
+        
+    def enter_random_scenario(self):
+        """Enter a random scenario game mode."""
+        scenario = self.random_scenario_generator.generate_random_scenario()
+        
+        # Set the pitcher
+        pitcher_name = scenario['pitcher']
+        self.pitcher_manager.set_current_pitcher(pitcher_name)
+        
+        # Set up the game state with the scenario
+        self.game_stats.reset_game_stats()
+        self.game_stats.currentballs = scenario['balls']
+        self.game_stats.currentstrikes = scenario['strikes']
+        self.game_stats.currentouts = scenario['outs']
+        
+        # Set up runners on base
+        self.scoreKeeper.reset()
+        from helpers import Runner
+        for base in scenario['runners']:
+            runner = Runner(base)  # Create a runner starting at this base
+            runner.base = base     # Make sure they're on the correct base
+            self.scoreKeeper.runners.append(runner)
+            self.scoreKeeper.basesfilled[base] = runner
+            self.scoreKeeper.bases[base - 1] = 'yellow'
+        
+        # Set menu state and initialize
+        self.menu_state = f"Random: {pitcher_name.title()}"
+        self.inning_ended = False
+        self.just_refreshed = 1
+        self.pitches_display = []
+        
+        # Show scenario description
+        description = self.random_scenario_generator.get_scenario_description(scenario)
+        self.ui_manager.show_banner(description, typing_speed=0.05)
+        
+        crosshair = create_pci_cursor()
+        pygame.mouse.set_cursor(crosshair)
+        self.state_manager.handle_menu_state_change(self.menu_state)
         
     def set_menu_state(self, state):
         """Set the current menu state."""
