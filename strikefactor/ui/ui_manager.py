@@ -97,7 +97,12 @@ class UIManager:
             # Button for summary screen
             'back_to_main_menu': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((540, 530), (200, 50)),
-                text='MAIN MENU', manager=manager)
+                text='MAIN MENU', manager=manager),
+                
+            # Button for inning end screen
+            'continue_to_summary': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((540, 630), (200, 50)),
+                text='CONTINUE', manager=manager)
         }
         return buttons
 
@@ -250,6 +255,14 @@ class UIManager:
             self.banner.hide()
             self.scoreboard.hide()
             self.pitch_result.hide()
+        elif state == 'inning_end':
+            self.buttons['continue_to_summary'].show()
+            self.buttons['visualise'].show()
+            self.buttons['view_pitches'].show()
+            self.buttons['strikezone'].show()
+            self.buttons['main_menu'].show()
+            self.scoreboard.show()
+            self.pitch_result.show()
 
     def draw_typing_effect(self, message, counter, speed, position, use_big_font=False):
         """Draws text with a typing effect at the given position."""

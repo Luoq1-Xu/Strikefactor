@@ -464,3 +464,49 @@ class ViewPitchesState(GameState):
                 screen, int(pitch_pos[0]), int(pitch_pos[1]), 
                 self.game.fourseamballsize, (255, 255, 255)
             )
+
+
+class InningEndState(GameState):
+    """State shown when inning ends (3 outs reached) - allows visualization before summary."""
+    
+    def __init__(self, game):
+        super().__init__(game)
+        
+    def enter(self):
+        """Initialize inning end state."""
+        self.game.ui_manager.set_button_visibility('inning_end')
+        # Keep current display showing the final pitch result
+        
+    def exit(self):
+        """Clean up inning end state."""
+        pass
+        
+    def update(self, time_delta: float):
+        """Update inning end logic."""
+        # No special update logic needed - just maintain display
+        pass
+        
+    def handle_event(self, event):
+        """Handle inning end events."""
+        self.game.ui_manager.process_events(event)
+        if event.type == pygame.QUIT:
+            return False
+        # Block pitching input (Q key) since inning is over
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_q:
+            return True  # Consume the event without processing
+        return True
+        
+    def render(self, screen):
+        """Render the inning end state - same as gameplay but no new pitches allowed."""
+        screen.fill("black")
+        self.game.current_pitcher.draw_pitcher(0, 0)
+        self.game.field_renderer.draw_strikezone()
+        self.game.field_renderer.draw_field(self.game.scoreKeeper.get_bases())
+        self.game.batter.draw_stance(1)
+        
+        # Draw current ball position (final position)
+        if self.game.first_pitch_thrown:
+            pygame.gfxdraw.aacircle(
+                screen, int(self.game.ball[0]), int(self.game.ball[1]), 
+                self.game.fourseamballsize, (255, 255, 255)
+            )

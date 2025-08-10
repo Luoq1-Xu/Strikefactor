@@ -240,6 +240,7 @@ class Game:
         self.ui_manager.register_button_callback('visualise', lambda: self.set_menu_state('visualise'))
         self.ui_manager.register_button_callback('return_to_game', lambda: self.exit_view_pitches())
         self.ui_manager.register_button_callback('view_pitches', lambda: self.enter_view_pitches())
+        self.ui_manager.register_button_callback('continue_to_summary', lambda: self.continue_to_summary())
         
         # Game control callbacks
         self.ui_manager.register_button_callback('strikezone', lambda: self.field_renderer.toggle_strikezone_mode())
@@ -441,9 +442,15 @@ class Game:
     def exit_view_pitches(self):
         """Exit the view pitches mode."""
         self.ui_manager.hide_view_window()
-        self.ui_manager.set_button_visibility('in_game')
-        self.menu_state = self.current_gamemode
-        self.state_manager.change_state('gameplay')
+        # Return to the appropriate state based on inning status
+        if self.currentouts == 3 and self.inning_ended:
+            self.ui_manager.set_button_visibility('inning_end')
+            self.menu_state = 'inning_end'
+            self.state_manager.change_state('inning_end')
+        else:
+            self.ui_manager.set_button_visibility('in_game')
+            self.menu_state = self.current_gamemode
+            self.state_manager.change_state('gameplay')
         
     def enter_view_pitches(self):
         """Enter the view pitches mode."""
@@ -476,8 +483,13 @@ class Game:
         """Check if the inning should end."""
         if self.currentouts == 3 and not self.inning_ended:
             self.inning_ended = True
-            self.menu_state = 100
-            self.state_manager.change_state('summary')
+            self.menu_state = 'inning_end'
+            self.state_manager.change_state('inning_end')
+            
+    def continue_to_summary(self):
+        """Continue from inning end to summary state."""
+        self.menu_state = 100
+        self.state_manager.change_state('summary')
             
     def run(self):
         """Main game loop."""
