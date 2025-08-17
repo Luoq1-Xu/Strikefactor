@@ -6,7 +6,7 @@ Manages state transitions and coordinates between different game states.
 from typing import Dict, Optional
 from .game_states import (
     GameState, MenuState, GameplayState, SummaryState, 
-    VisualizationState, ViewPitchesState
+    VisualizationState, ViewPitchesState, InningEndState
 )
 
 
@@ -29,7 +29,8 @@ class GameStateManager:
             'gameplay': GameplayState(self.game),
             'summary': SummaryState(self.game),
             'visualization': VisualizationState(self.game),
-            'view_pitches': ViewPitchesState(self.game)
+            'view_pitches': ViewPitchesState(self.game),
+            'inning_end': InningEndState(self.game)
         }
         
     def change_state(self, state_name: str):
@@ -81,6 +82,8 @@ class GameStateManager:
             self.change_state('visualization')
         elif menu_state_value == 'view_pitches':
             self.change_state('view_pitches')
+        elif menu_state_value == 'inning_end':
+            self.change_state('inning_end')
         elif isinstance(menu_state_value, str) and menu_state_value in ['Sale', 'Degrom', 'Yamamoto', 'Sasaki', 'Experimental']:
             self.change_state('gameplay')
         else:
