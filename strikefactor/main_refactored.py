@@ -8,7 +8,7 @@ import pickle
 # Import pitcher classes
 from pitchers.Mcclanahan import Mcclanahan
 from pitchers.Sale import Sale
-from pitchers.Degrom import Degrom
+from pitchers.Degrom_Configurable import DegromConfigurable  # New configurable version
 from pitchers.Yamamoto import Yamamoto
 from pitchers.Sasaki import Sasaki
 from ai.AI_2 import ERAI
@@ -99,7 +99,7 @@ class PitcherManager:
         # Create pitcher instances
         self.pitchers = {
             'sale': Sale(self.screen, self.asset_manager.load_pitcher_sprites),
-            'degrom': Degrom(self.screen, self.asset_manager.load_pitcher_sprites),
+            'degrom': DegromConfigurable(self.screen, self.asset_manager.load_pitcher_sprites),
             'yamamoto': Yamamoto(self.screen, self.asset_manager.load_pitcher_sprites),
             'sasaki': Sasaki(self.screen, self.asset_manager.load_pitcher_sprites),
             'mcclanahan': Mcclanahan(self.screen, self.asset_manager.load_pitcher_sprites_experimental)
@@ -122,6 +122,10 @@ class PitcherManager:
         pitcher = self.get_pitcher(name)
         if pitcher:
             self.current_pitcher = pitcher
+            # Connect configurable pitchers to game for situational awareness
+            if hasattr(pitcher, 'set_game_reference'):
+                # We'll pass the game reference when needed
+                pass
             
     def get_current_pitcher(self):
         """Get the current active pitcher."""
@@ -384,6 +388,12 @@ class Game:
         """Enter a specific game mode with a pitcher."""
         self.menu_state = gamemode_name
         self.pitcher_manager.set_current_pitcher(pitcher_name)
+        
+        # Connect configurable pitcher to game for situational awareness
+        current_pitcher = self.pitcher_manager.get_current_pitcher()
+        if hasattr(current_pitcher, 'set_game_reference'):
+            current_pitcher.set_game_reference(self)
+            
         self.game_stats.reset_game_stats()
         self.inning_ended = False
         self.just_refreshed = 1
@@ -399,6 +409,11 @@ class Game:
         # Set the pitcher
         pitcher_name = scenario['pitcher']
         self.pitcher_manager.set_current_pitcher(pitcher_name)
+        
+        # Connect configurable pitcher to game for situational awareness
+        current_pitcher = self.pitcher_manager.get_current_pitcher()
+        if hasattr(current_pitcher, 'set_game_reference'):
+            current_pitcher.set_game_reference(self)
         
         # Set up the game state with the scenario
         self.game_stats.reset_game_stats()
