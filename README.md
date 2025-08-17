@@ -1,6 +1,6 @@
 # ⚾ StrikeFactor
 
-A baseball batting simulator that puts you in the batter's box against some of the game's toughest pitchers. Face off against elite AI-controlled pitchers with realistic pitch physics and precise timing mechanics.
+A pygame baseball batting simulator that puts you in the batter's box against some elite pitchers. Easy to start up and quickly jump into the action. Face off against AI-controlled pitchers with realistic pitch physics precise timing mechanics
 
 ## 🎮 Getting Started
 
@@ -16,7 +16,7 @@ python strikefactor/main_refactored.py
 3. **Time your swing** - Move your mouse cursor to where you think the ball will be
 4. **Make contact** - Press **W** for a contact swing or **E** for a power swing at just the right moment
 
-The key is timing and positioning - swing too early or too late, and you'll miss. Get it just right, and you might just knock it out of the park!
+The key is timing and positioning - swing too early or too late, and you'll miss. Power swings have a smaller window of contact (meaning you have to time up the pitch more accurately) but have a higher chance of getting better hit outcomes. Contact swings are the opposite - easier to make contact and get a hit, but weaker outcomes.
 
 ## 🎯 Game Features
 
@@ -26,4 +26,4 @@ The key is timing and positioning - swing too early or too late, and you'll miss
 - **Statistical tracking** of your performance
 - **Multiple game modes** including practice and scenario modes
 
-Step up to the plate and see if you have what it takes!
+Have fun!
