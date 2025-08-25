@@ -18,6 +18,7 @@ STRIKEZONE_RECT = ((565, 410), (130, 150))
 BALL_MIN_SIZE = 3
 BALL_MAX_SIZE = 11
 MAX_DISTANCE = 4600
+PHYSICS_HZ = 240  # High-frequency physics simulation for better contact detection
 
 # Player positions
 RIGHT_BATTER_POS = (330, 190)

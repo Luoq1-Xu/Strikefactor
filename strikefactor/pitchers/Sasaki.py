@@ -17,7 +17,9 @@ class Sasaki(Pitcher):
         #self.add_pitch_type(self.sasakiSplitter, "FS")
         #self.add_pitch_type(self.sasakiFastball, "FF")
         #self.add_pitch_type(self.CUI, "CU")
-        self.add_pitch_type(self.FBO, "FF")
+        # self.add_pitch_type(self.FBO, "FF")
+        self.add_pitch_type(self.sasakiFastballHigh, "FFH")
+        self.add_pitch_type(self.sasakiFastballLow, "FFL")
         self.add_pitch_type(self.sasakiSplitter, "FS")
 
 
@@ -53,10 +55,21 @@ class Sasaki(Pitcher):
         elif current_time > start_time + 1120:
             self.draw(self.screen, 14, -9, 12)
 
+    def sasakiFastballHigh(self, main_simulation):
+        sampley = random.uniform(-5,15)
+        samplex = random.uniform(-10,20)
+        main_simulation(self.release_point, 'rokisasaki', -0.015, 0.001, samplex, sampley, 370, 'FF')
+
+    def sasakiFastballLow(self, main_simulation):
+        sampley = random.uniform(10,25)
+        samplex = random.uniform(-10,25)
+        main_simulation(self.release_point, 'rokisasaki', -0.015, 0.001, samplex, sampley, 370, 'FF')
+
     def sasakiFastball(self, main_simulation):
         sampley = random.uniform(-5,15)
         samplex = random.uniform(-10,20)
         main_simulation(self.release_point, 'rokisasaki', -0.015, 0.01, samplex, sampley, 370, 'FF')
+
     def sasakiLowFastball(self, main_simulation):
         sampley = random.uniform(20,35)
         samplex = random.uniform(0,45)

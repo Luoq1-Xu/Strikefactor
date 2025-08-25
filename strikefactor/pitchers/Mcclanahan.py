@@ -14,7 +14,7 @@ class Mcclanahan(Pitcher):
         self.load_img(loadfunc, 'assets/images/mcclanahan/', 17)
         #self.add_pitch_type(self.CB, "CB")
         self.add_pitch_type(self.SLD, "SLD")
-        #self.add_pitch_type(self.CHD, "CHD")
+        self.add_pitch_type(self.CHD, "CHD")
         self.add_pitch_type(self.FFI, "FFI")
         #self.add_pitch_type(self.FFU, "FFU")
         #self.add_pitch_type(self.CHI, "CHI")
@@ -81,8 +81,8 @@ class Mcclanahan(Pitcher):
 
     def CHD(self, main_simulation):
         sampley = random.uniform(-5,15)
-        samplex = random.uniform(-20,10)
-        main_simulation(self.release_point, 'shanemcclanahan', 0.015, 0.0275, samplex, sampley, 420, 'CH')
+        samplex = random.uniform(-30,10)
+        main_simulation(self.release_point, 'shanemcclanahan', 0.015, 0.0295, samplex, sampley, 420, 'CH')
 
     def CB(self, simulation_func):
             sampley = random.uniform(-25, 5)

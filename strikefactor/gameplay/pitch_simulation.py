@@ -1,11 +1,17 @@
 import pygame
 import pygame.gfxdraw
 import pandas as pd
+import sys
+import os
+
+# Add the parent directory to Python path for imports
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 from utils.physics import collision
 
 # Load the model once, ideally passed in or as a singleton
 import pickle
-from config import get_path
+from config import get_path, PHYSICS_HZ
 model = pickle.load(open(get_path("ai/ai_umpire.pkl"), "rb"))
 
 class PitchSimulation:
@@ -36,6 +42,16 @@ class PitchSimulation:
         self.is_hit = False
         self.previous_state = self.game.current_state
         self.recording_state = 0
+        
+        # High-frequency physics simulation
+        self.physics_hz = PHYSICS_HZ  # Run physics at high frequency for better accuracy
+        self.physics_dt = 1.0 / self.physics_hz
+        self.physics_accumulator = 0.0
+        self.last_physics_time = 0
+        
+        # Store ball positions for accurate contact detection
+        self.ball_positions_history = []
+        self.max_history_size = 120  # Store ~0.5 seconds of positions at 240hz
         
         self.new_entry = {
             'Pitcher': self.pitchername, 'PitchType': self.pitchtype, 'FirstX': 0, 'FirstY': 0,
@@ -75,7 +91,29 @@ class PitchSimulation:
         self.game.ui_manager.update(time_delta)
         
         current_time = pygame.time.get_ticks()
+        
+        # Run high-frequency physics updates
+        self._update_physics(time_delta)
+        
         self.game.current_pitcher.draw_pitcher(self.starttime, current_time)
+        
+        # Handle swing input events during windup and ball flight phases
+        # Allow swing input from start of windup until 100ms before ball arrives
+        if (current_time >= self.starttime and 
+            current_time < self.arrival_time - 100 and
+            self.game.swing_started == 0):
+            for event in pygame.event.get():
+                if event.type == pygame.KEYDOWN:
+                    self._handle_swing_input(event, current_time)
+                elif event.type == pygame.QUIT:
+                    self.running = False
+                    return
+        else:
+            # Still need to process other events during other phases
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.running = False
+                    return
         
         if self.starttime + self.windup < current_time < self.arrival_time:
             pass  # loops tracking if needed
@@ -94,6 +132,47 @@ class PitchSimulation:
             self._handle_follow_through_phase(current_time)
         elif current_time > self.arrival_time + 700:
             self._finish_pitch()
+    
+    def _update_physics(self, frame_time):
+        """Run high-frequency physics simulation with fixed timestep."""
+        self.physics_accumulator += frame_time
+        
+        # Run multiple physics steps per frame if needed
+        while self.physics_accumulator >= self.physics_dt:
+            self._physics_step(self.physics_dt)
+            self.physics_accumulator -= self.physics_dt
+    
+    def _physics_step(self, dt):
+        """Single physics step with fixed timestep."""
+        _ = dt  # Fixed timestep, not currently used but kept for future enhancements
+        current_time = pygame.time.get_ticks()
+        
+        # Only update ball physics if ball is in flight
+        if (current_time > self.starttime + self.windup and 
+            current_time < self.arrival_time and 
+            self.game.ball[2] > 300):  # Ball hasn't reached plate yet
+            
+            dist = self.game.ball[2]/300
+            if dist > 1:
+                # Use original movement rates but adjusted for higher physics frequency
+                # The Z movement already accounts for physics_hz, so no additional scaling needed
+                self.game.ball[1] += self.vy * (1/dist) / (self.physics_hz / 60.0)
+                self.game.ball[2] -= (4300 * 1000)/(self.physics_hz * self.traveltime)
+                self.game.ball[0] += self.vx * (1/dist) / (self.physics_hz / 60.0)
+                self.vy += (self.ay*300) * (1/dist) / (self.physics_hz / 60.0)
+                self.vx += (self.ax*300) * (1/dist) / (self.physics_hz / 60.0)
+                
+                # Store ball position with timestamp for contact detection
+                self.ball_positions_history.append({
+                    'time': current_time,
+                    'x': self.game.ball[0],
+                    'y': self.game.ball[1],
+                    'z': self.game.ball[2]
+                })
+                
+                # Keep history size manageable
+                if len(self.ball_positions_history) > self.max_history_size:
+                    self.ball_positions_history.pop(0)
             
     def _update_pitch_trajectory(self, current_time):
         """Update pitch trajectory tracking."""
@@ -125,6 +204,7 @@ class PitchSimulation:
     def _handle_windup_phase(self, current_time):
         """Handle pitcher windup phase."""
         self.game.batter.leg_kick(current_time, self.starttime + self.windup - 300)
+        self._draw_batter(current_time)
         self.game.field_renderer.draw_strikezone()
         self.game.field_renderer.draw_field(self.game.scoreKeeper.get_bases())
         pygame.display.flip()
@@ -141,14 +221,9 @@ class PitchSimulation:
         if not self.sizz:
             self.sizz = True
             self.game.sound_manager.play('sizzle')
-            
-        for event in pygame.event.get():
-            if event.type == pygame.KEYDOWN:
-                if current_time < self.arrival_time - 100:
-                    self._handle_swing_input(event, current_time)
                     
         self._draw_batter(current_time)
-        self._update_ball_position()
+        self._draw_ball()  # Just draw the ball, physics handled in _update_physics
         self.game.field_renderer.draw_strikezone()
         self.game.field_renderer.draw_field(self.game.scoreKeeper.get_bases())
         pygame.display.flip()
@@ -193,7 +268,11 @@ class PitchSimulation:
         self._draw_batter(current_time)
         self.game.field_renderer.draw_strikezone()
         self.game.field_renderer.draw_field(self.game.scoreKeeper.get_bases())
-        pygame.gfxdraw.aacircle(self.game.screen, int(self.game.ball[0]), int(self.game.ball[1]), 
+        
+        # Bounds check to prevent overflow
+        ball_x = max(-32767, min(32767, int(self.game.ball[0])))
+        ball_y = max(-32767, min(32767, int(self.game.ball[1])))
+        pygame.gfxdraw.aacircle(self.game.screen, ball_x, ball_y, 
                                self.game.fourseamballsize, (255,255,255))
         pygame.display.flip()
         
@@ -213,9 +292,12 @@ class PitchSimulation:
         """Evaluate the contact outcome based on timing."""
         mousepos = pygame.mouse.get_pos()
         
+        # Find the most accurate ball position for contact detection
+        contact_ball_pos = self._get_accurate_ball_position_for_contact()
+        
         if self.on_time == 1:  # Foul ball timing
             outcome = self.game.hit_outcome_manager.get_ball_to_bat_contact_outcome(
-                mousepos, (self.game.ball[0], self.game.ball[1]), self.swing_type, 
+                mousepos, contact_ball_pos, self.swing_type, 
                 batter_handedness=self.game.batter.get_handedness()
             )
             if outcome == 'miss':
@@ -224,13 +306,34 @@ class PitchSimulation:
                 self._handle_foul_ball()
         elif self.on_time == 2:  # Perfect timing
             outcome = self.game.hit_outcome_manager.get_ball_to_bat_contact_outcome(
-                mousepos, (self.game.ball[0], self.game.ball[1]), self.swing_type,
+                mousepos, contact_ball_pos, self.swing_type,
                 batter_handedness=self.game.batter.get_handedness()
             )
             if outcome == 'miss':
                 self.made_contact = "swung_and_miss"
             else:
                 self._handle_successful_hit()
+    
+    def _get_accurate_ball_position_for_contact(self):
+        """Get the most accurate ball position at contact time using high-frequency data."""
+        if not self.ball_positions_history:
+            return (self.game.ball[0], self.game.ball[1])
+        
+        # Find ball position closest to contact time
+        contact_time = self.contact_time
+        closest_pos = None
+        min_time_diff = float('inf')
+        
+        for pos in self.ball_positions_history:
+            time_diff = abs(pos['time'] - contact_time)
+            if time_diff < min_time_diff:
+                min_time_diff = time_diff
+                closest_pos = pos
+        
+        if closest_pos:
+            return (closest_pos['x'], closest_pos['y'])
+        else:
+            return (self.game.ball[0], self.game.ball[1])
                 
     def _handle_foul_ball(self):
         """Handle foul ball outcome."""
@@ -290,7 +393,11 @@ class PitchSimulation:
         self._draw_batter(current_time)
         self.game.field_renderer.draw_strikezone()
         self.game.field_renderer.draw_field(self.game.scoreKeeper.get_bases())
-        pygame.gfxdraw.aacircle(self.game.screen, int(self.game.ball[0]), int(self.game.ball[1]), 
+        
+        # Bounds check to prevent overflow
+        ball_x = max(-32767, min(32767, int(self.game.ball[0])))
+        ball_y = max(-32767, min(32767, int(self.game.ball[1])))
+        pygame.gfxdraw.aacircle(self.game.screen, ball_x, ball_y, 
                                self.game.fourseamballsize, (255,255,255))
         pygame.display.flip()
         
@@ -320,12 +427,12 @@ class PitchSimulation:
         if self.game.currentballs == 4:
             self.outcome = 'walk'
             self.game.currentwalks += 1
+            self.game.scoreKeeper.update_walk_event()
             self.game._display_pitch_results("WALK", self.pitchtype)
             self.game.ui_manager.show_banner("WALK")
             self.game.currentstrikes = 0
             self.game.currentballs = 0
             self.game.pitchnumber = 0
-            self.game.scoreKeeper.update_walk_event()
         else:
             self.outcome = 'ball'
             self.game._display_pitch_results("BALL", self.pitchtype)
@@ -381,16 +488,11 @@ class PitchSimulation:
         else:
             self.game.batter.leg_kick(current_time, self.starttime + self.windup - 300)
             
-    def _update_ball_position(self):
-        """Update ball position and physics."""
+    def _draw_ball(self):
+        """Draw the ball at its current position."""
         dist = self.game.ball[2]/300
         if dist > 1:
             self.game.blitfunc(self.game.screen, self.game.ball)
-            self.game.ball[1] += self.vy * (1/dist)
-            self.game.ball[2] -= (4300 * 1000)/(60 * self.traveltime)
-            self.game.ball[0] += self.vx * (1/dist)
-            self.vy += (self.ay*300) * (1/dist)
-            self.vx += (self.ax*300) * (1/dist)
             
     def _finish_pitch(self):
         """Finish the pitch and clean up."""
