@@ -464,6 +464,7 @@ class Game:
         """Toggle umpire sound effects."""
         self.umpsound = not self.umpsound
         
+        
     def _display_pitch_results(self, outcome: str, pitchtype: str):
         """Display pitch results on the UI."""
         pitch_result_string = (
@@ -529,6 +530,11 @@ class Game:
     def cleanup(self):
         """Clean up resources."""
         print("Game shutting down...")
+        
+        # Save final batting statistics before exit
+        if hasattr(self, 'field_renderer'):
+            print("Saving final batting statistics...")
+            self.field_renderer.save_data()
         
 
 def main():

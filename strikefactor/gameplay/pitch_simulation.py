@@ -405,6 +405,25 @@ class PitchSimulation:
         self.new_entry['FinalX'] = self.game.ball[0]
         self.new_entry['FinalY'] = self.game.ball[1]
         
+        # Record that a pitch was thrown for statistics
+        self.game.field_renderer.record_pitch()
+        
+        # Record heatmap data using final ball position
+        final_x = self.game.ball[0]
+        final_y = self.game.ball[1]
+        
+        # Record attempt if player swung
+        if self.game.swing_started > 0:
+            self.game.field_renderer.record_attempt(final_x, final_y)
+            
+        # Record hit if it was a successful hit
+        if self.is_hit:
+            self.game.field_renderer.record_hit(final_x, final_y)
+            
+        # Save data periodically (every 10 pitches) to prevent too frequent saves
+        if self.game.field_renderer.total_pitches % 10 == 0:
+            self.game.field_renderer.save_data()
+        
         # Update records
         if self.game.records.empty:
             self.game.records = pd.DataFrame([self.new_entry])

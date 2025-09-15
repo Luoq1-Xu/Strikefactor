@@ -1,0 +1,29 @@
+{
+  "heatmap_data": [
+    1,
+    1,
+    0,
+    4,
+    28,
+    8,
+    18,
+    24,
+    6
+  ],
+  "heatmap_attempts": [
+    17,
+    6,
+    6,
+    36,
+    57,
+    58,
+    72,
+    92,
+    66
+  ],
+  "total_swings": 410,
+  "total_hits": 90,
+  "total_pitches": 1231,
+  "last_updated": "2025-09-15T19:54:40.108267",
+  "version": "1.0"
+}
