@@ -1,0 +1,8 @@
+{
+  "difficulty": "professional",
+  "umpire_sound": true,
+  "master_volume": 1.0,
+  "show_strikezone": false,
+  "batter_handedness": "R",
+  "display_mode": "windowed"
+}

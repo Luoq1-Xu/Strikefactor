@@ -170,11 +170,11 @@ class FieldRenderer:
     def record_hit(self, x, y):
         """Record a hit at the given position."""
         segment = self.get_zone_segment(x, y)
-        print(f"Recording HIT at ({x:.1f}, {y:.1f}) -> segment {segment}")
+        # print(f"Recording HIT at ({x:.1f}, {y:.1f}) -> segment {segment}")
         if 0 <= segment <= 8:
             self.heatmap_data[segment] += 1
             self.total_hits += 1
-            print(f"✓ Hit recorded! Segment {segment} now has {self.heatmap_data[segment]} hits / {self.heatmap_attempts[segment]} attempts")
+            # print(f"✓ Hit recorded! Segment {segment} now has {self.heatmap_data[segment]} hits / {self.heatmap_attempts[segment]} attempts")
             
             # Auto-save data after each hit
             self.save_data()
@@ -182,11 +182,11 @@ class FieldRenderer:
     def record_attempt(self, x, y):
         """Record an attempt (swing) at the given position."""
         segment = self.get_zone_segment(x, y)
-        print(f"Recording ATTEMPT at ({x:.1f}, {y:.1f}) -> segment {segment}")
+        # print(f"Recording ATTEMPT at ({x:.1f}, {y:.1f}) -> segment {segment}")
         if 0 <= segment <= 8:
             self.heatmap_attempts[segment] += 1
             self.total_swings += 1
-            print(f"✓ Attempt recorded! Segment {segment} now has {self.heatmap_attempts[segment]} attempts")
+            # print(f"✓ Attempt recorded! Segment {segment} now has {self.heatmap_attempts[segment]} attempts")
     
     def record_pitch(self):
         """Record that a pitch was thrown (for tracking total pitches)."""
