@@ -61,15 +61,26 @@ class MenuState(GameState):
         self.game.scoreKeeper.reset()
         self.game.pitch_trajectories = []
         self.game.last_pitch_information = []
-        self.game.ui_manager.set_button_visibility('main_menu')
-        
-        # Reset typing effect
-        self.active_message = 0
-        self.counter = 0
-        self.textoffset = 0
-        self.messages_finished = 0
-        self.done = False
-        self.running = True
+
+        # Set button visibility based on current menu state
+        if self.game.menu_state == 'settings':
+            self.game.ui_manager.set_button_visibility('settings')
+            self.game.ui_manager.update_settings_button_states(self.game.settings_manager)
+            self.game.ui_manager.show_settings_info(self.game.settings_manager)
+        elif self.game.menu_state == 'key_bindings':
+            self.game.ui_manager.set_button_visibility('key_bindings')
+            self.game.ui_manager.update_key_binding_buttons(self.game.key_binding_manager)
+            # Don't show banner for key bindings page
+        else:
+            self.game.ui_manager.set_button_visibility('main_menu')
+
+            # Reset typing effect only for main menu
+            self.active_message = 0
+            self.counter = 0
+            self.textoffset = 0
+            self.messages_finished = 0
+            self.done = False
+            self.running = True
         
     def exit(self):
         """Clean up menu state."""
@@ -79,23 +90,25 @@ class MenuState(GameState):
         """Update typing effect and menu logic."""
         if not self.running:
             return
-            
-        message = self.messages[self.active_message]
-        
-        # Update typing effect
-        if self.counter < self.game.speed * len(message):
-            self.counter += 1
-        elif self.counter >= self.game.speed * len(message):
-            self.done = True
-            
-        # Handle message progression
-        if (self.active_message < len(self.messages) - 1) and self.done:
-            pygame.time.delay(500)
-            self.active_message += 1
-            self.done = False
-            self.textoffset += 100
-            self.counter = 0
-            self.messages_finished += 1
+
+        # Only run typing effect for main menu, not settings or key bindings
+        if self.game.menu_state not in ['settings', 'key_bindings']:
+            message = self.messages[self.active_message]
+
+            # Update typing effect
+            if self.counter < self.game.speed * len(message):
+                self.counter += 1
+            elif self.counter >= self.game.speed * len(message):
+                self.done = True
+
+            # Handle message progression
+            if (self.active_message < len(self.messages) - 1) and self.done:
+                pygame.time.delay(500)
+                self.active_message += 1
+                self.done = False
+                self.textoffset += 100
+                self.counter = 0
+                self.messages_finished += 1
             
     def handle_event(self, event):
         """Handle menu events."""
@@ -107,22 +120,34 @@ class MenuState(GameState):
     def render(self, screen):
         """Render the main menu."""
         screen.fill("black")
-        
-        # Draw completed messages
-        if self.messages_finished > 0:
-            offset = 0
-            for i in range(self.messages_finished):
-                self.game.ui_manager.draw_completed_message(
-                    self.messages[i], (300, 170 + offset), use_big_font=True
-                )
-                offset += 100
-                
-        # Draw current message with typing effect
-        message = self.messages[self.active_message]
-        self.game.ui_manager.draw_typing_effect(
-            message, self.counter, self.game.speed, 
-            (300, 170 + self.textoffset), use_big_font=True
-        )
+
+        # Only render typing effect for main menu, not settings or key bindings
+        if self.game.menu_state not in ['settings', 'key_bindings']:
+            # Draw completed messages
+            if self.messages_finished > 0:
+                offset = 0
+                for i in range(self.messages_finished):
+                    self.game.ui_manager.draw_completed_message(
+                        self.messages[i], (300, 170 + offset), use_big_font=True
+                    )
+                    offset += 100
+
+            # Draw current message with typing effect
+            message = self.messages[self.active_message]
+            self.game.ui_manager.draw_typing_effect(
+                message, self.counter, self.game.speed,
+                (300, 170 + self.textoffset), use_big_font=True
+            )
+        elif self.game.menu_state == 'settings':
+            # For settings screen, just draw a simple title
+            self.game.ui_manager.draw_completed_message(
+                "SETTINGS", (540, 100), use_big_font=True
+            )
+        elif self.game.menu_state == 'key_bindings':
+            # For key bindings screen, just draw a simple title
+            self.game.ui_manager.draw_completed_message(
+                "KEY BINDINGS", (480, 100), use_big_font=True
+            )
 
 
 class GameplayState(GameState):
@@ -272,7 +297,7 @@ class SummaryState(GameState):
         
     def _update_pitcher_stats(self):
         """Update pitcher statistics."""
-        print("\n <--- INNING SUMMARY ---> \n")
+        print("\n <--- OVERALL SUMMARY  ---> \n")
         print(self.game.current_pitcher.name + " stats")
         
         stats_update = {

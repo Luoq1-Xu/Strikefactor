@@ -2,6 +2,7 @@ import pygame
 import pygame.gfxdraw
 import pandas as pd
 from utils.physics import collision
+from main_refactored import Game
 
 # Load the model once, ideally passed in or as a singleton
 import pickle
@@ -10,7 +11,7 @@ model = pickle.load(open(get_path("ai/ai_umpire.pkl"), "rb"))
 
 class PitchSimulation:
     def __init__(self, game, release_point, pitchername, ax, ay, vx, vy, traveltime, pitchtype):
-        self.game = game
+        self.game: Game = game
         self.release_point = release_point
         self.pitchername = pitchername
         self.ax = ax
@@ -64,8 +65,6 @@ class PitchSimulation:
         while self.running:
             self.update()
 
-        self.cleanup()
-
     def update(self):
         """Main simulation update loop."""
         self.game.sound_manager.update()
@@ -101,7 +100,9 @@ class PitchSimulation:
         
         if elapsed_time >= 10 and current_time - self.starttime > self.windup or (current_time - self.starttime > self.windup and not self.pitch_results_done):
             self.last_time = current_time
-            if current_time > self.starttime + self.traveltime + self.windup and self.is_hit:
+            if current_time > self.starttime + self.traveltime + self.windup and hasattr(self, 'outcome') and self.outcome in ['FLYOUT', 'GROUNDOUT']:
+                entry = [self.game.ball[0], self.game.ball[1], self.game.fourseamballsize, (198, 169, 251), "out"]  # Purple for outs
+            elif current_time > self.starttime + self.traveltime + self.windup and self.is_hit:
                 entry = [self.game.ball[0], self.game.ball[1], self.game.fourseamballsize, (71, 204, 252), "hit"]
             elif current_time > self.starttime + self.traveltime + self.windup and self.pitch_results_done and self.is_strike:
                 entry = [self.game.ball[0], self.game.ball[1], self.game.fourseamballsize, (227, 75, 80), "strike"]
@@ -206,7 +207,9 @@ class PitchSimulation:
                 self.game.sound_manager.play('foul')
                 self.soundplayed += 1
             elif self.on_time == 2:
-                self.game.hit_outcome_manager.play_hit_sound()
+                # Pass the outcome to determine appropriate sound
+                outcome = getattr(self, 'outcome', None)
+                self.game.hit_outcome_manager.play_hit_sound(outcome)
                 self.soundplayed += 1
                 
     def _evaluate_contact(self):
@@ -248,17 +251,54 @@ class PitchSimulation:
     def _handle_successful_hit(self):
         """Handle successful hit outcome."""
         self.game.strikes += 1
-        self.is_hit = True
         self.made_contact = "hit"
         self.pitch_results_done = True
         self.game.pitchnumber += 1
-        self.game.hits += 1
+        
+        # Get swing and ball positions for more realistic outcomes
+        mousepos = pygame.mouse.get_pos()
+        swing_y = mousepos[1]
+        ball_y = self.game.ball[1]
+        
+        # Calculate timing difference for more realistic outcomes
+        timing_diff = abs((self.swing_starttime + 150) - (self.starttime + self.windup + self.traveltime))
         
         if self.swing_type == 1:
-            hit_string = self.game.hit_outcome_manager.get_contact_hit_outcome()
+            hit_string = self.game.hit_outcome_manager.get_contact_hit_outcome(
+                swing_location_y=swing_y, ball_location_y=ball_y, timing_diff=timing_diff
+            )
         elif self.swing_type == 2:
-            hit_string = self.game.hit_outcome_manager.get_power_hit_outcome()
-            
+            hit_string = self.game.hit_outcome_manager.get_power_hit_outcome(
+                swing_location_y=swing_y, ball_location_y=ball_y, timing_diff=timing_diff
+            )
+        
+        # Handle different outcomes
+        if hit_string in ["FLYOUT", "GROUNDOUT"]:
+            self._handle_out_result(hit_string)
+        else:
+            self._handle_hit_result(hit_string)
+    
+    def _handle_out_result(self, out_type):
+        """Handle flyout or groundout results."""
+        self.is_hit = False  # This is an out, not a hit
+        self.game.currentouts += 1
+        self.outcome = out_type
+        
+        # Display the out result
+        self.game.ui_manager.show_banner(out_type)
+        self.game._display_pitch_results(out_type, self.pitchtype)
+        self.new_entry['isHit'] = out_type
+        
+        # Reset counts after out (similar to strikeout)
+        self.game.pitchnumber = 0
+        self.game.currentstrikes = 0
+        self.game.currentballs = 0
+    
+    def _handle_hit_result(self, hit_string):
+        """Handle successful hit results."""
+        self.is_hit = True
+        self.game.hits += 1
+        
         if self.game.hit_outcome_manager.get_homerun_text() != '':
             self.game.ui_manager.show_banner("{}".format(self.game.hit_outcome_manager.get_homerun_text()))
             self.game.homeruns_allowed += 1
@@ -320,12 +360,12 @@ class PitchSimulation:
         if self.game.currentballs == 4:
             self.outcome = 'walk'
             self.game.currentwalks += 1
+            self.game.scoreKeeper.update_walk_event()
             self.game._display_pitch_results("WALK", self.pitchtype)
             self.game.ui_manager.show_banner("WALK")
             self.game.currentstrikes = 0
             self.game.currentballs = 0
             self.game.pitchnumber = 0
-            self.game.scoreKeeper.update_walk_event()
         else:
             self.outcome = 'ball'
             self.game._display_pitch_results("BALL", self.pitchtype)
@@ -404,6 +444,25 @@ class PitchSimulation:
         """Clean up after pitch completion."""
         self.new_entry['FinalX'] = self.game.ball[0]
         self.new_entry['FinalY'] = self.game.ball[1]
+        
+        # Record that a pitch was thrown for statistics
+        self.game.field_renderer.record_pitch()
+        
+        # Record heatmap data using final ball position
+        final_x = self.game.ball[0]
+        final_y = self.game.ball[1]
+        
+        # Record attempt if player swung
+        if self.game.swing_started > 0:
+            self.game.field_renderer.record_attempt(final_x, final_y)
+            
+        # Record hit if it was a successful hit
+        if self.is_hit:
+            self.game.field_renderer.record_hit(final_x, final_y)
+            
+        # Save data periodically (every 10 pitches) to prevent too frequent saves
+        if self.game.field_renderer.total_pitches % 10 == 0:
+            self.game.field_renderer.save_data()
         
         # Update records
         if self.game.records.empty:
