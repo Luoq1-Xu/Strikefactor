@@ -26,7 +26,6 @@ from gameplay.game_state_manager import GameStateManager
 from gameplay.random_scenario import RandomScenarioGenerator
 from settings_manager import SettingsManager
 
-
 class AssetManager:
     """Manages loading and caching of game assets."""
     
@@ -194,6 +193,10 @@ class Game:
         self.scoreKeeper = ScoreKeeper()
         self.pitchDataManager = PitchDataManager()
 
+        # GameDay mode management
+        self.gameday_manager = None
+        self.in_gameday_mode = False
+
         # Settings management (initialize early so other components can use it)
         self.settings_manager = SettingsManager()
 
@@ -245,7 +248,8 @@ class Game:
         self.ui_manager.register_button_callback('yamamoto', lambda: self.enter_gamemode('Yamamoto', 'yamamoto'))
         self.ui_manager.register_button_callback('mcclanahan', lambda: self.enter_gamemode('Experimental', 'mcclanahan'))
         self.ui_manager.register_button_callback('random_scenario', lambda: self.enter_random_scenario())
-        
+        self.ui_manager.register_button_callback('gameday', lambda: self.enter_gameday_mode())
+
         # Navigation callbacks
         self.ui_manager.register_button_callback('main_menu', lambda: self.set_menu_state(0))
         self.ui_manager.register_button_callback('back_to_main_menu', lambda: self.set_menu_state(0))
@@ -285,6 +289,7 @@ class Game:
         self.ui_manager.register_button_callback('bind_toggle_ui', lambda: self.start_key_rebind(KeyAction.TOGGLE_UI))
         self.ui_manager.register_button_callback('bind_toggle_strikezone', lambda: self.start_key_rebind(KeyAction.TOGGLE_STRIKEZONE))
         self.ui_manager.register_button_callback('bind_toggle_sound', lambda: self.start_key_rebind(KeyAction.TOGGLE_SOUND))
+        self.ui_manager.register_button_callback('bind_toggle_batter', lambda: self.start_key_rebind(KeyAction.TOGGLE_BATTER))
         self.ui_manager.register_button_callback('bind_quick_pitch', lambda: self.start_key_rebind(KeyAction.QUICK_PITCH))
         self.ui_manager.register_button_callback('bind_view_pitches', lambda: self.start_key_rebind(KeyAction.VIEW_PITCHES))
         self.ui_manager.register_button_callback('bind_main_menu', lambda: self.start_key_rebind(KeyAction.MAIN_MENU))
@@ -466,14 +471,32 @@ class Game:
         self.inning_ended = False
         self.just_refreshed = 1
         self.pitches_display = []
-        
-        # Show scenario description
-        description = self.random_scenario_generator.get_scenario_description(scenario)
-        self.ui_manager.show_banner(description, typing_speed=0.05)
-        
+
+        # Reset cursor (like in enter_gamemode)
         crosshair = create_pci_cursor()
         pygame.mouse.set_cursor(crosshair)
-        self.state_manager.handle_menu_state_change(self.menu_state)
+
+        # Transition to gameplay state
+        self.state_manager.change_state('gameplay')
+
+    def enter_gameday_mode(self):
+        """Enter GameDay mode - a full 9-inning simulated game."""
+        from gameplay.gameday_manager import GameDayManager
+
+        # Initialize gameday manager and set flag
+        self.gameday_manager = GameDayManager(player_name="Player")
+        self.in_gameday_mode = True
+
+        # Set starting pitcher (Yamamoto)
+        self.pitcher_manager.set_current_pitcher('yamamoto')
+        self.current_pitcher = self.pitcher_manager.get_current_pitcher()
+
+        # Reset game stats for fresh start
+        self.game_stats.reset_game_stats()
+        self.scoreKeeper.reset()
+
+        self.menu_state = 'gameday'
+        self.state_manager.change_state('gameday')
         
     def set_menu_state(self, state):
         """Set the current menu state."""
@@ -489,9 +512,14 @@ class Game:
         self.ui_manager.hide_view_window()
         # Return to the appropriate state based on inning status
         if self.currentouts == 3 and self.inning_ended:
-            self.ui_manager.set_button_visibility('inning_end')
-            self.menu_state = 'inning_end'
-            self.state_manager.change_state('inning_end')
+            if self.in_gameday_mode:
+                self.ui_manager.set_button_visibility('gameday_transition')
+                self.menu_state = 'gameday_transition'
+                self.state_manager.change_state('gameday_transition')
+            else:
+                self.ui_manager.set_button_visibility('inning_end')
+                self.menu_state = 'inning_end'
+                self.state_manager.change_state('inning_end')
         else:
             self.ui_manager.set_button_visibility('in_game')
             self.menu_state = self.current_gamemode
@@ -558,6 +586,9 @@ class Game:
 
         # Register callbacks for key actions
         self.key_binding_manager.register_callback(KeyAction.TOGGLE_UI, self.toggle_ui_visibility)
+        self.key_binding_manager.register_callback(KeyAction.TOGGLE_STRIKEZONE, lambda: self.field_renderer.toggle_strikezone_mode())
+        self.key_binding_manager.register_callback(KeyAction.TOGGLE_SOUND, self.toggle_umpire_sound_setting)
+        self.key_binding_manager.register_callback(KeyAction.TOGGLE_BATTER, lambda: self.batter.toggle_handedness())
         self.key_binding_manager.register_callback(KeyAction.QUICK_PITCH, self.quick_pitch)
         self.key_binding_manager.register_callback(KeyAction.VIEW_PITCHES, self.enter_view_pitches)
         self.key_binding_manager.register_callback(KeyAction.MAIN_MENU, lambda: self.set_menu_state(0))
@@ -592,6 +623,7 @@ class Game:
             KeyAction.TOGGLE_UI: 'bind_toggle_ui',
             KeyAction.TOGGLE_STRIKEZONE: 'bind_toggle_strikezone',
             KeyAction.TOGGLE_SOUND: 'bind_toggle_sound',
+            KeyAction.TOGGLE_BATTER: 'bind_toggle_batter',
             KeyAction.QUICK_PITCH: 'bind_quick_pitch',
             KeyAction.VIEW_PITCHES: 'bind_view_pitches',
             KeyAction.MAIN_MENU: 'bind_main_menu'
@@ -696,8 +728,22 @@ class Game:
         """Check if the inning should end."""
         if self.currentouts == 3 and not self.inning_ended:
             self.inning_ended = True
-            self.menu_state = 'inning_end'
-            self.state_manager.change_state('inning_end')
+
+            # Check if in gameday mode
+            if self.in_gameday_mode:
+                # Update player's score in gameday manager (add to cumulative score)
+                self.gameday_manager.player_score += self.scoreKeeper.get_score()
+
+                # DON'T call end_half_inning() here - let the transition state handle it
+                # This ensures the state machine sees the correct inning state
+
+                # Transition to gameday transition state
+                self.menu_state = 'gameday_transition'
+                self.state_manager.change_state('gameday_transition')
+            else:
+                # Normal mode - go to inning end
+                self.menu_state = 'inning_end'
+                self.state_manager.change_state('inning_end')
             
     def continue_to_summary(self):
         """Continue from inning end to summary state."""
@@ -758,7 +804,6 @@ class Game:
         if hasattr(self, 'field_renderer'):
             print("Saving final batting statistics...")
             self.field_renderer.save_data()
-        
 
 def main():
     """Main entry point."""

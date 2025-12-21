@@ -8,6 +8,7 @@ import pygame_gui
 import sys
 from abc import ABC, abstractmethod
 from typing import Optional
+from gameplay.gameday_manager import GameDayManager
 
 
 class GameState(ABC):
@@ -532,6 +533,399 @@ class InningEndState(GameState):
         # Draw current ball position (final position)
         if self.game.first_pitch_thrown:
             pygame.gfxdraw.aacircle(
-                screen, int(self.game.ball[0]), int(self.game.ball[1]), 
+                screen, int(self.game.ball[0]), int(self.game.ball[1]),
                 self.game.fourseamballsize, (255, 255, 255)
             )
+
+
+class GameDayState(GameState):
+    """Entry screen for GameDay mode - a full 9-inning simulated game."""
+
+    def __init__(self, game):
+        super().__init__(game)
+
+    def enter(self):
+        """Show the gameday entry screen."""
+        # The gameday_manager should already be initialized in Game.enter_gameday_mode()
+        self.game.ui_manager.set_visibility_state('gameday_start')
+
+    def exit(self):
+        """Clean up gameday state."""
+        pass
+
+    def update(self, time_delta: float):
+        """Update logic."""
+        pass
+
+    def handle_event(self, event):
+        """Handle events - primarily the start button."""
+        self.game.ui_manager.process_events(event)
+
+        if event.type == pygame.QUIT:
+            return False
+
+        if event.type == pygame_gui.UI_BUTTON_PRESSED:
+            if event.ui_element == self.game.ui_manager.buttons.get('start_gameday'):
+                # Start the first inning - opponent bats first (top of 1st)
+                self.game.inning_ended = False
+                # Transition to gameday_transition to simulate opponent's half
+                self.game.state_manager.change_state('gameday_transition')
+        return True
+
+    def render(self, screen):
+        """Render the gameday entry screen."""
+        screen.fill((30, 40, 50))  # Dark background
+
+        # Title
+        title_font = pygame.font.Font(None, 72)
+        title = title_font.render("GameDay Mode", True, (255, 255, 255))
+        screen.blit(title, (400, 150))
+
+        # Description
+        desc_font = pygame.font.Font(None, 36)
+        desc_lines = [
+            "Full 9-Inning Baseball Simulation",
+            "",
+            "Starting Pitcher: YAMAMOTO",
+            "Relief Pitchers: SASAKI, DEGROM, MCCLANAHAN",
+            "",
+            "Press 'Start Game' to begin!"
+        ]
+
+        y_offset = 280
+        for line in desc_lines:
+            if line:
+                text = desc_font.render(line, True, (200, 200, 200))
+                screen.blit(text, (300, y_offset))
+            y_offset += 45
+
+
+class GameDayTransitionState(GameState):
+    """Handles transitions between player innings and opponent simulation."""
+
+    def __init__(self, game):
+        super().__init__(game)
+        self.phase = "SHOW_SCORE"  # Phases: SHOW_SCORE, SIMULATING, FINAL
+        self.simulation_complete = False
+        self.opponent_events = []
+
+    def enter(self):
+        """Called when entering transition state."""
+        # Hide any lingering banners
+        self.game.ui_manager.hide_banner()
+
+        # Hide ALL buttons first to ensure clean state
+        for button in self.game.ui_manager.buttons.values():
+            button.hide()
+
+        # Hide gameplay UI elements
+        self.game.ui_manager.scoreboard.hide()
+        self.game.ui_manager.pitch_result.hide()
+
+        # Determine what phase we're in
+        if self.game.gameday_manager.current_inning > 9:
+            self.phase = "FINAL"
+        elif self.game.gameday_manager.is_top_inning:
+            # Top of inning - opponent bats first, so simulate now
+            self.phase = "SIMULATING"
+            self._simulate_opponent_half_inning()
+        else:
+            # Bottom of inning just ended - show score before next inning
+            self.phase = "SHOW_SCORE"
+
+            # Check for opponent pitcher substitution (player was batting against opponent pitcher)
+            if self.game.gameday_manager.should_consider_relief_pitcher():
+                new_pitcher = self.game.gameday_manager.substitute_relief_pitcher()
+                if new_pitcher:
+                    self._load_and_switch_pitcher(new_pitcher)
+
+        # Show appropriate buttons based on phase
+        if self.phase == "FINAL":
+            self.game.ui_manager.buttons['final_menu'].show()
+            self.game.ui_manager.buttons['view_game_log'].show()
+        elif self.phase == "SIMULATING":
+            # After simulation, show the "Start Batting" button
+            self.game.ui_manager.buttons['start_batting'].show()
+            self.game.ui_manager.buttons['view_game_log'].show()
+            self.game.ui_manager.buttons['main_menu'].show()
+        else:
+            # SHOW_SCORE phase - show next inning button
+            self.game.ui_manager.buttons['next_inning'].show()
+            self.game.ui_manager.buttons['view_game_log'].show()
+            self.game.ui_manager.buttons['main_menu'].show()
+
+    def exit(self):
+        """Called when exiting this state."""
+        pass
+
+    def update(self, time_delta: float):
+        """Update transition logic."""
+        pass
+
+    def handle_event(self, event):
+        """Handle events - button clicks for continuing."""
+        self.game.ui_manager.process_events(event)
+
+        if event.type == pygame.QUIT:
+            return False
+
+        if event.type == pygame_gui.UI_BUTTON_PRESSED:
+            if event.ui_element == self.game.ui_manager.buttons.get('next_inning'):
+                self._handle_next_inning()
+            elif event.ui_element == self.game.ui_manager.buttons.get('start_batting'):
+                self._start_player_batting()
+            elif event.ui_element == self.game.ui_manager.buttons.get('view_game_log'):
+                self._show_game_log()
+            elif event.ui_element == self.game.ui_manager.buttons.get('final_menu'):
+                self._return_to_menu()
+        return True
+
+    def _simulate_opponent_half_inning(self):
+        """Simulate the opponent's at-bats for this half-inning."""
+        self.opponent_events = []
+        gameday_mgr = self.game.gameday_manager
+
+        # Simulate until 3 outs
+        while gameday_mgr.current_outs < 3:
+            outcome, runs_scored = gameday_mgr.simulate_opponent_at_bat()
+            self.opponent_events.append(f"{gameday_mgr.get_current_batter_name()}: {outcome}" +
+                                       (f" ({runs_scored} run{'s' if runs_scored != 1 else ''})" if runs_scored > 0 else ""))
+
+        # Opponent score is already tracked in simulate_opponent_at_bat()
+        # No need to update it here
+
+        # End the opponent's half inning
+        gameday_mgr.end_half_inning()
+
+        # Check for PLAYER'S pitcher substitution (opponent was batting against player's pitcher)
+        if gameday_mgr.should_consider_player_relief_pitcher():
+            new_pitcher = gameday_mgr.substitute_player_relief_pitcher()
+            if new_pitcher:
+                message = f"Pitching change (Your Team): {new_pitcher.upper()} coming in to pitch"
+                self.opponent_events.append(message)
+
+        # Check if game is over
+        if gameday_mgr.game_over:
+            self.phase = "FINAL"
+            self.game.ui_manager.set_visibility_state('gameday_final')
+
+        self.simulation_complete = True
+
+    def _load_and_switch_pitcher(self, pitcher_name: str):
+        """Load and switch to a new pitcher."""
+        import pickle
+        import sys
+        from config import get_path
+
+        # Set the new pitcher in the pitcher manager
+        self.game.pitcher_manager.set_current_pitcher(pitcher_name)
+        self.game.current_pitcher = self.game.pitcher_manager.get_current_pitcher()
+
+        # Load AI for the new pitcher
+        import ai.AI_2 as AI_2
+        sys.modules['AI_2'] = AI_2
+
+        # Get the pitcher's actual pitch arsenal
+        pitcher_pitch_names = set(self.game.current_pitcher.get_pitch_names())
+        ai_loaded = False
+
+        try:
+            ai_file = get_path(f"ai/{pitcher_name}_ai.pkl")
+            with open(ai_file, "rb") as f:
+                ai = pickle.load(f)
+
+            # Validate that the AI's action space matches the pitcher's arsenal
+            ai_actions = set(ai.actions)
+            if ai_actions == pitcher_pitch_names:
+                self.game.current_pitcher.attach_ai(ai)
+                ai_loaded = True
+            else:
+                print(f"Warning: AI action space mismatch for {pitcher_name}")
+                print(f"  AI actions: {sorted(ai_actions)}")
+                print(f"  Pitcher arsenal: {sorted(pitcher_pitch_names)}")
+                print(f"  Creating new AI with correct action space")
+        except FileNotFoundError:
+            print(f"Warning: AI file not found for {pitcher_name}, using default AI")
+
+        # If AI wasn't loaded successfully or had wrong actions, create a new one
+        if not ai_loaded:
+            from ai.AI_2 import ERAI
+            ai = ERAI(self.game.current_pitcher.get_pitch_names())
+            self.game.current_pitcher.attach_ai(ai)
+
+    def _handle_next_inning(self):
+        """Handle transition to next inning."""
+        # End the current half-inning
+        self.game.gameday_manager.end_half_inning()
+
+        # Check if game is over
+        if self.game.gameday_manager.game_over:
+            self.phase = "FINAL"
+            # Hide all buttons
+            for button in self.game.ui_manager.buttons.values():
+                button.hide()
+            self.game.ui_manager.buttons['final_menu'].show()
+            self.game.ui_manager.buttons['view_game_log'].show()
+            return
+
+        # Hide all buttons
+        for button in self.game.ui_manager.buttons.values():
+            button.hide()
+
+        # Check if we need to simulate opponent or start player batting
+        if self.game.gameday_manager.is_top_inning:
+            # Top of new inning - simulate opponent first
+            self.phase = "SIMULATING"
+            self._simulate_opponent_half_inning()
+            # Show start batting button after simulation
+            self.game.ui_manager.buttons['start_batting'].show()
+            self.game.ui_manager.buttons['view_game_log'].show()
+            self.game.ui_manager.buttons['main_menu'].show()
+        else:
+            # Bottom of inning - player bats
+            self._start_player_batting()
+
+    def _start_player_batting(self):
+        """Start the player's batting half-inning."""
+        # At this point, end_half_inning() should have been called after opponent simulation
+        # so is_top_inning should be False (player's turn)
+
+        # Reset for new half-inning
+        self.game.game_stats.reset_game_stats()
+        self.game.scoreKeeper.reset()
+        self.game.inning_ended = False
+
+        # Clear pitch data from previous inning
+        self.game.pitch_trajectories = []
+        self.game.pitchDataManager.records = []
+
+        # Transition to gameplay
+        self.game.state_manager.change_state('gameplay')
+
+    def _show_game_log(self):
+        """Show the complete game log."""
+        # TODO: Implement a scrollable game log view
+        pass
+
+    def _return_to_menu(self):
+        """Return to main menu."""
+        self.game.in_gameday_mode = False
+        self.game.gameday_manager = None
+        self.game.set_menu_state(0)
+
+    def render(self, screen):
+        """Render the transition screen."""
+        screen.fill((20, 30, 40))  # Dark blue background
+
+        # Title
+        title_font = pygame.font.Font(None, 64)
+        title = title_font.render("GameDay Mode", True, (255, 255, 255))
+        screen.blit(title, (400, 50))
+
+        # Current inning and score
+        info_font = pygame.font.Font(None, 48)
+        if self.phase == "FINAL":
+            inning_text = "After 9 Innings"
+        else:
+            inning_text = self.game.gameday_manager.get_inning_summary()
+        score_text = self.game.gameday_manager.get_score_summary()
+
+        inning_surface = info_font.render(inning_text, True, (200, 200, 200))
+        score_surface = info_font.render(score_text, True, (255, 255, 100))
+
+        screen.blit(inning_surface, (400, 150))
+        screen.blit(score_surface, (400, 220))
+
+        # Show pitcher info
+        pitcher_font = pygame.font.Font(None, 36)
+        pitcher_stats = self.game.gameday_manager.get_active_pitcher_stats()
+        pitcher_text = f"Pitching: {pitcher_stats.name.upper()} ({pitcher_stats.pitch_count} pitches)"
+        pitcher_surface = pitcher_font.render(pitcher_text, True, (150, 255, 150))
+        screen.blit(pitcher_surface, (400, 290))
+
+        # Show recent events if simulating or just simulated
+        if self.phase == "SIMULATING" and self.simulation_complete:
+            event_font = pygame.font.Font(None, 28)
+            events_title = event_font.render("Opponent's At-Bats:", True, (255, 200, 100))
+            screen.blit(events_title, (100, 350))
+
+            y_offset = 390
+            for event_str in self.opponent_events[-10:]:  # Show last 10 events
+                event_surface = event_font.render(event_str, True, (200, 200, 200))
+                screen.blit(event_surface, (100, y_offset))
+                y_offset += 30
+
+            # Position buttons on the right side to avoid clipping
+            button_x = 800
+            button_y_start = 500
+            self.game.ui_manager.buttons['start_batting'].set_relative_position((button_x, button_y_start))
+            self.game.ui_manager.buttons['view_game_log'].set_relative_position((button_x, button_y_start + 70))
+        elif self.phase == "SHOW_SCORE":
+            # Show recent game events
+            event_font = pygame.font.Font(None, 28)
+            events = self.game.gameday_manager.get_recent_events(8)
+
+            if events:
+                events_title = event_font.render("Recent At-Bats:", True, (255, 200, 100))
+                screen.blit(events_title, (100, 350))
+
+                y_offset = 390
+                for event in events:
+                    event_surface = event_font.render(str(event), True, (200, 200, 200))
+                    screen.blit(event_surface, (100, y_offset))
+                    y_offset += 30
+
+                # Position buttons on the right side to avoid clipping
+                button_x = 800
+                button_y_start = 500
+                self.game.ui_manager.buttons['next_inning'].set_relative_position((button_x, button_y_start))
+                self.game.ui_manager.buttons['view_game_log'].set_relative_position((button_x, button_y_start + 70))
+        elif self.phase == "FINAL":
+            # Show final game summary
+            final_font = pygame.font.Font(None, 56)
+            winner = self.game.gameday_manager.get_winner()
+            if winner == "Player":
+                result_text = "YOU WIN!"
+                color = (100, 255, 100)
+            elif winner == "Opponent":
+                result_text = "YOU LOSE"
+                color = (255, 100, 100)
+            else:
+                result_text = "TIE GAME"
+                color = (255, 255, 100)
+
+            result_surface = final_font.render(result_text, True, color)
+            screen.blit(result_surface, (450, 350))
+
+            # Show pitcher stats for both teams
+            pitcher_stats_font = pygame.font.Font(None, 28)
+
+            # Opponent Team Pitchers (player batted against)
+            stats_title = pitcher_stats_font.render("Opponent Pitchers:", True, (255, 200, 100))
+            screen.blit(stats_title, (100, 450))
+
+            y_offset = 490
+            for pitcher_stat in self.game.gameday_manager.get_opponent_pitcher_stats():
+                stat_text = pitcher_stat.get_summary()
+                stat_surface = pitcher_stats_font.render(stat_text, True, (200, 200, 200))
+                screen.blit(stat_surface, (100, y_offset))
+                y_offset += 30
+
+            # Player Team Pitchers (opponent batted against)
+            y_offset += 10  # Add spacing
+            stats_title2 = pitcher_stats_font.render("Your Team's Pitchers:", True, (150, 255, 150))
+            screen.blit(stats_title2, (100, y_offset))
+            y_offset += 40
+
+            for pitcher_stat in self.game.gameday_manager.get_player_pitcher_stats():
+                stat_text = pitcher_stat.get_summary()
+                stat_surface = pitcher_stats_font.render(stat_text, True, (200, 200, 200))
+                screen.blit(stat_surface, (100, y_offset))
+                y_offset += 30
+
+            # Position buttons on the right side to avoid clipping
+            # Stack them vertically starting from a safe position
+            button_x = 800  # Right side of screen where space is available
+            button_y_start = 500  # Fixed safe position
+            self.game.ui_manager.buttons['final_menu'].set_relative_position((button_x, button_y_start))
+            self.game.ui_manager.buttons['view_game_log'].set_relative_position((button_x, button_y_start + 70))

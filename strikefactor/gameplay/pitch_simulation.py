@@ -2,7 +2,7 @@ import pygame
 import pygame.gfxdraw
 import pandas as pd
 from utils.physics import collision
-from main_refactored import Game
+from main import Game
 
 # Load the model once, ideally passed in or as a singleton
 import pickle
@@ -254,15 +254,18 @@ class PitchSimulation:
         self.made_contact = "hit"
         self.pitch_results_done = True
         self.game.pitchnumber += 1
-        
+
+        # Track score BEFORE hit for gameday mode (MUST be before calling hit_outcome_manager)
+        score_before = self.game.scoreKeeper.get_score() if self.game.in_gameday_mode else 0
+
         # Get swing and ball positions for more realistic outcomes
         mousepos = pygame.mouse.get_pos()
         swing_y = mousepos[1]
         ball_y = self.game.ball[1]
-        
+
         # Calculate timing difference for more realistic outcomes
         timing_diff = abs((self.swing_starttime + 150) - (self.starttime + self.windup + self.traveltime))
-        
+
         if self.swing_type == 1:
             hit_string = self.game.hit_outcome_manager.get_contact_hit_outcome(
                 swing_location_y=swing_y, ball_location_y=ball_y, timing_diff=timing_diff
@@ -271,44 +274,53 @@ class PitchSimulation:
             hit_string = self.game.hit_outcome_manager.get_power_hit_outcome(
                 swing_location_y=swing_y, ball_location_y=ball_y, timing_diff=timing_diff
             )
-        
+
         # Handle different outcomes
         if hit_string in ["FLYOUT", "GROUNDOUT"]:
             self._handle_out_result(hit_string)
         else:
-            self._handle_hit_result(hit_string)
+            self._handle_hit_result(hit_string, score_before)
     
     def _handle_out_result(self, out_type):
         """Handle flyout or groundout results."""
         self.is_hit = False  # This is an out, not a hit
         self.game.currentouts += 1
         self.outcome = out_type
-        
+
         # Display the out result
         self.game.ui_manager.show_banner(out_type)
         self.game._display_pitch_results(out_type, self.pitchtype)
         self.new_entry['isHit'] = out_type
-        
+
+        # Record in gameday mode
+        if self.game.in_gameday_mode:
+            self.game.gameday_manager.record_player_at_bat(out_type, runs_scored=0, pitches_thrown=self.game.pitchnumber)
+
         # Reset counts after out (similar to strikeout)
         self.game.pitchnumber = 0
         self.game.currentstrikes = 0
         self.game.currentballs = 0
     
-    def _handle_hit_result(self, hit_string):
+    def _handle_hit_result(self, hit_string, score_before=0):
         """Handle successful hit results."""
         self.is_hit = True
         self.game.hits += 1
-        
+
         if self.game.hit_outcome_manager.get_homerun_text() != '':
             self.game.ui_manager.show_banner("{}".format(self.game.hit_outcome_manager.get_homerun_text()))
             self.game.homeruns_allowed += 1
         else:
             self.game.ui_manager.show_banner("{}".format(hit_string))
-            
+
         self.game._display_pitch_results(f"HIT - {hit_string}", self.pitchtype)
         self.new_entry['isHit'] = hit_string
         self.outcome = hit_string
-        
+
+        # Record in gameday mode (score has already been updated by hit_outcome_manager)
+        if self.game.in_gameday_mode:
+            runs_scored = self.game.scoreKeeper.get_score() - score_before
+            self.game.gameday_manager.record_player_at_bat(hit_string, runs_scored=runs_scored, pitches_thrown=self.game.pitchnumber)
+
         # Reset counts after hit
         self.game.pitchnumber = 0
         self.game.currentstrikes = 0
@@ -360,9 +372,19 @@ class PitchSimulation:
         if self.game.currentballs == 4:
             self.outcome = 'walk'
             self.game.currentwalks += 1
+
+            # Track score before walk for gameday mode
+            score_before = self.game.scoreKeeper.get_score() if self.game.in_gameday_mode else 0
             self.game.scoreKeeper.update_walk_event()
+            runs_scored = self.game.scoreKeeper.get_score() - score_before
+
             self.game._display_pitch_results("WALK", self.pitchtype)
             self.game.ui_manager.show_banner("WALK")
+
+            # Record in gameday mode
+            if self.game.in_gameday_mode:
+                self.game.gameday_manager.record_player_at_bat('WALK', runs_scored=runs_scored, pitches_thrown=self.game.pitchnumber)
+
             self.game.currentstrikes = 0
             self.game.currentballs = 0
             self.game.pitchnumber = 0
@@ -389,15 +411,20 @@ class PitchSimulation:
             self.outcome = 'strikeout'
             self.game.currentstrikeouts += 1
             self.game.currentouts += 1
-            
+
             if self.game.swing_started == 0:
                 self.new_entry['called_strike'] = True
                 self.game._display_pitch_results("CALLED STRIKE", self.pitchtype)
             else:
                 self.new_entry['swinging_strike'] = True
                 self.game._display_pitch_results("SWINGING STRIKE", self.pitchtype)
-                
+
             self.game.ui_manager.show_banner("STRIKEOUT")
+
+            # Record in gameday mode
+            if self.game.in_gameday_mode:
+                self.game.gameday_manager.record_player_at_bat('STRIKEOUT', runs_scored=0, pitches_thrown=self.game.pitchnumber)
+
             self.game.pitchnumber = 0
             self.game.currentstrikes = 0
             self.game.currentballs = 0

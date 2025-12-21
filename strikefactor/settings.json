@@ -1,8 +1,8 @@
 {
-  "difficulty": "professional",
+  "difficulty": "amateur",
   "umpire_sound": true,
   "master_volume": 1.0,
-  "show_strikezone": false,
+  "show_strikezone": true,
   "batter_handedness": "R",
   "display_mode": "windowed"
 }

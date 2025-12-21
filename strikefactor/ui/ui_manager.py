@@ -75,7 +75,7 @@ class UIManager:
                 text='BATTER', manager=manager),
             'visualise': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((0, 500), (200, 100)),
-                text='VISUALISE', manager=manager),
+                text='TRACK', manager=manager),
 
             # Pitcher selection buttons for main  menu
             'sale': pygame_gui.elements.UIButton(
@@ -98,6 +98,11 @@ class UIManager:
             'random_scenario': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((500, 400), (280, 50)),
                 text='Random Scenario', manager=manager),
+
+            # GameDay mode button
+            'gameday': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((800, 600), (190, 50)),
+                text='GameDay Mode', manager=manager),
 
             # Button for summary screen
             'back_to_main_menu': pygame_gui.elements.UIButton(
@@ -166,15 +171,35 @@ class UIManager:
             'bind_toggle_sound': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((300, 320), (680, 50)),
                 text='Toggle Sound: M', manager=manager),
-            'bind_quick_pitch': pygame_gui.elements.UIButton(
+            'bind_toggle_batter': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((300, 380), (680, 50)),
+                text='Toggle Batter: B', manager=manager),
+            'bind_quick_pitch': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((300, 440), (680, 50)),
                 text='Quick Pitch: Space', manager=manager),
             'bind_view_pitches': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((300, 440), (680, 50)),
+                relative_rect=pygame.Rect((300, 500), (680, 50)),
                 text='View Pitches: V', manager=manager),
             'bind_main_menu': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((300, 500), (680, 50)),
-                text='Main Menu: Escape', manager=manager)
+                relative_rect=pygame.Rect((300, 560), (680, 50)),
+                text='Main Menu: Escape', manager=manager),
+
+            # GameDay mode buttons
+            'start_gameday': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((490, 550), (300, 60)),
+                text='Start Game', manager=manager),
+            'next_inning': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((490, 550), (300, 50)),
+                text='Next Inning', manager=manager),
+            'start_batting': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((490, 550), (300, 50)),
+                text='Start Your At-Bat', manager=manager),
+            'view_game_log': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((490, 620), (300, 40)),
+                text='View Game Log', manager=manager),
+            'final_menu': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((490, 550), (300, 50)),
+                text='Return to Main Menu', manager=manager)
         }
         return buttons
 
@@ -288,6 +313,10 @@ class UIManager:
     def hide_banner(self):
         self.banner.hide()
 
+    def set_visibility_state(self, state):
+        """Alias for set_button_visibility for clearer state-based visibility."""
+        self.set_button_visibility(state)
+
     def set_button_visibility(self, state, force_show=False):
         """Show or hide buttons based on game state ('in_game', 'pitching', 'menu')."""
 
@@ -335,6 +364,7 @@ class UIManager:
             self.buttons['yamamoto'].show()
             self.buttons['mcclanahan'].show()
             self.buttons['random_scenario'].show()
+            self.buttons['gameday'].show()
             self.buttons['settings'].show()
             self.banner.hide()
             self.scoreboard.hide()
@@ -378,10 +408,37 @@ class UIManager:
             self.buttons['bind_toggle_ui'].show()
             self.buttons['bind_toggle_strikezone'].show()
             self.buttons['bind_toggle_sound'].show()
+            self.buttons['bind_toggle_batter'].show()
             self.buttons['bind_quick_pitch'].show()
             self.buttons['bind_view_pitches'].show()
             self.buttons['bind_main_menu'].show()
             self.banner.hide()
+            self.scoreboard.hide()
+            self.pitch_result.hide()
+        elif state == 'gameday_start':
+            # Initial gameday screen with start button
+            self.buttons['start_gameday'].show()
+            self.buttons['main_menu'].show()
+            self.scoreboard.hide()
+            self.pitch_result.hide()
+        elif state == 'gameday_transition':
+            # After player's inning ends, before opponent bats
+            self.buttons['next_inning'].show()
+            self.buttons['view_game_log'].show()
+            self.buttons['main_menu'].show()
+            self.scoreboard.hide()
+            self.pitch_result.hide()
+        elif state == 'gameday_simulation':
+            # After opponent simulation, ready to start player batting
+            self.buttons['start_batting'].show()
+            self.buttons['view_game_log'].show()
+            self.buttons['main_menu'].show()
+            self.scoreboard.hide()
+            self.pitch_result.hide()
+        elif state == 'gameday_final':
+            # Game over screen
+            self.buttons['final_menu'].show()
+            self.buttons['view_game_log'].show()
             self.scoreboard.hide()
             self.pitch_result.hide()
 
@@ -436,6 +493,7 @@ class UIManager:
             KeyAction.TOGGLE_UI: 'bind_toggle_ui',
             KeyAction.TOGGLE_STRIKEZONE: 'bind_toggle_strikezone',
             KeyAction.TOGGLE_SOUND: 'bind_toggle_sound',
+            KeyAction.TOGGLE_BATTER: 'bind_toggle_batter',
             KeyAction.QUICK_PITCH: 'bind_quick_pitch',
             KeyAction.VIEW_PITCHES: 'bind_view_pitches',
             KeyAction.MAIN_MENU: 'bind_main_menu'
