@@ -253,9 +253,9 @@ class Game:
         # Navigation callbacks
         self.ui_manager.register_button_callback('main_menu', lambda: self.set_menu_state(0))
         self.ui_manager.register_button_callback('back_to_main_menu', lambda: self.set_menu_state(0))
-        self.ui_manager.register_button_callback('visualise', lambda: self.set_menu_state('visualise'))
+        self.ui_manager.register_button_callback('visualise', self.toggle_track)
         self.ui_manager.register_button_callback('return_to_game', lambda: self.exit_view_pitches())
-        self.ui_manager.register_button_callback('view_pitches', lambda: self.enter_view_pitches())
+        self.ui_manager.register_button_callback('view_pitches', self.toggle_view_pitches)
         self.ui_manager.register_button_callback('continue_to_summary', lambda: self.continue_to_summary())
         
         # Game control callbacks
@@ -293,6 +293,7 @@ class Game:
         self.ui_manager.register_button_callback('bind_quick_pitch', lambda: self.start_key_rebind(KeyAction.QUICK_PITCH))
         self.ui_manager.register_button_callback('bind_view_pitches', lambda: self.start_key_rebind(KeyAction.VIEW_PITCHES))
         self.ui_manager.register_button_callback('bind_main_menu', lambda: self.start_key_rebind(KeyAction.MAIN_MENU))
+        self.ui_manager.register_button_callback('bind_toggle_track', lambda: self.start_key_rebind(KeyAction.TOGGLE_TRACK))
 
         # Setup key binding system callbacks
         self._setup_key_binding_callbacks()
@@ -532,6 +533,28 @@ class Game:
         self.ui_manager.show_view_window()
         self.menu_state = 'view_pitches'
         self.state_manager.change_state('view_pitches')
+
+    def toggle_view_pitches(self):
+        """Toggle between view pitches mode and gameplay."""
+        if (hasattr(self, 'state_manager') and
+            self.state_manager.current_state and
+            self.state_manager.current_state.__class__.__name__ == 'ViewPitchesState'):
+            # Currently in view pitches mode, return to game
+            self.exit_view_pitches()
+        else:
+            # Not in view pitches mode, enter it
+            self.enter_view_pitches()
+
+    def toggle_track(self):
+        """Toggle between track/visualization mode and gameplay."""
+        if (hasattr(self, 'state_manager') and
+            self.state_manager.current_state and
+            self.state_manager.current_state.__class__.__name__ == 'VisualizationState'):
+            # Currently in visualization mode, return to game
+            self.exit_view_pitches()  # Uses same exit logic
+        else:
+            # Not in visualization mode, enter it
+            self.set_menu_state('visualise')
         
     def toggle_ump_sound(self):
         """Toggle umpire sound effects."""
@@ -590,8 +613,9 @@ class Game:
         self.key_binding_manager.register_callback(KeyAction.TOGGLE_SOUND, self.toggle_umpire_sound_setting)
         self.key_binding_manager.register_callback(KeyAction.TOGGLE_BATTER, lambda: self.batter.toggle_handedness())
         self.key_binding_manager.register_callback(KeyAction.QUICK_PITCH, self.quick_pitch)
-        self.key_binding_manager.register_callback(KeyAction.VIEW_PITCHES, self.enter_view_pitches)
+        self.key_binding_manager.register_callback(KeyAction.VIEW_PITCHES, self.toggle_view_pitches)
         self.key_binding_manager.register_callback(KeyAction.MAIN_MENU, lambda: self.set_menu_state(0))
+        self.key_binding_manager.register_callback(KeyAction.TOGGLE_TRACK, self.toggle_track)
 
     def enter_key_bindings_menu(self):
         """Enter key bindings configuration menu."""

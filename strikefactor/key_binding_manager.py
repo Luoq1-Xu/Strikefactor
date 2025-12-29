@@ -12,6 +12,7 @@ class KeyAction(Enum):
     QUICK_PITCH = "quick_pitch"
     VIEW_PITCHES = "view_pitches"
     MAIN_MENU = "main_menu"
+    TOGGLE_TRACK = "toggle_track"
 
 class KeyBindingManager:
     def __init__(self, settings_manager):
@@ -25,7 +26,8 @@ class KeyBindingManager:
             KeyAction.TOGGLE_BATTER.value: pygame.K_b,
             KeyAction.QUICK_PITCH.value: pygame.K_SPACE,
             KeyAction.VIEW_PITCHES.value: pygame.K_v,
-            KeyAction.MAIN_MENU.value: pygame.K_ESCAPE
+            KeyAction.MAIN_MENU.value: pygame.K_ESCAPE,
+            KeyAction.TOGGLE_TRACK.value: pygame.K_t
         }
 
         self.current_bindings = self.load_bindings()
@@ -98,7 +100,8 @@ class KeyBindingManager:
             KeyAction.TOGGLE_BATTER: "Toggle Batter",
             KeyAction.QUICK_PITCH: "Quick Pitch",
             KeyAction.VIEW_PITCHES: "View Pitches",
-            KeyAction.MAIN_MENU: "Main Menu"
+            KeyAction.MAIN_MENU: "Main Menu",
+            KeyAction.TOGGLE_TRACK: "Toggle Track"
         }
         return action_names.get(action, action.value.replace('_', ' ').title())
 
