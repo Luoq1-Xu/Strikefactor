@@ -1,4 +1,5 @@
 from .pitcher import Pitcher
+from utils.physics import calculate_travel_time
 import random
 import pygame
 
@@ -9,14 +10,15 @@ class Mcclanahan(Pitcher):
                          (screen.get_height() / 3) + 175,
                          pygame.Vector2((screen.get_width() / 2) + 28, (screen.get_height() / 3) + 193),
                          screen,
-                         'Shane Mcclanahan', 
-                         1200)
+                         'Shane Mcclanahan',
+                         1200,
+                         7.0)  # arm_extension in feet
         self.load_img(loadfunc, 'assets/images/mcclanahan/', 17)
-        #self.add_pitch_type(self.CB, "CB")
+        self.add_pitch_type(self.CB, "CB")
         self.add_pitch_type(self.SLD, "SLD")
-        #self.add_pitch_type(self.CHD, "CHD")
+        self.add_pitch_type(self.CH, "CH")
         self.add_pitch_type(self.FFI, "FFI")
-        #self.add_pitch_type(self.FFU, "FFU")
+        self.add_pitch_type(self.FFU, "FFU")
         #self.add_pitch_type(self.CHI, "CHI")
         #self.add_pitch_type(self.CBO, "CBO")
         #self.add_pitch_type(self.FFO, "FFO")
@@ -60,42 +62,57 @@ class Mcclanahan(Pitcher):
             self.draw(self.screen, 17, -3, 25)
 
     def FFU(self, simulation_func):
-            sampley = random.uniform(-25,15)
+            sampley = random.uniform(-25,20)
             samplex = random.uniform(-25,10)
-            simulation_func(self.release_point, 'shanemcclanahan', 0.015, 0.010, samplex, sampley, 375, 'FF')
+            speed_mph = 97.0
+            travel_time = calculate_travel_time(speed_mph, self.arm_extension)
+            simulation_func(self.release_point, 'shanemcclanahan', 0.015, 0.010, samplex, sampley, travel_time, 'FF')
 
     def FFI(self, simulation_func):
         sampley = random.uniform(-15,15)
         samplex = random.uniform(-30,-35)
-        simulation_func(self.release_point, 'shanemcclanahan', 0.005, 0.010, samplex, sampley, 375, 'FF')
+        speed_mph = 97.0
+        travel_time = calculate_travel_time(speed_mph, self.arm_extension)
+        simulation_func(self.release_point, 'shanemcclanahan', 0.005, 0.010, samplex, sampley, travel_time, 'FF')
 
     def FFO(self, simulation_func):
         sampley = random.uniform(10,25)
         samplex = random.uniform(8,10)
-        simulation_func(self.release_point, 'shanemcclanahan', 0.005, 0.010, samplex, sampley, 375, 'FF')
+        speed_mph = 97.0
+        travel_time = calculate_travel_time(speed_mph, self.arm_extension)
+        simulation_func(self.release_point, 'shanemcclanahan', 0.005, 0.010, samplex, sampley, travel_time, 'FF')
 
     def SLD(self, simulation_func):
             sampley = random.uniform(-10, 15)
             samplex = random.uniform(-25,15)
-            simulation_func(self.release_point, 'shanemcclanahan', -0.01, 0.0350, samplex, sampley, 440, 'SL')
+            speed_mph = 83.0
+            travel_time = calculate_travel_time(speed_mph, self.arm_extension)
+            simulation_func(self.release_point, 'shanemcclanahan', -0.01, 0.0350, samplex, sampley, travel_time, 'SL')
 
     def CHD(self, main_simulation):
         sampley = random.uniform(-5,15)
         samplex = random.uniform(-20,10)
-        main_simulation(self.release_point, 'shanemcclanahan', 0.015, 0.0275, samplex, sampley, 420, 'CH')
+        speed_mph = 87.0
+        travel_time = calculate_travel_time(speed_mph, self.arm_extension)
+        main_simulation(self.release_point, 'shanemcclanahan', 0.015, 0.0275, samplex, sampley, travel_time, 'CH')
 
     def CB(self, simulation_func):
             sampley = random.uniform(-25, 5)
             samplex = random.uniform(-25,15)
-            simulation_func(self.release_point, 'shanemcclanahan', -0.01, 0.0450, samplex, sampley, 470, 'CB')
+            speed_mph = 78.0
+            travel_time = calculate_travel_time(speed_mph, self.arm_extension)
+            simulation_func(self.release_point, 'shanemcclanahan', -0.01, 0.0450, samplex, sampley, travel_time, 'CB')
 
     def CBO(self, simulation_func):
             sampley = random.uniform(-20, 5)
             samplex = random.uniform(10,15)
-            simulation_func(self.release_point, 'shanemcclanahan', -0.01, 0.0450, samplex, sampley, 470, 'CB')
+            speed_mph = 78.0
+            travel_time = calculate_travel_time(speed_mph, self.arm_extension)
+            simulation_func(self.release_point, 'shanemcclanahan', -0.01, 0.0450, samplex, sampley, travel_time, 'CB')
 
-    # CHI - Changeup Inside
-    def CHI(self, simulation_func):
-        sampley = random.uniform(-5, 20)
+    def CH(self, simulation_func):
+        sampley = random.uniform(-10, 20)
         samplex = random.uniform(-45, 0)
-        simulation_func(self.release_point, 'shanemcclanahan', 0.015, 0.0275, samplex, sampley, 375, 'CH')
+        speed_mph = 87.0
+        travel_time = calculate_travel_time(speed_mph, self.arm_extension)
+        simulation_func(self.release_point, 'shanemcclanahan', 0.015, 0.0275, samplex, sampley, travel_time, 'CH')
