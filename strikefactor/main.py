@@ -732,11 +732,13 @@ class Game:
             # Clear rebind state
             self.key_rebind_action = None
 
-
-    def _display_pitch_results(self, outcome: str, pitchtype: str):
+    def _display_pitch_results(self, outcome: str, pitchtype: str, traveltime: float):
         """Display pitch results on the UI."""
+        # Calculate velocity in MPH using effective distance (60.5 feet - arm extension)
+        distance = 60.5 - self.current_pitcher.arm_extension
+        velocity_mph = (distance / (traveltime / 1000)) * (3600 / 5280)
         pitch_result_string = (
-            f"<font size=5>PITCH {self.pitchnumber}: {pitchtype}<br>{outcome}<br>"
+            f"<font size=5>PITCH {self.pitchnumber}: {pitchtype} {velocity_mph:.1f} MPH<br>{outcome}<br>"
             f"COUNT IS {self.currentballs} - {self.currentstrikes}</font>"
         )
         game_status_result_string = (
@@ -835,7 +837,6 @@ def main():
     game.run()
     pygame.quit()
     sys.exit()
-
 
 if __name__ == "__main__":
     main()

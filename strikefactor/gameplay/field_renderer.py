@@ -396,7 +396,7 @@ class FieldRenderer:
             with open(self.data_file, 'w') as f:
                 json.dump(data, f, indent=2)
                 
-            print(f"✓ Batting statistics saved to {self.data_file}")
+            # print(f"✓ Batting statistics saved to {self.data_file}")
             
         except Exception as e:
             print(f"✗ Error saving batting statistics: {e}")

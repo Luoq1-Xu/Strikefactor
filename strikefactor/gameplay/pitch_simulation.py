@@ -246,7 +246,7 @@ class PitchSimulation:
         self.game.pitchnumber += 1
         if self.game.currentstrikes < 2:
             self.game.currentstrikes += 1
-        self.game._display_pitch_results("FOUL", self.pitchtype)
+        self.game._display_pitch_results("FOUL", self.pitchtype, self.traveltime)
         
     def _handle_successful_hit(self):
         """Handle successful hit outcome."""
@@ -289,7 +289,7 @@ class PitchSimulation:
 
         # Display the out result
         self.game.ui_manager.show_banner(out_type)
-        self.game._display_pitch_results(out_type, self.pitchtype)
+        self.game._display_pitch_results(out_type, self.pitchtype, self.traveltime)
         self.new_entry['isHit'] = out_type
 
         # Record in gameday mode
@@ -312,7 +312,7 @@ class PitchSimulation:
         else:
             self.game.ui_manager.show_banner("{}".format(hit_string))
 
-        self.game._display_pitch_results(f"HIT - {hit_string}", self.pitchtype)
+        self.game._display_pitch_results(f"HIT - {hit_string}", self.pitchtype, self.traveltime)
         self.new_entry['isHit'] = hit_string
         self.outcome = hit_string
 
@@ -378,7 +378,7 @@ class PitchSimulation:
             self.game.scoreKeeper.update_walk_event()
             runs_scored = self.game.scoreKeeper.get_score() - score_before
 
-            self.game._display_pitch_results("WALK", self.pitchtype)
+            self.game._display_pitch_results("WALK", self.pitchtype, self.traveltime)
             self.game.ui_manager.show_banner("WALK")
 
             # Record in gameday mode
@@ -390,7 +390,7 @@ class PitchSimulation:
             self.game.pitchnumber = 0
         else:
             self.outcome = 'ball'
-            self.game._display_pitch_results("BALL", self.pitchtype)
+            self.game._display_pitch_results("BALL", self.pitchtype, self.traveltime)
             
     def _handle_strike_call(self):
         """Handle strike call."""
@@ -414,10 +414,10 @@ class PitchSimulation:
 
             if self.game.swing_started == 0:
                 self.new_entry['called_strike'] = True
-                self.game._display_pitch_results("CALLED STRIKE", self.pitchtype)
+                self.game._display_pitch_results("CALLED STRIKE", self.pitchtype, self.traveltime)
             else:
                 self.new_entry['swinging_strike'] = True
-                self.game._display_pitch_results("SWINGING STRIKE", self.pitchtype)
+                self.game._display_pitch_results("SWINGING STRIKE", self.pitchtype, self.traveltime)
 
             self.game.ui_manager.show_banner("STRIKEOUT")
 
@@ -432,10 +432,10 @@ class PitchSimulation:
             self.outcome = 'strike'
             if self.game.swing_started == 0:
                 self.new_entry['called_strike'] = True
-                self.game._display_pitch_results("CALLED STRIKE", self.pitchtype)
+                self.game._display_pitch_results("CALLED STRIKE", self.pitchtype, self.traveltime)
             else:
                 self.new_entry['swinging_strike'] = True
-                self.game._display_pitch_results("SWINGING STRIKE", self.pitchtype)
+                self.game._display_pitch_results("SWINGING STRIKE", self.pitchtype, self.traveltime)
                 
     def _draw_batter(self, current_time):
         """Draw the batter in appropriate stance/swing."""

@@ -298,9 +298,6 @@ class SummaryState(GameState):
         
     def _update_pitcher_stats(self):
         """Update pitcher statistics."""
-        print("\n <--- OVERALL SUMMARY  ---> \n")
-        print(self.game.current_pitcher.name + " stats")
-        
         stats_update = {
             'strikeouts': self.game.currentstrikeouts,
             'walks': self.game.currentwalks,
@@ -309,7 +306,7 @@ class SummaryState(GameState):
             'runs': self.game.scoreKeeper.get_score(),
             'pitch_count': self.game.current_pitches
         }
-        
+
         basic_stats_update = {
             'strikes': self.game.strikes,
             'balls': self.game.balls,
@@ -321,13 +318,10 @@ class SummaryState(GameState):
             'home_runs_allowed': self.game.homeruns_allowed,
             'pitch_count': self.game.current_pitches
         }
-        
+
         self.game.current_pitcher.update_stats(stats_update)
         self.game.current_pitcher.update_basic_stats(basic_stats_update)
-        self.game.current_pitcher.print_stats()
-        print("\n <--- Accumulated Stats ---> \n")
-        self.game.current_pitcher.print_basic_stats()
-        print()
+        self.game.current_pitcher.print_formatted_stats()
         
     def update(self, time_delta: float):
         """Update summary typing effect."""

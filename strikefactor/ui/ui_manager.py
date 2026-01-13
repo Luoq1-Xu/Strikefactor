@@ -183,6 +183,9 @@ class UIManager:
             'bind_main_menu': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((300, 560), (680, 50)),
                 text='Main Menu: Escape', manager=manager),
+            'bind_toggle_track': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((300, 620), (680, 50)),
+                text='Toggle Track: T', manager=manager),
 
             # GameDay mode buttons
             'start_gameday': pygame_gui.elements.UIButton(
@@ -354,9 +357,17 @@ class UIManager:
             # All buttons are hidden during the pitch animation
             pass
         elif state == 'view_pitches':
-            self.buttons['return_to_game'].show()
-            self.buttons['main_menu'].show()
+            # Show the same buttons as in_game so they can toggle back
             self.buttons['strikezone'].show()
+            self.buttons['main_menu'].show()
+            self.buttons['toggle_ump_sound'].show()
+            self.buttons['view_pitches'].show()
+            self.buttons['toggle_batter'].show()
+            self.buttons['visualise'].show()
+            self.buttons['pitch'].show()
+            if not self.key_binding_manager or self.key_binding_manager.is_ui_visible():
+                self.scoreboard.show()
+                self.pitch_result.show()
         elif state == 'main_menu':
             self.buttons['sale'].show()
             self.buttons['degrom'].show()
@@ -370,9 +381,17 @@ class UIManager:
             self.scoreboard.hide()
             self.pitch_result.hide()
         elif state == "visualise":
-            self.buttons['return_to_game'].show()
-            self.buttons['main_menu'].show()
+            # Show the same buttons as in_game so they can toggle back
             self.buttons['strikezone'].show()
+            self.buttons['main_menu'].show()
+            self.buttons['toggle_ump_sound'].show()
+            self.buttons['view_pitches'].show()
+            self.buttons['toggle_batter'].show()
+            self.buttons['visualise'].show()
+            self.buttons['pitch'].show()
+            if not self.key_binding_manager or self.key_binding_manager.is_ui_visible():
+                self.scoreboard.show()
+                self.pitch_result.show()
         elif state == 'summary':
             self.buttons['back_to_main_menu'].show()
             self.banner.hide()
@@ -412,6 +431,7 @@ class UIManager:
             self.buttons['bind_quick_pitch'].show()
             self.buttons['bind_view_pitches'].show()
             self.buttons['bind_main_menu'].show()
+            self.buttons['bind_toggle_track'].show()
             self.banner.hide()
             self.scoreboard.hide()
             self.pitch_result.hide()
@@ -496,7 +516,8 @@ class UIManager:
             KeyAction.TOGGLE_BATTER: 'bind_toggle_batter',
             KeyAction.QUICK_PITCH: 'bind_quick_pitch',
             KeyAction.VIEW_PITCHES: 'bind_view_pitches',
-            KeyAction.MAIN_MENU: 'bind_main_menu'
+            KeyAction.MAIN_MENU: 'bind_main_menu',
+            KeyAction.TOGGLE_TRACK: 'bind_toggle_track'
         }
 
         for action, button_key in bindings.items():
