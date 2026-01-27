@@ -3,6 +3,7 @@ import pygame.gfxdraw
 import pandas as pd
 from utils.physics import collision
 from main import Game
+from helpers import EnhancedPitchRecord
 
 # Load the model once, ideally passed in or as a singleton
 import pickle
@@ -466,6 +467,43 @@ class PitchSimulation:
         from ui.components import create_pci_cursor
         pygame.mouse.set_cursor(create_pci_cursor())
         self.cleanup()
+
+    def _calculate_velocity_mph(self) -> float:
+        """Calculate pitch velocity in MPH from travel time.
+
+        Uses the relationship: distance = velocity * time
+        Mound distance is ~60.5 feet, minus arm extension (~6.5 feet).
+        """
+        arm_extension = getattr(self.game.current_pitcher, 'arm_extension', 6.5)
+        distance_feet = 60.5 - arm_extension
+        # traveltime is in milliseconds
+        # velocity = distance / time, convert to mph
+        if self.traveltime > 0:
+            velocity_fps = (distance_feet * 1000) / self.traveltime  # feet per second
+            velocity_mph = velocity_fps * 3600 / 5280  # convert to mph
+            return velocity_mph
+        return 0.0
+
+    def _get_outcome_display(self) -> str:
+        """Get display-friendly outcome string from internal outcome."""
+        outcome = getattr(self, 'outcome', None)
+        if outcome:
+            outcome_map = {
+                'strike': 'STRIKE',
+                'ball': 'BALL',
+                'foul': 'FOUL',
+                'strikeout': 'STRIKEOUT',
+                'walk': 'WALK',
+                'SINGLE': 'SINGLE',
+                'DOUBLE': 'DOUBLE',
+                'TRIPLE': 'TRIPLE',
+                'HOME RUN': 'HOME RUN',
+                'FLYOUT': 'FLYOUT',
+                'GROUNDOUT': 'GROUNDOUT',
+                'LINEOUT': 'LINEOUT',
+            }
+            return outcome_map.get(outcome, outcome.upper() if isinstance(outcome, str) else 'UNKNOWN')
+        return 'UNKNOWN'
         
     def cleanup(self):
         """Clean up after pitch completion."""
@@ -516,3 +554,16 @@ class PitchSimulation:
         self.game.pitch_trajectories.append(self.game.last_pitch_information)
         self.game.pitches_display.append((self.game.ball[0], self.game.ball[1]))
         self.game.current_pitches += 1
+
+        # Create enhanced pitch record for visualization
+        if hasattr(self.game, 'enhanced_pitch_records'):
+            enhanced_record = EnhancedPitchRecord(
+                trajectory=self.game.last_pitch_information.copy(),
+                pitch_type=self.pitchtype,
+                velocity_mph=self._calculate_velocity_mph(),
+                outcome=self._get_outcome_display(),
+                final_location=(self.game.ball[0], self.game.ball[1]),
+                index=len(self.game.enhanced_pitch_records),
+                selected=False
+            )
+            self.game.enhanced_pitch_records.append(enhanced_record)

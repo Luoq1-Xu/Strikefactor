@@ -2,7 +2,9 @@
   "toggle_ui": 104,
   "toggle_strikezone": 115,
   "toggle_sound": 109,
+  "toggle_batter": 98,
   "quick_pitch": 32,
   "view_pitches": 118,
-  "main_menu": 27
+  "main_menu": 27,
+  "toggle_track": 116
 }

@@ -16,6 +16,8 @@ class Sale(Pitcher):
         self.load_img(loadfunc, 'assets/images/sale/LEFTY', 9)
         self.add_pitch_type(self.FF, 'FF')
         self.add_pitch_type(self.SL, 'SL')
+        self.add_pitch_type(self.CH, 'CH')
+        self.add_pitch_type(self.SI, 'SI')
 
     def draw_pitcher(self, start_time, current_time):
         if current_time == 0 and start_time == 0:
@@ -79,5 +81,43 @@ class Sale(Pitcher):
 
         simulation_func(self.release_point, 'chrissale', ax, ay, vx, vy, travel_time, 'FF')
 
+    def SI(self, simulation_func):
+        ax, ay = 0.025, 0.015
+        speed_mph = random.gauss(92.0, 0.25)
+        travel_time = calculate_travel_time(speed_mph, self.arm_extension)
 
+        # Specify target location directly (with optional randomness)
+        target_x = random.uniform(490, 670)  # x position at plate
+        target_y = random.uniform(420, 600)  # y position at plate
+
+        vx, vy = calculate_pitch_velocity(
+            self.release_point,
+            target_x=target_x,
+            target_y=target_y,
+            ax=ax,
+            ay=ay,
+            traveltime=travel_time
+        )
+
+        simulation_func(self.release_point, 'chrissale', ax, ay, vx, vy, travel_time, 'SI')
+
+    def CH(self, simulation_func):
+        ax, ay = 0.015, 0.025
+        speed_mph = random.gauss(87.0, 0.50)
+        travel_time = calculate_travel_time(speed_mph, self.arm_extension)
+
+        # Specify target location directly (with optional randomness)
+        target_x = random.uniform(490, 670)  # x position at plate
+        target_y = random.uniform(420, 600)  # y position at plate
+
+        vx, vy = calculate_pitch_velocity(
+            self.release_point,
+            target_x=target_x,
+            target_y=target_y,
+            ax=ax,
+            ay=ay,
+            traveltime=travel_time
+        )
+
+        simulation_func(self.release_point, 'chrissale', ax, ay, vx, vy, travel_time, 'CH')
 

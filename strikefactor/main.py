@@ -234,6 +234,7 @@ class Game:
         self.inning_ended = False
         self.pitches_display = []
         self.pitch_trajectories = []
+        self.enhanced_pitch_records = []  # Enhanced pitch data for visualization
         self.last_pitch_information = []
         
         # Load AI model
@@ -439,6 +440,8 @@ class Game:
         self.inning_ended = False
         self.just_refreshed = 1
         self.pitches_display = []
+        self.pitch_trajectories = []
+        self.enhanced_pitch_records = []
         crosshair = create_pci_cursor()
         pygame.mouse.set_cursor(crosshair)
         self.state_manager.handle_menu_state_change(gamemode_name)

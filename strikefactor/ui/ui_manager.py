@@ -124,33 +124,33 @@ class UIManager:
 
             # Difficulty selection buttons
             'difficulty_rookie': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((300, 200), (200, 50)),
+                relative_rect=pygame.Rect((360, 200), (160, 50)),
                 text='Rookie', manager=manager),
             'difficulty_amateur': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((520, 200), (200, 50)),
+                relative_rect=pygame.Rect((540, 200), (160, 50)),
                 text='Amateur', manager=manager),
             'difficulty_professional': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((740, 200), (200, 50)),
+                relative_rect=pygame.Rect((720, 200), (160, 50)),
                 text='Professional', manager=manager),
             'difficulty_allstar': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((410, 280), (200, 50)),
+                relative_rect=pygame.Rect((450, 270), (160, 50)),
                 text='All-Star', manager=manager),
             'difficulty_halloffame': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((630, 280), (200, 50)),
+                relative_rect=pygame.Rect((630, 270), (160, 50)),
                 text='Hall of Fame', manager=manager),
 
             # Other settings toggles
             'toggle_ump_sound_settings': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((350, 350), (250, 50)),
+                relative_rect=pygame.Rect((390, 360), (220, 50)),
                 text='Umpire Sound: ON', manager=manager),
             'toggle_strikezone_settings': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((620, 350), (250, 50)),
+                relative_rect=pygame.Rect((630, 360), (220, 50)),
                 text='Strikezone: ON', manager=manager),
             'key_bindings': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((485, 420), (250, 50)),
+                relative_rect=pygame.Rect((515, 450), (250, 50)),
                 text='Key Bindings', manager=manager),
             'reset_settings': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((485, 490), (250, 50)),
+                relative_rect=pygame.Rect((515, 520), (250, 50)),
                 text='Reset to Defaults', manager=manager),
 
             # Key binding configuration buttons
@@ -218,7 +218,7 @@ class UIManager:
             manager=self.manager
         )
         self.banner = pygame_gui.elements.UILabel(
-            relative_rect=pygame.Rect((200, 0), (880, 100)),
+            relative_rect=pygame.Rect((150, 0), (980, 100)),
             manager=self.manager,
             text=""
         )
@@ -302,8 +302,12 @@ class UIManager:
         self.container.add_element(scoreboard)
 
     def update_pitch_info(self, pitch_trajectories, last_pitch_info):
-        """Updates pitch information in the view window."""
+        """Updates pitch information in the view window (legacy method)."""
         self.view_window.update_pitch_info(pitch_trajectories, last_pitch_info)
+
+    def update_pitch_info_enhanced(self, enhanced_records):
+        """Updates pitch information with enhanced record data for advanced visualization."""
+        self.view_window.update_pitch_info_enhanced(enhanced_records)
 
     def show_view_window(self):
         """Shows the pitch view window."""

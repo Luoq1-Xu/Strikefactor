@@ -64,7 +64,7 @@ class Degrom(Pitcher):
 
     def FB_strike(self, simulation_func):
         ax, ay = -0.0075, 0.005
-        speed_mph = random.gauss(98.0, 0.5)
+        speed_mph = random.gauss(99.0, 1.0)
         travel_time = calculate_travel_time(speed_mph, self.arm_extension)
 
         # Specify target location directly (with optional randomness)
@@ -84,7 +84,7 @@ class Degrom(Pitcher):
 
     def FB_chase(self, simulation_func):
         ax, ay = -0.0075, 0.005
-        speed_mph = random.gauss(98.0, 2.5)
+        speed_mph = random.gauss(99.0, 2.5)
         travel_time = calculate_travel_time(speed_mph, self.arm_extension)
 
         # Specify target location directly (with optional randomness)

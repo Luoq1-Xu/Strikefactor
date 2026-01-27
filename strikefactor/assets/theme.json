@@ -84,6 +84,28 @@
              "text_shadow_offset": "0,0",
              "line_spacing": "1.5"
          }
+    },
+
+    "@pitchviz_label":
+    {
+        "colours":
+        {
+            "normal_text": "#FFFFFF"
+        },
+
+        "font":
+        {
+            "name": "8bitoperator_jve",
+            "size": "16",
+            "bold": "0",
+            "italic": "0",
+            "regular_path": "8bitoperator_jve.ttf"
+        },
+
+        "misc":
+         {
+             "text_shadow": "0"
+         }
     }
 
 }

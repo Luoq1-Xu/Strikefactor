@@ -451,9 +451,16 @@ class ViewPitchesState(GameState):
     def enter(self):
         """Initialize view pitches state."""
         self.game.ui_manager.set_button_visibility('view_pitches')
-        self.game.ui_manager.update_pitch_info(
-            self.game.pitch_trajectories, self.game.last_pitch_information
-        )
+
+        # Use enhanced records if available, otherwise fall back to legacy
+        if hasattr(self.game, 'enhanced_pitch_records') and self.game.enhanced_pitch_records:
+            self.game.ui_manager.update_pitch_info_enhanced(
+                self.game.enhanced_pitch_records
+            )
+        else:
+            self.game.ui_manager.update_pitch_info(
+                self.game.pitch_trajectories, self.game.last_pitch_information
+            )
         self.game.ui_manager.show_view_window()
         
     def exit(self):
