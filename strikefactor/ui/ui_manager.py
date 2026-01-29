@@ -75,7 +75,7 @@ class UIManager:
                 text='BATTER', manager=manager),
             'visualise': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((0, 500), (200, 100)),
-                text='VISUALISE', manager=manager),
+                text='TRACK', manager=manager),
 
             # Pitcher selection buttons for main  menu
             'sale': pygame_gui.elements.UIButton(
@@ -99,6 +99,11 @@ class UIManager:
                 relative_rect=pygame.Rect((500, 400), (280, 50)),
                 text='Random Scenario', manager=manager),
 
+            # GameDay mode button
+            'gameday': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((800, 600), (190, 50)),
+                text='GameDay Mode', manager=manager),
+
             # Button for summary screen
             'back_to_main_menu': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((540, 530), (200, 50)),
@@ -119,33 +124,40 @@ class UIManager:
 
             # Difficulty selection buttons
             'difficulty_rookie': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((300, 200), (200, 50)),
+                relative_rect=pygame.Rect((360, 200), (160, 50)),
                 text='Rookie', manager=manager),
             'difficulty_amateur': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((520, 200), (200, 50)),
+                relative_rect=pygame.Rect((540, 200), (160, 50)),
                 text='Amateur', manager=manager),
             'difficulty_professional': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((740, 200), (200, 50)),
+                relative_rect=pygame.Rect((720, 200), (160, 50)),
                 text='Professional', manager=manager),
             'difficulty_allstar': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((410, 280), (200, 50)),
+                relative_rect=pygame.Rect((450, 270), (160, 50)),
                 text='All-Star', manager=manager),
             'difficulty_halloffame': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((630, 280), (200, 50)),
+                relative_rect=pygame.Rect((630, 270), (160, 50)),
                 text='Hall of Fame', manager=manager),
 
             # Other settings toggles
             'toggle_ump_sound_settings': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((350, 350), (250, 50)),
+                relative_rect=pygame.Rect((390, 360), (220, 50)),
                 text='Umpire Sound: ON', manager=manager),
             'toggle_strikezone_settings': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((620, 350), (250, 50)),
+                relative_rect=pygame.Rect((630, 360), (220, 50)),
                 text='Strikezone: ON', manager=manager),
+            # FPS settings buttons (cycle-style)
+            'display_fps_setting': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((390, 430), (220, 50)),
+                text='Display FPS: 60', manager=manager),
+            'engine_fps_setting': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((630, 430), (220, 50)),
+                text='Engine FPS: 60', manager=manager),
             'key_bindings': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((485, 420), (250, 50)),
+                relative_rect=pygame.Rect((515, 500), (250, 50)),
                 text='Key Bindings', manager=manager),
             'reset_settings': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((485, 490), (250, 50)),
+                relative_rect=pygame.Rect((515, 570), (250, 50)),
                 text='Reset to Defaults', manager=manager),
 
             # Key binding configuration buttons
@@ -166,15 +178,38 @@ class UIManager:
             'bind_toggle_sound': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((300, 320), (680, 50)),
                 text='Toggle Sound: M', manager=manager),
-            'bind_quick_pitch': pygame_gui.elements.UIButton(
+            'bind_toggle_batter': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((300, 380), (680, 50)),
+                text='Toggle Batter: B', manager=manager),
+            'bind_quick_pitch': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((300, 440), (680, 50)),
                 text='Quick Pitch: Space', manager=manager),
             'bind_view_pitches': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((300, 440), (680, 50)),
+                relative_rect=pygame.Rect((300, 500), (680, 50)),
                 text='View Pitches: V', manager=manager),
             'bind_main_menu': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((300, 500), (680, 50)),
-                text='Main Menu: Escape', manager=manager)
+                relative_rect=pygame.Rect((300, 560), (680, 50)),
+                text='Main Menu: Escape', manager=manager),
+            'bind_toggle_track': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((300, 620), (680, 50)),
+                text='Toggle Track: T', manager=manager),
+
+            # GameDay mode buttons
+            'start_gameday': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((490, 550), (300, 60)),
+                text='Start Game', manager=manager),
+            'next_inning': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((490, 550), (300, 50)),
+                text='Next Inning', manager=manager),
+            'start_batting': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((490, 550), (300, 50)),
+                text='Start Your At-Bat', manager=manager),
+            'view_game_log': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((490, 620), (300, 40)),
+                text='View Game Log', manager=manager),
+            'final_menu': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((490, 550), (300, 50)),
+                text='Return to Main Menu', manager=manager)
         }
         return buttons
 
@@ -190,7 +225,7 @@ class UIManager:
             manager=self.manager
         )
         self.banner = pygame_gui.elements.UILabel(
-            relative_rect=pygame.Rect((200, 0), (880, 100)),
+            relative_rect=pygame.Rect((150, 0), (980, 100)),
             manager=self.manager,
             text=""
         )
@@ -274,19 +309,31 @@ class UIManager:
         self.container.add_element(scoreboard)
 
     def update_pitch_info(self, pitch_trajectories, last_pitch_info):
-        """Updates pitch information in the view window."""
+        """Updates pitch information in the view window (legacy method)."""
         self.view_window.update_pitch_info(pitch_trajectories, last_pitch_info)
+
+    def update_pitch_info_enhanced(self, enhanced_records):
+        """Updates pitch information with enhanced record data for advanced visualization."""
+        self.view_window.update_pitch_info_enhanced(enhanced_records)
 
     def show_view_window(self):
         """Shows the pitch view window."""
         self.view_window.show()
-        
+
     def hide_view_window(self):
         """Hides the pitch view window."""
         self.view_window.hide()
 
+    def update_view_window_fps(self, display_fps):
+        """Update the view window's display FPS for animation timing."""
+        self.view_window.set_display_fps(display_fps)
+
     def hide_banner(self):
         self.banner.hide()
+
+    def set_visibility_state(self, state):
+        """Alias for set_button_visibility for clearer state-based visibility."""
+        self.set_button_visibility(state)
 
     def set_button_visibility(self, state, force_show=False):
         """Show or hide buttons based on game state ('in_game', 'pitching', 'menu')."""
@@ -325,9 +372,17 @@ class UIManager:
             # All buttons are hidden during the pitch animation
             pass
         elif state == 'view_pitches':
-            self.buttons['return_to_game'].show()
-            self.buttons['main_menu'].show()
+            # Show the same buttons as in_game so they can toggle back
             self.buttons['strikezone'].show()
+            self.buttons['main_menu'].show()
+            self.buttons['toggle_ump_sound'].show()
+            self.buttons['view_pitches'].show()
+            self.buttons['toggle_batter'].show()
+            self.buttons['visualise'].show()
+            self.buttons['pitch'].show()
+            if not self.key_binding_manager or self.key_binding_manager.is_ui_visible():
+                self.scoreboard.show()
+                self.pitch_result.show()
         elif state == 'main_menu':
             self.buttons['sale'].show()
             self.buttons['degrom'].show()
@@ -335,14 +390,23 @@ class UIManager:
             self.buttons['yamamoto'].show()
             self.buttons['mcclanahan'].show()
             self.buttons['random_scenario'].show()
+            self.buttons['gameday'].show()
             self.buttons['settings'].show()
             self.banner.hide()
             self.scoreboard.hide()
             self.pitch_result.hide()
         elif state == "visualise":
-            self.buttons['return_to_game'].show()
-            self.buttons['main_menu'].show()
+            # Show the same buttons as in_game so they can toggle back
             self.buttons['strikezone'].show()
+            self.buttons['main_menu'].show()
+            self.buttons['toggle_ump_sound'].show()
+            self.buttons['view_pitches'].show()
+            self.buttons['toggle_batter'].show()
+            self.buttons['visualise'].show()
+            self.buttons['pitch'].show()
+            if not self.key_binding_manager or self.key_binding_manager.is_ui_visible():
+                self.scoreboard.show()
+                self.pitch_result.show()
         elif state == 'summary':
             self.buttons['back_to_main_menu'].show()
             self.banner.hide()
@@ -367,6 +431,8 @@ class UIManager:
             self.buttons['difficulty_halloffame'].show()
             self.buttons['toggle_ump_sound_settings'].show()
             self.buttons['toggle_strikezone_settings'].show()
+            self.buttons['display_fps_setting'].show()
+            self.buttons['engine_fps_setting'].show()
             self.buttons['key_bindings'].show()
             self.buttons['reset_settings'].show()
             self.banner.hide()
@@ -378,10 +444,38 @@ class UIManager:
             self.buttons['bind_toggle_ui'].show()
             self.buttons['bind_toggle_strikezone'].show()
             self.buttons['bind_toggle_sound'].show()
+            self.buttons['bind_toggle_batter'].show()
             self.buttons['bind_quick_pitch'].show()
             self.buttons['bind_view_pitches'].show()
             self.buttons['bind_main_menu'].show()
+            self.buttons['bind_toggle_track'].show()
             self.banner.hide()
+            self.scoreboard.hide()
+            self.pitch_result.hide()
+        elif state == 'gameday_start':
+            # Initial gameday screen with start button
+            self.buttons['start_gameday'].show()
+            self.buttons['main_menu'].show()
+            self.scoreboard.hide()
+            self.pitch_result.hide()
+        elif state == 'gameday_transition':
+            # After player's inning ends, before opponent bats
+            self.buttons['next_inning'].show()
+            self.buttons['view_game_log'].show()
+            self.buttons['main_menu'].show()
+            self.scoreboard.hide()
+            self.pitch_result.hide()
+        elif state == 'gameday_simulation':
+            # After opponent simulation, ready to start player batting
+            self.buttons['start_batting'].show()
+            self.buttons['view_game_log'].show()
+            self.buttons['main_menu'].show()
+            self.scoreboard.hide()
+            self.pitch_result.hide()
+        elif state == 'gameday_final':
+            # Game over screen
+            self.buttons['final_menu'].show()
+            self.buttons['view_game_log'].show()
             self.scoreboard.hide()
             self.pitch_result.hide()
 
@@ -406,6 +500,12 @@ class UIManager:
         # Update strikezone button
         show_strikezone = settings_manager.get_setting("show_strikezone")
         self.buttons['toggle_strikezone_settings'].set_text(f"Strikezone: {'ON' if show_strikezone else 'OFF'}")
+
+        # Update FPS buttons
+        display_fps = settings_manager.get_display_fps()
+        engine_fps = settings_manager.get_engine_fps()
+        self.buttons['display_fps_setting'].set_text(f"Display FPS: {display_fps}")
+        self.buttons['engine_fps_setting'].set_text(f"Engine FPS: {engine_fps}")
 
         # Highlight current difficulty button
         current_difficulty = settings_manager.get_difficulty().value
@@ -436,9 +536,11 @@ class UIManager:
             KeyAction.TOGGLE_UI: 'bind_toggle_ui',
             KeyAction.TOGGLE_STRIKEZONE: 'bind_toggle_strikezone',
             KeyAction.TOGGLE_SOUND: 'bind_toggle_sound',
+            KeyAction.TOGGLE_BATTER: 'bind_toggle_batter',
             KeyAction.QUICK_PITCH: 'bind_quick_pitch',
             KeyAction.VIEW_PITCHES: 'bind_view_pitches',
-            KeyAction.MAIN_MENU: 'bind_main_menu'
+            KeyAction.MAIN_MENU: 'bind_main_menu',
+            KeyAction.TOGGLE_TRACK: 'bind_toggle_track'
         }
 
         for action, button_key in bindings.items():

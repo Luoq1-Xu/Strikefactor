@@ -2,11 +2,12 @@ import pygame
 import pygame.gfxdraw
 import pandas as pd
 from utils.physics import collision
-from main_refactored import Game
+from main import Game
+from helpers import EnhancedPitchRecord
 
 # Load the model once, ideally passed in or as a singleton
 import pickle
-from config import get_path
+from config import get_path, calculate_z_delta
 model = pickle.load(open(get_path("ai/ai_umpire.pkl"), "rb"))
 
 class PitchSimulation:
@@ -58,6 +59,9 @@ class PitchSimulation:
         self.windup = self.game.current_pitcher.get_windup()
         self.arrival_time = self.starttime + self.windup + self.traveltime
 
+        # Get engine FPS setting for physics calculations
+        self.engine_fps = self.game.settings_manager.get_engine_fps()
+
     def run(self):
         self.game.ui_manager.hide_banner()
         self.game.ui_manager.set_button_visibility('pitching')
@@ -69,7 +73,7 @@ class PitchSimulation:
         """Main simulation update loop."""
         self.game.sound_manager.update()
         self.game.screen.fill("black")
-        time_delta = self.game.clock.tick_busy_loop(60)/1000.0
+        time_delta = self.game.clock.tick_busy_loop(self.engine_fps)/1000.0
         self.game.ui_manager.draw()
         self.game.ui_manager.update(time_delta)
         
@@ -246,7 +250,7 @@ class PitchSimulation:
         self.game.pitchnumber += 1
         if self.game.currentstrikes < 2:
             self.game.currentstrikes += 1
-        self.game._display_pitch_results("FOUL", self.pitchtype)
+        self.game._display_pitch_results("FOUL", self.pitchtype, self.traveltime)
         
     def _handle_successful_hit(self):
         """Handle successful hit outcome."""
@@ -254,15 +258,18 @@ class PitchSimulation:
         self.made_contact = "hit"
         self.pitch_results_done = True
         self.game.pitchnumber += 1
-        
+
+        # Track score BEFORE hit for gameday mode (MUST be before calling hit_outcome_manager)
+        score_before = self.game.scoreKeeper.get_score() if self.game.in_gameday_mode else 0
+
         # Get swing and ball positions for more realistic outcomes
         mousepos = pygame.mouse.get_pos()
         swing_y = mousepos[1]
         ball_y = self.game.ball[1]
-        
+
         # Calculate timing difference for more realistic outcomes
         timing_diff = abs((self.swing_starttime + 150) - (self.starttime + self.windup + self.traveltime))
-        
+
         if self.swing_type == 1:
             hit_string = self.game.hit_outcome_manager.get_contact_hit_outcome(
                 swing_location_y=swing_y, ball_location_y=ball_y, timing_diff=timing_diff
@@ -271,44 +278,59 @@ class PitchSimulation:
             hit_string = self.game.hit_outcome_manager.get_power_hit_outcome(
                 swing_location_y=swing_y, ball_location_y=ball_y, timing_diff=timing_diff
             )
-        
+
         # Handle different outcomes
         if hit_string in ["FLYOUT", "GROUNDOUT"]:
             self._handle_out_result(hit_string)
         else:
-            self._handle_hit_result(hit_string)
+            self._handle_hit_result(hit_string, score_before)
     
     def _handle_out_result(self, out_type):
         """Handle flyout or groundout results."""
         self.is_hit = False  # This is an out, not a hit
         self.game.currentouts += 1
         self.outcome = out_type
-        
+
+        # Record at-bat (outs count as at-bats in baseball)
+        self.game.field_renderer.record_at_bat()
+
         # Display the out result
         self.game.ui_manager.show_banner(out_type)
-        self.game._display_pitch_results(out_type, self.pitchtype)
+        self.game._display_pitch_results(out_type, self.pitchtype, self.traveltime)
         self.new_entry['isHit'] = out_type
-        
+
+        # Record in gameday mode
+        if self.game.in_gameday_mode:
+            self.game.gameday_manager.record_player_at_bat(out_type, runs_scored=0, pitches_thrown=self.game.pitchnumber)
+
         # Reset counts after out (similar to strikeout)
         self.game.pitchnumber = 0
         self.game.currentstrikes = 0
         self.game.currentballs = 0
     
-    def _handle_hit_result(self, hit_string):
+    def _handle_hit_result(self, hit_string, score_before=0):
         """Handle successful hit results."""
         self.is_hit = True
         self.game.hits += 1
-        
+
+        # Record at-bat (hits count as at-bats in baseball)
+        self.game.field_renderer.record_at_bat()
+
         if self.game.hit_outcome_manager.get_homerun_text() != '':
             self.game.ui_manager.show_banner("{}".format(self.game.hit_outcome_manager.get_homerun_text()))
             self.game.homeruns_allowed += 1
         else:
             self.game.ui_manager.show_banner("{}".format(hit_string))
-            
-        self.game._display_pitch_results(f"HIT - {hit_string}", self.pitchtype)
+
+        self.game._display_pitch_results(f"HIT - {hit_string}", self.pitchtype, self.traveltime)
         self.new_entry['isHit'] = hit_string
         self.outcome = hit_string
-        
+
+        # Record in gameday mode (score has already been updated by hit_outcome_manager)
+        if self.game.in_gameday_mode:
+            runs_scored = self.game.scoreKeeper.get_score() - score_before
+            self.game.gameday_manager.record_player_at_bat(hit_string, runs_scored=runs_scored, pitches_thrown=self.game.pitchnumber)
+
         # Reset counts after hit
         self.game.pitchnumber = 0
         self.game.currentstrikes = 0
@@ -360,15 +382,25 @@ class PitchSimulation:
         if self.game.currentballs == 4:
             self.outcome = 'walk'
             self.game.currentwalks += 1
+
+            # Track score before walk for gameday mode
+            score_before = self.game.scoreKeeper.get_score() if self.game.in_gameday_mode else 0
             self.game.scoreKeeper.update_walk_event()
-            self.game._display_pitch_results("WALK", self.pitchtype)
+            runs_scored = self.game.scoreKeeper.get_score() - score_before
+
+            self.game._display_pitch_results("WALK", self.pitchtype, self.traveltime)
             self.game.ui_manager.show_banner("WALK")
+
+            # Record in gameday mode
+            if self.game.in_gameday_mode:
+                self.game.gameday_manager.record_player_at_bat('WALK', runs_scored=runs_scored, pitches_thrown=self.game.pitchnumber)
+
             self.game.currentstrikes = 0
             self.game.currentballs = 0
             self.game.pitchnumber = 0
         else:
             self.outcome = 'ball'
-            self.game._display_pitch_results("BALL", self.pitchtype)
+            self.game._display_pitch_results("BALL", self.pitchtype, self.traveltime)
             
     def _handle_strike_call(self):
         """Handle strike call."""
@@ -389,15 +421,23 @@ class PitchSimulation:
             self.outcome = 'strikeout'
             self.game.currentstrikeouts += 1
             self.game.currentouts += 1
-            
+
+            # Record at-bat (strikeouts count as at-bats in baseball)
+            self.game.field_renderer.record_at_bat()
+
             if self.game.swing_started == 0:
                 self.new_entry['called_strike'] = True
-                self.game._display_pitch_results("CALLED STRIKE", self.pitchtype)
+                self.game._display_pitch_results("CALLED STRIKE", self.pitchtype, self.traveltime)
             else:
                 self.new_entry['swinging_strike'] = True
-                self.game._display_pitch_results("SWINGING STRIKE", self.pitchtype)
-                
+                self.game._display_pitch_results("SWINGING STRIKE", self.pitchtype, self.traveltime)
+
             self.game.ui_manager.show_banner("STRIKEOUT")
+
+            # Record in gameday mode
+            if self.game.in_gameday_mode:
+                self.game.gameday_manager.record_player_at_bat('STRIKEOUT', runs_scored=0, pitches_thrown=self.game.pitchnumber)
+
             self.game.pitchnumber = 0
             self.game.currentstrikes = 0
             self.game.currentballs = 0
@@ -405,10 +445,10 @@ class PitchSimulation:
             self.outcome = 'strike'
             if self.game.swing_started == 0:
                 self.new_entry['called_strike'] = True
-                self.game._display_pitch_results("CALLED STRIKE", self.pitchtype)
+                self.game._display_pitch_results("CALLED STRIKE", self.pitchtype, self.traveltime)
             else:
                 self.new_entry['swinging_strike'] = True
-                self.game._display_pitch_results("SWINGING STRIKE", self.pitchtype)
+                self.game._display_pitch_results("SWINGING STRIKE", self.pitchtype, self.traveltime)
                 
     def _draw_batter(self, current_time):
         """Draw the batter in appropriate stance/swing."""
@@ -426,11 +466,13 @@ class PitchSimulation:
         dist = self.game.ball[2]/300
         if dist > 1:
             self.game.blitfunc(self.game.screen, self.game.ball)
-            self.game.ball[1] += self.vy * (1/dist)
-            self.game.ball[2] -= (4300 * 1000)/(60 * self.traveltime)
-            self.game.ball[0] += self.vx * (1/dist)
-            self.vy += (self.ay*300) * (1/dist)
-            self.vx += (self.ax*300) * (1/dist)
+            # Scale factor: original physics calibrated for 60 FPS
+            fps_scale = 60 / self.engine_fps
+            self.game.ball[1] += self.vy * (1/dist) * fps_scale
+            self.game.ball[2] -= calculate_z_delta(self.engine_fps, self.traveltime)
+            self.game.ball[0] += self.vx * (1/dist) * fps_scale
+            self.vy += (self.ay*300) * (1/dist) * fps_scale
+            self.vx += (self.ax*300) * (1/dist) * fps_scale
             
     def _finish_pitch(self):
         """Finish the pitch and clean up."""
@@ -439,6 +481,43 @@ class PitchSimulation:
         from ui.components import create_pci_cursor
         pygame.mouse.set_cursor(create_pci_cursor())
         self.cleanup()
+
+    def _calculate_velocity_mph(self) -> float:
+        """Calculate pitch velocity in MPH from travel time.
+
+        Uses the relationship: distance = velocity * time
+        Mound distance is ~60.5 feet, minus arm extension (~6.5 feet).
+        """
+        arm_extension = getattr(self.game.current_pitcher, 'arm_extension', 6.5)
+        distance_feet = 60.5 - arm_extension
+        # traveltime is in milliseconds
+        # velocity = distance / time, convert to mph
+        if self.traveltime > 0:
+            velocity_fps = (distance_feet * 1000) / self.traveltime  # feet per second
+            velocity_mph = velocity_fps * 3600 / 5280  # convert to mph
+            return velocity_mph
+        return 0.0
+
+    def _get_outcome_display(self) -> str:
+        """Get display-friendly outcome string from internal outcome."""
+        outcome = getattr(self, 'outcome', None)
+        if outcome:
+            outcome_map = {
+                'strike': 'STRIKE',
+                'ball': 'BALL',
+                'foul': 'FOUL',
+                'strikeout': 'STRIKEOUT',
+                'walk': 'WALK',
+                'SINGLE': 'SINGLE',
+                'DOUBLE': 'DOUBLE',
+                'TRIPLE': 'TRIPLE',
+                'HOME RUN': 'HOME RUN',
+                'FLYOUT': 'FLYOUT',
+                'GROUNDOUT': 'GROUNDOUT',
+                'LINEOUT': 'LINEOUT',
+            }
+            return outcome_map.get(outcome, outcome.upper() if isinstance(outcome, str) else 'UNKNOWN')
+        return 'UNKNOWN'
         
     def cleanup(self):
         """Clean up after pitch completion."""
@@ -489,3 +568,16 @@ class PitchSimulation:
         self.game.pitch_trajectories.append(self.game.last_pitch_information)
         self.game.pitches_display.append((self.game.ball[0], self.game.ball[1]))
         self.game.current_pitches += 1
+
+        # Create enhanced pitch record for visualization
+        if hasattr(self.game, 'enhanced_pitch_records'):
+            enhanced_record = EnhancedPitchRecord(
+                trajectory=self.game.last_pitch_information.copy(),
+                pitch_type=self.pitchtype,
+                velocity_mph=self._calculate_velocity_mph(),
+                outcome=self._get_outcome_display(),
+                final_location=(self.game.ball[0], self.game.ball[1]),
+                index=len(self.game.enhanced_pitch_records),
+                selected=False
+            )
+            self.game.enhanced_pitch_records.append(enhanced_record)

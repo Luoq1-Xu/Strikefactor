@@ -60,6 +60,6 @@ def create_game_buttons(manager):
             text='BATTER', manager=manager),
         'visualise': pygame_gui.elements.UIButton(
             relative_rect=pygame.Rect((0, 500), (200, 100)),
-            text='VISUALISE', manager=manager)
+            text='TRACK', manager=manager)
     }
     return buttons

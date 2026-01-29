@@ -5,8 +5,9 @@ Manages state transitions and coordinates between different game states.
 
 from typing import Dict, Optional
 from .game_states import (
-    GameState, MenuState, GameplayState, SummaryState, 
-    VisualizationState, ViewPitchesState, InningEndState
+    GameState, MenuState, GameplayState, SummaryState,
+    VisualizationState, ViewPitchesState, InningEndState, GameDayState,
+    GameDayTransitionState
 )
 
 
@@ -30,7 +31,9 @@ class GameStateManager:
             'summary': SummaryState(self.game),
             'visualization': VisualizationState(self.game),
             'view_pitches': ViewPitchesState(self.game),
-            'inning_end': InningEndState(self.game)
+            'inning_end': InningEndState(self.game),
+            'gameday': GameDayState(self.game),
+            'gameday_transition': GameDayTransitionState(self.game)
         }
         
     def change_state(self, state_name: str):

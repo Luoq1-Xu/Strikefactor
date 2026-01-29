@@ -11,7 +11,7 @@
             "normal_text":"#c5cbd8",
             "hovered_text":"#FFFFFF",
             "selected_text":"#FFFFFF",
-            "disabled_text":"#6d736f",
+            "disabled_text":"#FFFFFF",
             "link_text": "#0000EE",
             "link_hover": "#2020FF",
             "link_selected": "#551A8B",
@@ -65,14 +65,14 @@
     {
         "colours":
         {
-            "normal_text": "#ffffff"
+            "normal_text": "#FFFFFF"
         },
 
         "font":
         {
             "name": "8bitoperator_jve",
-            "size": "60",
-            "bold": "0",
+            "size": "80",
+            "bold": "1",
             "italic": "1",
             "regular_path": "8bitoperator_jve.ttf"
         },
@@ -83,6 +83,28 @@
              "text_shadow_size": "1",
              "text_shadow_offset": "0,0",
              "line_spacing": "1.5"
+         }
+    },
+
+    "@pitchviz_label":
+    {
+        "colours":
+        {
+            "normal_text": "#FFFFFF"
+        },
+
+        "font":
+        {
+            "name": "8bitoperator_jve",
+            "size": "16",
+            "bold": "0",
+            "italic": "0",
+            "regular_path": "8bitoperator_jve.ttf"
+        },
+
+        "misc":
+         {
+             "text_shadow": "0"
          }
     }
 
