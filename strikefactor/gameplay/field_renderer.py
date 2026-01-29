@@ -28,6 +28,7 @@ class FieldRenderer:
         self.total_swings = 0
         self.total_hits = 0
         self.total_pitches = 0
+        self.total_at_bats = 0  # At-bats: hits + outs + strikeouts (excludes walks, fouls)
         
         # Data file path
         self.data_file = os.path.join(os.path.dirname(__file__), '..', 'data', 'batting_stats.json')
@@ -191,7 +192,23 @@ class FieldRenderer:
     def record_pitch(self):
         """Record that a pitch was thrown (for tracking total pitches)."""
         self.total_pitches += 1
-    
+
+    def record_at_bat(self):
+        """
+        Record an official at-bat.
+
+        In real baseball, at-bats include plate appearances that result in:
+        - Hits (singles, doubles, triples, home runs)
+        - Outs (flyouts, groundouts, lineouts, strikeouts)
+
+        At-bats EXCLUDE:
+        - Walks (base on balls)
+        - Hit by pitch
+        - Sacrifice flies/bunts
+        - Catcher's interference
+        """
+        self.total_at_bats += 1
+
     def get_hit_rate(self, segment):
         """Get the hit rate for a segment (hits/attempts)."""
         if self.heatmap_attempts[segment] == 0:
@@ -363,7 +380,8 @@ class FieldRenderer:
         self.total_swings = 0
         self.total_hits = 0
         self.total_pitches = 0
-        
+        self.total_at_bats = 0
+
         # Save the reset state
         self.save_data()
         print("✓ All batting statistics have been reset")
@@ -389,8 +407,9 @@ class FieldRenderer:
                 'total_swings': self.total_swings,
                 'total_hits': self.total_hits,
                 'total_pitches': self.total_pitches,
+                'total_at_bats': self.total_at_bats,
                 'last_updated': datetime.now().isoformat(),
-                'version': '1.0'
+                'version': '1.1'
             }
             
             with open(self.data_file, 'w') as f:
@@ -416,13 +435,14 @@ class FieldRenderer:
                 self.total_swings = data.get('total_swings', 0)
                 self.total_hits = data.get('total_hits', 0)
                 self.total_pitches = data.get('total_pitches', 0)
-                
+                self.total_at_bats = data.get('total_at_bats', 0)
+
                 print(f"✓ Batting statistics loaded from {self.data_file}")
-                print(f"  Total pitches: {self.total_pitches}, Total swings: {self.total_swings}, Total hits: {self.total_hits}")
-                
-                # Display overall batting average if we have data
-                if self.total_swings > 0:
-                    overall_avg = self.total_hits / self.total_swings
+                print(f"  Total pitches: {self.total_pitches}, Total at-bats: {self.total_at_bats}, Total hits: {self.total_hits}")
+
+                # Display overall batting average if we have data (BA = H / AB)
+                if self.total_at_bats > 0:
+                    overall_avg = self.total_hits / self.total_at_bats
                     print(f"  Overall batting average: {overall_avg:.3f}")
                     
             else:
@@ -433,10 +453,16 @@ class FieldRenderer:
             print("Starting with fresh data.")
             
     def get_overall_batting_average(self):
-        """Get overall batting average across all zones."""
-        if self.total_swings == 0:
+        """
+        Get overall batting average across all zones.
+
+        Batting average (BA) = Hits / At-Bats
+        - Hits: singles, doubles, triples, home runs
+        - At-Bats: excludes walks, hit-by-pitch, sacrifice flies/bunts
+        """
+        if self.total_at_bats == 0:
             return 0.0
-        return self.total_hits / self.total_swings
+        return self.total_hits / self.total_at_bats
         
     def get_batting_statistics(self):
         """Get comprehensive batting statistics."""
@@ -445,6 +471,7 @@ class FieldRenderer:
             'total_pitches': self.total_pitches,
             'total_swings': self.total_swings,
             'total_hits': self.total_hits,
+            'total_at_bats': self.total_at_bats,
             'swing_percentage': self.total_swings / max(self.total_pitches, 1),
             'zone_averages': []
         }

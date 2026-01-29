@@ -237,6 +237,7 @@ class StatSwing(UIWindow):
         self.animation_frame = 0
         self.animation_playing = True
         self.last_time = pygame.time.get_ticks()
+        self.display_fps = 60  # Default, can be updated via set_display_fps()
 
         # Legacy compatibility
         self.pitch_trajectories = pitch_trajectories
@@ -626,6 +627,10 @@ class StatSwing(UIWindow):
         self.last_pitch_information = last_pitch_information
         self._migrate_legacy_data()
 
+    def set_display_fps(self, fps):
+        """Set the display FPS for animation timing."""
+        self.display_fps = fps
+
     def update(self, time_delta):
         """Update animation state."""
         current_time = pygame.time.get_ticks()
@@ -639,8 +644,11 @@ class StatSwing(UIWindow):
         if current_range[1] != new_max:
             self.frame_slider.value_range = (0, new_max)
 
+        # Scale animation interval based on display FPS (base: 20ms at 60 FPS)
+        frame_interval = 1200 / self.display_fps  # 20ms at 60 FPS, 10ms at 120 FPS
+
         if self.animation_playing and self.selected_records:
-            if current_time - self.last_time > 20:
+            if current_time - self.last_time > frame_interval:
                 self.animation_frame += 1
                 self.last_time = current_time
 

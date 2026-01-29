@@ -18,6 +18,20 @@ STRIKEZONE_RECT = ((565, 410), (130, 150))
 BALL_MIN_SIZE = 3
 BALL_MAX_SIZE = 11
 MAX_DISTANCE = 4600
+PHYSICS_Z_DISTANCE = 4300  # Total z-distance the ball travels
+
+
+def calculate_z_delta(engine_fps: int, traveltime: float) -> float:
+    """Calculate per-frame z-axis change based on engine FPS.
+
+    Args:
+        engine_fps: The physics engine FPS (60 or 120)
+        traveltime: Pitch travel time in milliseconds
+
+    Returns:
+        Z-axis change per frame
+    """
+    return (PHYSICS_Z_DISTANCE * 1000) / (engine_fps * traveltime)
 
 # Player positions
 RIGHT_BATTER_POS = (330, 190)

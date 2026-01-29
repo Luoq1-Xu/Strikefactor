@@ -14,14 +14,8 @@ class Sasaki(Pitcher):
                          1100,
                          7.1)  # arm_extension in feet
         self.load_img(loadfunc, 'assets/images/sasaki/', 14)
-        #self.add_pitch_type(self.CUI, "CUI")
-        #self.add_pitch_type(self.FBI, "FBI")
-        #self.add_pitch_type(self.sasakiSplitter, "FS")
-        #self.add_pitch_type(self.sasakiFastball, "FF")
-        #self.add_pitch_type(self.CUI, "CU")
-        #self.add_pitch_type(self.sasaki_slider, "SL")
-        self.add_pitch_type(self.fastball, "FF")
-        #self.add_pitch_type(self.sasakiSplitter, "FS")
+        self.add_pitch_type(self.FB, "FF")
+        self.add_pitch_type(self.FS, "FS")
 
     def draw_pitcher(self, start_time, current_time):
         if current_time == 0 and start_time == 0:
@@ -86,12 +80,12 @@ class Sasaki(Pitcher):
 
     def FB(self, simulation_func):
         ax, ay = -0.005, 0.0025
-        speed_mph = random.uniform(99, 103)
+        speed_mph = random.gauss(96.1, 1.0)
         travel_time = calculate_travel_time(speed_mph, self.arm_extension)
 
         # Specify target location directly (with optional randomness)
         target_x = random.uniform(590, 670)  # x position at plate
-        target_y = random.uniform(410, 460)  # y position at plate
+        target_y = random.uniform(410, 560)  # y position at plate
 
         vx, vy = calculate_pitch_velocity(
             self.release_point,
@@ -103,4 +97,24 @@ class Sasaki(Pitcher):
         )
 
         simulation_func(self.release_point, 'rokisasaki', ax, ay, vx, vy, travel_time, 'FF')
+
+    def FS(self, simulation_func):
+        ax, ay = -0.005, 0.055
+        speed_mph = random.gauss(85.0, 1.0)
+        travel_time = calculate_travel_time(speed_mph, self.arm_extension)
+
+        # Specify target location directly (with optional randomness)
+        target_x = random.uniform(590, 670)  # x position at plate
+        target_y = random.uniform(550, 660)  # y position at plate
+
+        vx, vy = calculate_pitch_velocity(
+            self.release_point,
+            target_x=target_x,
+            target_y=target_y,
+            ax=ax,
+            ay=ay,
+            traveltime=travel_time
+        )
+
+        simulation_func(self.release_point, 'rokisasaki', ax, ay, vx, vy, travel_time, 'FS')
 

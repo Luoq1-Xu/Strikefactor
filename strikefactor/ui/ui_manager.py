@@ -146,11 +146,18 @@ class UIManager:
             'toggle_strikezone_settings': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((630, 360), (220, 50)),
                 text='Strikezone: ON', manager=manager),
+            # FPS settings buttons (cycle-style)
+            'display_fps_setting': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((390, 430), (220, 50)),
+                text='Display FPS: 60', manager=manager),
+            'engine_fps_setting': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((630, 430), (220, 50)),
+                text='Engine FPS: 60', manager=manager),
             'key_bindings': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((515, 450), (250, 50)),
+                relative_rect=pygame.Rect((515, 500), (250, 50)),
                 text='Key Bindings', manager=manager),
             'reset_settings': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((515, 520), (250, 50)),
+                relative_rect=pygame.Rect((515, 570), (250, 50)),
                 text='Reset to Defaults', manager=manager),
 
             # Key binding configuration buttons
@@ -312,10 +319,14 @@ class UIManager:
     def show_view_window(self):
         """Shows the pitch view window."""
         self.view_window.show()
-        
+
     def hide_view_window(self):
         """Hides the pitch view window."""
         self.view_window.hide()
+
+    def update_view_window_fps(self, display_fps):
+        """Update the view window's display FPS for animation timing."""
+        self.view_window.set_display_fps(display_fps)
 
     def hide_banner(self):
         self.banner.hide()
@@ -420,6 +431,8 @@ class UIManager:
             self.buttons['difficulty_halloffame'].show()
             self.buttons['toggle_ump_sound_settings'].show()
             self.buttons['toggle_strikezone_settings'].show()
+            self.buttons['display_fps_setting'].show()
+            self.buttons['engine_fps_setting'].show()
             self.buttons['key_bindings'].show()
             self.buttons['reset_settings'].show()
             self.banner.hide()
@@ -487,6 +500,12 @@ class UIManager:
         # Update strikezone button
         show_strikezone = settings_manager.get_setting("show_strikezone")
         self.buttons['toggle_strikezone_settings'].set_text(f"Strikezone: {'ON' if show_strikezone else 'OFF'}")
+
+        # Update FPS buttons
+        display_fps = settings_manager.get_display_fps()
+        engine_fps = settings_manager.get_engine_fps()
+        self.buttons['display_fps_setting'].set_text(f"Display FPS: {display_fps}")
+        self.buttons['engine_fps_setting'].set_text(f"Engine FPS: {engine_fps}")
 
         # Highlight current difficulty button
         current_difficulty = settings_manager.get_difficulty().value

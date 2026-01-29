@@ -88,7 +88,7 @@ class Degrom(Pitcher):
         travel_time = calculate_travel_time(speed_mph, self.arm_extension)
 
         # Specify target location directly (with optional randomness)
-        target_x = random.choice([random.uniform(490, 520), random.uniform(580, 650)]) # x position at plate
+        target_x = random.choice([random.uniform(490, 520), random.uniform(600, 650)]) # x position at plate
         target_y = random.choice([random.uniform(400, 450), random.uniform(550, 600)]) # y position at plate
 
         vx, vy = calculate_pitch_velocity(

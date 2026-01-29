@@ -11,6 +11,10 @@ class DifficultyLevel(Enum):
     HALL_OF_FAME = "hall_of_fame"
 
 class SettingsManager:
+    # FPS option constants
+    DISPLAY_FPS_OPTIONS = [60, 120]
+    ENGINE_FPS_OPTIONS = [60, 120]  # 60 is baseline for original physics
+
     def __init__(self):
         self.settings_file = get_path("settings.json")
         self.default_settings = {
@@ -19,7 +23,9 @@ class SettingsManager:
             "master_volume": 1.0,
             "show_strikezone": True,
             "batter_handedness": "R",
-            "display_mode": "windowed"  # "windowed" or "fullscreen"
+            "display_mode": "windowed",  # "windowed" or "fullscreen"
+            "display_fps": 60,           # Options: 60, 120
+            "engine_fps": 60             # Options: 60, 120, 240, 360 (60 = original physics)
         }
         self.current_settings = self.load_settings()
 
@@ -141,6 +147,32 @@ class SettingsManager:
         }
 
         return descriptions.get(difficulty_level, descriptions[DifficultyLevel.AMATEUR])
+
+    def get_display_fps(self):
+        """Get display/render FPS setting."""
+        fps = self.get_setting("display_fps")
+        return fps if fps in self.DISPLAY_FPS_OPTIONS else 60
+
+    def get_engine_fps(self):
+        """Get engine/physics FPS setting."""
+        fps = self.get_setting("engine_fps")
+        return fps if fps in self.ENGINE_FPS_OPTIONS else 120
+
+    def cycle_display_fps(self):
+        """Cycle to next display FPS option."""
+        current = self.get_display_fps()
+        idx = self.DISPLAY_FPS_OPTIONS.index(current)
+        next_fps = self.DISPLAY_FPS_OPTIONS[(idx + 1) % len(self.DISPLAY_FPS_OPTIONS)]
+        self.set_setting("display_fps", next_fps)
+        return next_fps
+
+    def cycle_engine_fps(self):
+        """Cycle to next engine FPS option."""
+        current = self.get_engine_fps()
+        idx = self.ENGINE_FPS_OPTIONS.index(current)
+        next_fps = self.ENGINE_FPS_OPTIONS[(idx + 1) % len(self.ENGINE_FPS_OPTIONS)]
+        self.set_setting("engine_fps", next_fps)
+        return next_fps
 
     def reset_to_defaults(self):
         """Reset all settings to default values."""

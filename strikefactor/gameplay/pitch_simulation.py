@@ -7,7 +7,7 @@ from helpers import EnhancedPitchRecord
 
 # Load the model once, ideally passed in or as a singleton
 import pickle
-from config import get_path
+from config import get_path, calculate_z_delta
 model = pickle.load(open(get_path("ai/ai_umpire.pkl"), "rb"))
 
 class PitchSimulation:
@@ -59,6 +59,9 @@ class PitchSimulation:
         self.windup = self.game.current_pitcher.get_windup()
         self.arrival_time = self.starttime + self.windup + self.traveltime
 
+        # Get engine FPS setting for physics calculations
+        self.engine_fps = self.game.settings_manager.get_engine_fps()
+
     def run(self):
         self.game.ui_manager.hide_banner()
         self.game.ui_manager.set_button_visibility('pitching')
@@ -70,7 +73,7 @@ class PitchSimulation:
         """Main simulation update loop."""
         self.game.sound_manager.update()
         self.game.screen.fill("black")
-        time_delta = self.game.clock.tick_busy_loop(60)/1000.0
+        time_delta = self.game.clock.tick_busy_loop(self.engine_fps)/1000.0
         self.game.ui_manager.draw()
         self.game.ui_manager.update(time_delta)
         
@@ -288,6 +291,9 @@ class PitchSimulation:
         self.game.currentouts += 1
         self.outcome = out_type
 
+        # Record at-bat (outs count as at-bats in baseball)
+        self.game.field_renderer.record_at_bat()
+
         # Display the out result
         self.game.ui_manager.show_banner(out_type)
         self.game._display_pitch_results(out_type, self.pitchtype, self.traveltime)
@@ -306,6 +312,9 @@ class PitchSimulation:
         """Handle successful hit results."""
         self.is_hit = True
         self.game.hits += 1
+
+        # Record at-bat (hits count as at-bats in baseball)
+        self.game.field_renderer.record_at_bat()
 
         if self.game.hit_outcome_manager.get_homerun_text() != '':
             self.game.ui_manager.show_banner("{}".format(self.game.hit_outcome_manager.get_homerun_text()))
@@ -413,6 +422,9 @@ class PitchSimulation:
             self.game.currentstrikeouts += 1
             self.game.currentouts += 1
 
+            # Record at-bat (strikeouts count as at-bats in baseball)
+            self.game.field_renderer.record_at_bat()
+
             if self.game.swing_started == 0:
                 self.new_entry['called_strike'] = True
                 self.game._display_pitch_results("CALLED STRIKE", self.pitchtype, self.traveltime)
@@ -454,11 +466,13 @@ class PitchSimulation:
         dist = self.game.ball[2]/300
         if dist > 1:
             self.game.blitfunc(self.game.screen, self.game.ball)
-            self.game.ball[1] += self.vy * (1/dist)
-            self.game.ball[2] -= (4300 * 1000)/(60 * self.traveltime)
-            self.game.ball[0] += self.vx * (1/dist)
-            self.vy += (self.ay*300) * (1/dist)
-            self.vx += (self.ax*300) * (1/dist)
+            # Scale factor: original physics calibrated for 60 FPS
+            fps_scale = 60 / self.engine_fps
+            self.game.ball[1] += self.vy * (1/dist) * fps_scale
+            self.game.ball[2] -= calculate_z_delta(self.engine_fps, self.traveltime)
+            self.game.ball[0] += self.vx * (1/dist) * fps_scale
+            self.vy += (self.ay*300) * (1/dist) * fps_scale
+            self.vx += (self.ax*300) * (1/dist) * fps_scale
             
     def _finish_pitch(self):
         """Finish the pitch and clean up."""

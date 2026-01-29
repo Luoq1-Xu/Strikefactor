@@ -398,11 +398,15 @@ class VisualizationState(GameState):
         """Update visualization animation."""
         if not self.game.last_pitch_information:
             return
-            
+
         current_time = pygame.time.get_ticks()
         time_elapsed = current_time - self.last_time
-        
-        if time_elapsed > 25 and self.current_frame <= len(self.game.last_pitch_information) - 1:
+
+        # Scale playback interval based on display FPS (base: 25ms at 60 FPS)
+        display_fps = self.game.settings_manager.get_display_fps()
+        frame_interval = 1500 / display_fps  # 25ms at 60 FPS, 12.5ms at 120 FPS
+
+        if time_elapsed > frame_interval and self.current_frame <= len(self.game.last_pitch_information) - 1:
             self.current_frame += 1
             self.last_time = current_time
             

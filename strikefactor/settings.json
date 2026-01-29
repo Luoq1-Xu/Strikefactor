@@ -1,8 +1,10 @@
 {
-  "difficulty": "rookie",
+  "difficulty": "all_star",
   "umpire_sound": true,
   "master_volume": 1.0,
   "show_strikezone": true,
   "batter_handedness": "R",
-  "display_mode": "windowed"
+  "display_mode": "windowed",
+  "display_fps": 120,
+  "engine_fps": 120
 }

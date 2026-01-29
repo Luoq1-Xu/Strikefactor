@@ -211,6 +211,9 @@ class Game:
         # Set the key binding manager reference in UI manager
         self.ui_manager.set_key_binding_manager(self.key_binding_manager)
 
+        # Sync PitchViz animation timing with display FPS setting
+        self.ui_manager.update_view_window_fps(self.settings_manager.get_display_fps())
+
         # Random scenario generator
         self.random_scenario_generator = RandomScenarioGenerator()
 
@@ -279,6 +282,10 @@ class Game:
         self.ui_manager.register_button_callback('toggle_ump_sound_settings', lambda: self.toggle_umpire_sound_setting())
         self.ui_manager.register_button_callback('toggle_strikezone_settings', lambda: self.toggle_strikezone_setting())
         self.ui_manager.register_button_callback('reset_settings', lambda: self.reset_settings())
+
+        # FPS settings callbacks
+        self.ui_manager.register_button_callback('display_fps_setting', lambda: self.cycle_display_fps())
+        self.ui_manager.register_button_callback('engine_fps_setting', lambda: self.cycle_engine_fps())
 
         # Key binding callbacks
         self.ui_manager.register_button_callback('key_bindings', lambda: self.enter_key_bindings_menu())
@@ -606,6 +613,18 @@ class Game:
         self.ui_manager.update_settings_button_states(self.settings_manager)
         self.ui_manager.show_settings_info(self.settings_manager)
 
+    def cycle_display_fps(self):
+        """Cycle through display FPS options."""
+        self.settings_manager.cycle_display_fps()
+        self.ui_manager.update_settings_button_states(self.settings_manager)
+        # Update PitchViz animation timing to match new display FPS
+        self.ui_manager.update_view_window_fps(self.settings_manager.get_display_fps())
+
+    def cycle_engine_fps(self):
+        """Cycle through engine FPS options."""
+        self.settings_manager.cycle_engine_fps()
+        self.ui_manager.update_settings_button_states(self.settings_manager)
+
     def _setup_key_binding_callbacks(self):
         """Setup key binding system callbacks for various actions."""
         from key_binding_manager import KeyAction
@@ -783,7 +802,8 @@ class Game:
         """Main game loop."""
         running = True
         while running:
-            time_delta = self.clock.tick(60) / 1000.0
+            display_fps = self.settings_manager.get_display_fps()
+            time_delta = self.clock.tick(display_fps) / 1000.0
             
             # Process events
             for event in pygame.event.get():
