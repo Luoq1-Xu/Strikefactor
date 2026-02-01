@@ -4,6 +4,7 @@ Each state handles its own rendering, input processing, and state transitions.
 """
 
 import pygame
+import pygame.gfxdraw
 import pygame_gui
 import sys
 from abc import ABC, abstractmethod
@@ -43,9 +44,88 @@ class GameState(ABC):
         pass
 
 
+class ModeSelectState(GameState):
+    """Top-level mode selection menu (Arcade/Sandbox)."""
+
+    def __init__(self, game):
+        super().__init__(game)
+        self.messages = ["StrikeFactor", "A Baseball At-Bat Simulator"]
+        self.active_message = 0
+        self.counter = 0
+        self.textoffset = 0
+        self.messages_finished = 0
+        self.done = False
+        self.running = True
+
+    def enter(self):
+        """Initialize mode select state."""
+        self.game.ui_manager.hide_banner()
+        self.game.ui_manager.set_button_visibility('mode_select')
+        # Reset typing effect
+        self.active_message = 0
+        self.counter = 0
+        self.textoffset = 0
+        self.messages_finished = 0
+        self.done = False
+        self.running = True
+
+    def exit(self):
+        """Clean up mode select state."""
+        pass
+
+    def update(self, time_delta: float):
+        """Update typing effect."""
+        if not self.running:
+            return
+
+        message = self.messages[self.active_message]
+
+        # Update typing effect
+        if self.counter < self.game.speed * len(message):
+            self.counter += 1
+        elif self.counter >= self.game.speed * len(message):
+            self.done = True
+
+        # Handle message progression
+        if (self.active_message < len(self.messages) - 1) and self.done:
+            pygame.time.delay(500)
+            self.active_message += 1
+            self.done = False
+            self.textoffset += 100
+            self.counter = 0
+            self.messages_finished += 1
+
+    def handle_event(self, event):
+        """Handle mode select events."""
+        self.game.ui_manager.process_events(event)
+        if event.type == pygame.QUIT:
+            return False
+        return True
+
+    def render(self, screen):
+        """Render the mode select screen."""
+        screen.fill("black")
+
+        # Draw completed messages
+        if self.messages_finished > 0:
+            offset = 0
+            for i in range(self.messages_finished):
+                self.game.ui_manager.draw_completed_message(
+                    self.messages[i], (300, 170 + offset), use_big_font=True
+                )
+                offset += 100
+
+        # Draw current message with typing effect
+        message = self.messages[self.active_message]
+        self.game.ui_manager.draw_typing_effect(
+            message, self.counter, self.game.speed,
+            (300, 170 + self.textoffset), use_big_font=True
+        )
+
+
 class MenuState(GameState):
     """Main menu state with pitcher selection and typing effect."""
-    
+
     def __init__(self, game):
         super().__init__(game)
         self.messages = ["StrikeFactor", "A Baseball At-Bat Simulator"]
@@ -536,6 +616,170 @@ class InningEndState(GameState):
         self.game.batter.draw_stance(1)
         
         # Draw current ball position (final position)
+        if self.game.first_pitch_thrown:
+            pygame.gfxdraw.aacircle(
+                screen, int(self.game.ball[0]), int(self.game.ball[1]),
+                self.game.fourseamballsize, (255, 255, 255)
+            )
+
+
+class SandboxMenuState(GameState):
+    """Placeholder state for Sandbox mode (future implementation)."""
+
+    def __init__(self, game):
+        super().__init__(game)
+
+    def enter(self):
+        """Initialize sandbox menu state."""
+        self.game.ui_manager.hide_banner()
+        self.game.ui_manager.set_button_visibility('sandbox_placeholder')
+
+    def exit(self):
+        """Clean up sandbox menu state."""
+        pass
+
+    def update(self, time_delta: float):
+        """Update sandbox menu logic."""
+        pass
+
+    def handle_event(self, event):
+        """Handle sandbox menu events."""
+        self.game.ui_manager.process_events(event)
+        if event.type == pygame.QUIT:
+            return False
+        return True
+
+    def render(self, screen):
+        """Render the sandbox menu placeholder."""
+        screen.fill("black")
+        # Draw placeholder text
+        self.game.ui_manager.draw_completed_message(
+            "SANDBOX MODE", (450, 250), use_big_font=True
+        )
+        self.game.ui_manager.draw_completed_message(
+            "Coming Soon!", (500, 400), use_big_font=False
+        )
+
+
+class SandboxGameplayState(GameState):
+    """Sandbox gameplay state with user-controlled pitch selection."""
+
+    def __init__(self, game):
+        super().__init__(game)
+        self.pitch_simulation = None
+        self.selected_pitch = None  # Stores the user-selected pitch type
+
+    def enter(self):
+        """Initialize sandbox gameplay state."""
+        self.game.ui_manager.set_button_visibility('sandbox_gameplay')
+        self._update_pitch_buttons()
+        self._refresh_display()
+
+        # Select first pitch type by default if none selected
+        if self.game.current_pitcher:
+            pitch_names = self.game.current_pitcher.get_pitch_names()
+            if pitch_names and not self.selected_pitch:
+                self.selected_pitch = pitch_names[0]
+                self._update_pitch_buttons()
+                self._refresh_display()
+
+    def exit(self):
+        """Clean up sandbox gameplay state."""
+        self.pitch_simulation = None
+
+    def _refresh_display(self):
+        """Refresh the game display with current stats."""
+        result = (
+            f"<font size=5>OUTS: {self.game.currentouts}<br>"
+            f"STRIKEOUTS: {self.game.currentstrikeouts}<br>"
+            f"WALKS: {self.game.currentwalks}<br>"
+            f"HITS: {self.game.hits}<br>"
+            f"RUNS: {self.game.scoreKeeper.get_score()}</font>"
+        )
+        selected_display = self.selected_pitch if self.selected_pitch else "None"
+        count_string = (
+            f"<font size=5>COUNT: {self.game.currentballs}-{self.game.currentstrikes}<br>"
+            f"PITCH: {selected_display}</font>"
+        )
+        self.game.ui_manager.update_scoreboard(result)
+        self.game.ui_manager.update_pitch_result(count_string)
+        self.game.ui_manager.hide_banner()
+
+    def _update_pitch_buttons(self):
+        """Update pitch type buttons for current pitcher."""
+        if self.game.current_pitcher:
+            pitch_names = self.game.current_pitcher.get_pitch_names()
+            self.game.ui_manager.update_sandbox_pitch_buttons(pitch_names, self.selected_pitch)
+
+    def switch_pitcher(self, pitcher_name: str):
+        """Switch to a different pitcher."""
+        self.game.pitcher_manager.set_current_pitcher(pitcher_name)
+
+        # Reset selected pitch to first available for new pitcher
+        pitch_names = self.game.current_pitcher.get_pitch_names()
+        self.selected_pitch = pitch_names[0] if pitch_names else None
+
+        self._update_pitch_buttons()
+        self._refresh_display()
+
+    def select_pitch(self, pitch_name: str):
+        """Select a pitch type for the next pitch."""
+        if self.game.current_pitcher and pitch_name in self.game.current_pitcher.get_pitch_names():
+            self.selected_pitch = pitch_name
+            self._update_pitch_buttons()
+            self._refresh_display()
+
+    def update(self, time_delta: float):
+        """Update sandbox gameplay logic."""
+        if self.pitch_simulation and self.pitch_simulation.running:
+            self.pitch_simulation.update()
+
+        if self.pitch_simulation and not self.pitch_simulation.running:
+            self.pitch_simulation = None
+            self.game.ui_manager.set_button_visibility('sandbox_gameplay')
+            self._update_pitch_buttons()
+            self._refresh_display()
+
+    def handle_event(self, event):
+        """Handle sandbox gameplay events."""
+        if event.type == pygame.QUIT:
+            return False
+
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_q and not self.pitch_simulation:
+                self._initiate_pitch()
+
+        self.game.ui_manager.process_events(event)
+        return True
+
+    def _initiate_pitch(self):
+        """Start a new pitch simulation with user-selected pitch."""
+        if not self.selected_pitch:
+            return  # No pitch selected
+
+        self.game.first_pitch_thrown = True
+        self.game.pitch_chosen = self.selected_pitch
+
+        # Use the selected pitch instead of AI selection
+        self.game.current_pitcher.pitch(self._create_pitch_simulation, self.selected_pitch)
+
+    def _create_pitch_simulation(self, release_point, pitchername, ax, ay, vx, vy, traveltime, pitchtype):
+        """Create and start a pitch simulation."""
+        from .pitch_simulation import PitchSimulation
+        self.pitch_simulation = PitchSimulation(
+            self.game, release_point, pitchername, ax, ay, vx, vy, traveltime, pitchtype
+        )
+        self.pitch_simulation.run()
+
+    def render(self, screen):
+        """Render the sandbox gameplay state."""
+        screen.fill("black")
+        self.game.current_pitcher.draw_pitcher(0, 0)
+        self.game.field_renderer.draw_strikezone()
+        self.game.field_renderer.draw_field(self.game.scoreKeeper.get_bases())
+        self.game.batter.draw_stance(1)
+
+        # Draw current ball position
         if self.game.first_pitch_thrown:
             pygame.gfxdraw.aacircle(
                 screen, int(self.game.ball[0]), int(self.game.ball[1]),

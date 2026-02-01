@@ -51,7 +51,7 @@ def create_game_buttons(manager):
             text='TOGGLEUMP', manager=manager),
         'view_pitches': pygame_gui.elements.UIButton(
             relative_rect=pygame.Rect((0, 300), (200, 100)),
-            text='VIEW PITCHES', manager=manager),
+            text='PITCHVIZ', manager=manager),
         'return_to_game': pygame_gui.elements.UIButton(
             relative_rect=pygame.Rect((0, 300), (200, 100)),
             text='RETURN', manager=manager),

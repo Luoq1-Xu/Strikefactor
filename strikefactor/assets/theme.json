@@ -106,6 +106,42 @@
          {
              "text_shadow": "0"
          }
+    },
+
+    "@pitcher_button":
+    {
+        "font":
+        {
+            "name": "8bitoperator_jve",
+            "size": "20",
+            "bold": "0",
+            "italic": "1",
+            "regular_path": "8bitoperator_jve.ttf"
+        }
+    },
+
+    "@sandbox_button":
+    {
+        "font":
+        {
+            "name": "8bitoperator_jve",
+            "size": "14",
+            "bold": "0",
+            "italic": "0",
+            "regular_path": "8bitoperator_jve.ttf"
+        }
+    },
+
+    "@sandbox_pitch_button":
+    {
+        "font":
+        {
+            "name": "8bitoperator_jve",
+            "size": "16",
+            "bold": "0",
+            "italic": "0",
+            "regular_path": "8bitoperator_jve.ttf"
+        }
     }
 
 }

@@ -63,7 +63,7 @@ class Sale(Pitcher):
 
     def FF(self, simulation_func):
         ax, ay = 0.005, 0.005
-        speed_mph = random.gauss(93.0, 0.25)
+        speed_mph = random.gauss(94.8, 0.25)
         travel_time = calculate_travel_time(speed_mph, self.arm_extension)
 
         # Specify target location directly (with optional randomness)
@@ -83,7 +83,7 @@ class Sale(Pitcher):
 
     def SI(self, simulation_func):
         ax, ay = 0.025, 0.015
-        speed_mph = random.gauss(92.0, 0.25)
+        speed_mph = random.gauss(93.9, 0.25)
         travel_time = calculate_travel_time(speed_mph, self.arm_extension)
 
         # Specify target location directly (with optional randomness)

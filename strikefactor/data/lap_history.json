@@ -1,0 +1,135 @@
+{
+  "version": "1.0",
+  "created_date": "2026-01-30T15:03:27.058160",
+  "last_updated": "2026-02-01T21:51:01.214800",
+  "laps": [
+    {
+      "lap_number": 1,
+      "timestamp": "2026-01-30T15:03:27.058120",
+      "heatmap_data": [
+        107,
+        131,
+        58,
+        322,
+        423,
+        278,
+        484,
+        553,
+        355
+      ],
+      "heatmap_attempts": [
+        623,
+        708,
+        389,
+        1304,
+        1647,
+        1211,
+        1876,
+        2165,
+        1584
+      ],
+      "total_swings": 11507,
+      "total_hits": 2711,
+      "total_pitches": 34692,
+      "total_at_bats": 280,
+      "batting_average": 9.682,
+      "duration_seconds": 93.92232
+    },
+    {
+      "lap_number": 2,
+      "timestamp": "2026-01-30T15:10:41.043791",
+      "heatmap_data": [
+        0,
+        2,
+        0,
+        1,
+        2,
+        1,
+        1,
+        2,
+        0
+      ],
+      "heatmap_attempts": [
+        1,
+        5,
+        0,
+        4,
+        6,
+        1,
+        8,
+        3,
+        3
+      ],
+      "total_swings": 31,
+      "total_hits": 9,
+      "total_pitches": 65,
+      "total_at_bats": 25,
+      "batting_average": 0.36,
+      "duration_seconds": 433.984943
+    },
+    {
+      "lap_number": 3,
+      "timestamp": "2026-01-30T15:19:46.656479",
+      "heatmap_data": [
+        0,
+        0,
+        0,
+        1,
+        1,
+        0,
+        1,
+        0,
+        0
+      ],
+      "heatmap_attempts": [
+        0,
+        5,
+        3,
+        6,
+        3,
+        1,
+        11,
+        9,
+        5
+      ],
+      "total_swings": 43,
+      "total_hits": 3,
+      "total_pitches": 109,
+      "total_at_bats": 37,
+      "batting_average": 0.081,
+      "duration_seconds": 111.225587
+    },
+    {
+      "lap_number": 4,
+      "timestamp": "2026-02-01T21:51:01.214800",
+      "heatmap_data": [
+        10,
+        5,
+        3,
+        9,
+        8,
+        2,
+        4,
+        11,
+        2
+      ],
+      "heatmap_attempts": [
+        27,
+        31,
+        16,
+        34,
+        41,
+        17,
+        35,
+        58,
+        20
+      ],
+      "total_swings": 279,
+      "total_hits": 54,
+      "total_pitches": 663,
+      "total_at_bats": 228,
+      "batting_average": 0.237,
+      "duration_seconds": 329.302696
+    }
+  ]
+}
