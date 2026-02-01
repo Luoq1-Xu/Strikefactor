@@ -243,6 +243,7 @@ class StatSwing(UIWindow):
         self.pitch_trajectories = pitch_trajectories
         self.last_pitch_information = last_pitch_information
         self.x = 0  # Legacy frame counter
+        self.on_close_callback = None  # Callback for window close button
 
         # UI element storage
         self.filter_buttons = {}
@@ -585,8 +586,14 @@ class StatSwing(UIWindow):
         return handled
 
     def on_close_window_button_pressed(self):
-        """Handle window close button."""
+        """Handle window close button - notify game to properly exit view pitches."""
+        if self.on_close_callback:
+            self.on_close_callback()
         return super().hide()
+
+    def set_close_callback(self, callback):
+        """Set a callback to be called when the window is closed via X button."""
+        self.on_close_callback = callback
 
     def _migrate_legacy_data(self):
         """Convert legacy trajectory data to enhanced records."""

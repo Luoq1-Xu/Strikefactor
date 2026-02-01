@@ -5,9 +5,9 @@ Manages state transitions and coordinates between different game states.
 
 from typing import Dict, Optional
 from .game_states import (
-    GameState, MenuState, GameplayState, SummaryState,
-    VisualizationState, ViewPitchesState, InningEndState, GameDayState,
-    GameDayTransitionState
+    GameState, ModeSelectState, MenuState, GameplayState, SummaryState,
+    VisualizationState, ViewPitchesState, InningEndState, SandboxMenuState,
+    SandboxGameplayState, GameDayState, GameDayTransitionState
 )
 
 
@@ -26,7 +26,10 @@ class GameStateManager:
     def _initialize_states(self):
         """Initialize all game states."""
         self.states = {
+            'mode_select': ModeSelectState(self.game),
             'menu': MenuState(self.game),
+            'sandbox_menu': SandboxMenuState(self.game),
+            'sandbox_gameplay': SandboxGameplayState(self.game),
             'gameplay': GameplayState(self.game),
             'summary': SummaryState(self.game),
             'visualization': VisualizationState(self.game),
@@ -79,6 +82,10 @@ class GameStateManager:
         """Handle legacy menu_state changes from the original code."""
         if menu_state_value == 0:
             self.change_state('menu')
+        elif menu_state_value == 'mode_select':
+            self.change_state('mode_select')
+        elif menu_state_value == 'sandbox':
+            self.change_state('sandbox_menu')
         elif menu_state_value == 100:
             self.change_state('summary')
         elif menu_state_value == 'visualise':

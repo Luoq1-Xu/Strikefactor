@@ -49,35 +49,6 @@ class Sasaki(Pitcher):
         elif current_time > start_time + 1120:
             self.draw(self.screen, 14, -9, 12)
 
-    def CUI(self, main_simulation):
-        sampley = random.uniform(-17,15)
-        samplex = random.uniform(-14, -5)
-        speed_mph = 81.0
-        travel_time = calculate_travel_time(speed_mph, self.arm_extension)
-        main_simulation(self.release_point, 'rokisasaki', 0.003, 0.02, samplex, sampley, travel_time, 'CU')
-
-    def sasakiSplitter(self, main_simulation):
-        sampley = random.uniform(-5,15)
-        samplex = random.uniform(-10,20)
-        horizontalBreak = random.uniform(-0.01, 0.01)
-        speed_mph = 90.0
-        travel_time = calculate_travel_time(speed_mph, self.arm_extension)
-        main_simulation(self.release_point, 'rokisasaki', horizontalBreak, 0.045, samplex, sampley, travel_time, 'FS')
-
-    def fastball(self, main_simulation):
-        sampley = random.uniform(-20, 40)
-        samplex = random.uniform(-15, 45)
-        speed_mph = 101.0
-        travel_time = calculate_travel_time(speed_mph, self.arm_extension)
-        main_simulation(self.release_point, 'rokisasaki', -0.01, 0.005, samplex, sampley, travel_time, 'FF')
-
-    def sasaki_slider(self, main_simulation):
-        sampley = random.uniform(-30,10)
-        samplex = random.uniform(-30,30)
-        speed_mph = 86.0
-        travel_time = calculate_travel_time(speed_mph, self.arm_extension)
-        main_simulation(self.release_point, 'rokisasaki', 0.015, 0.035, samplex, sampley, travel_time, 'SL')
-
     def FB(self, simulation_func):
         ax, ay = -0.005, 0.0025
         speed_mph = random.gauss(96.1, 1.0)

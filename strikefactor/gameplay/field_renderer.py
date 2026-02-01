@@ -32,7 +32,11 @@ class FieldRenderer:
         
         # Data file path
         self.data_file = os.path.join(os.path.dirname(__file__), '..', 'data', 'batting_stats.json')
-        
+
+        # Lap history file path
+        self.lap_history_file = os.path.join(os.path.dirname(__file__), '..', 'data', 'lap_history.json')
+        self.lap_start_time = datetime.now()
+
         # Load existing data if available
         self.load_data()
         
@@ -488,5 +492,138 @@ class FieldRenderer:
                 'hits': self.heatmap_data[i],
                 'attempts': self.heatmap_attempts[i]
             })
-            
+
         return stats
+
+    # ==================== Lap Feature Methods ====================
+
+    def has_stats_to_lap(self) -> bool:
+        """
+        Check if there are any stats to create a lap from.
+
+        Returns:
+            bool: True if there are stats worth saving
+        """
+        return (self.total_pitches > 0 or
+                self.total_swings > 0 or
+                sum(self.heatmap_attempts) > 0)
+
+    def create_lap(self) -> dict:
+        """
+        Create a new lap entry from current session stats.
+        Stores the current stats in lap history and resets current stats.
+
+        Returns:
+            dict: The created lap entry data
+        """
+        # Calculate batting average before creating lap
+        batting_avg = self.get_overall_batting_average()
+
+        # Calculate duration since last lap (or session start)
+        lap_end_time = datetime.now()
+        duration = (lap_end_time - self.lap_start_time).total_seconds()
+
+        # Load existing lap history
+        lap_history = self.load_lap_history()
+
+        # Determine lap number
+        lap_number = len(lap_history.get('laps', [])) + 1
+
+        # Create lap entry
+        lap_entry = {
+            'lap_number': lap_number,
+            'timestamp': lap_end_time.isoformat(),
+            'heatmap_data': self.heatmap_data.copy(),
+            'heatmap_attempts': self.heatmap_attempts.copy(),
+            'total_swings': self.total_swings,
+            'total_hits': self.total_hits,
+            'total_pitches': self.total_pitches,
+            'total_at_bats': self.total_at_bats,
+            'batting_average': round(batting_avg, 3),
+            'duration_seconds': duration
+        }
+
+        # Add to history
+        if 'laps' not in lap_history:
+            lap_history['laps'] = []
+            lap_history['version'] = '1.0'
+            lap_history['created_date'] = lap_end_time.isoformat()
+
+        lap_history['laps'].append(lap_entry)
+        lap_history['last_updated'] = lap_end_time.isoformat()
+
+        # Enforce max history limit (100 laps)
+        MAX_LAP_HISTORY = 100
+        if len(lap_history['laps']) > MAX_LAP_HISTORY:
+            lap_history['laps'] = lap_history['laps'][-MAX_LAP_HISTORY:]
+
+        # Save lap history
+        self.save_lap_history(lap_history)
+
+        # Reset current stats (using existing method)
+        self.reset_heatmap_data()
+
+        # Reset lap timer
+        self.lap_start_time = datetime.now()
+
+        print(f"✓ Lap {lap_number} created: BA {batting_avg:.3f}, {self.total_hits} hits in {self.total_at_bats} ABs")
+
+        return lap_entry
+
+    def load_lap_history(self) -> dict:
+        """
+        Load lap history from file.
+
+        Returns:
+            dict: Lap history data or empty structure if file doesn't exist
+        """
+        try:
+            if os.path.exists(self.lap_history_file):
+                with open(self.lap_history_file, 'r') as f:
+                    return json.load(f)
+            else:
+                return {
+                    'version': '1.0',
+                    'created_date': datetime.now().isoformat(),
+                    'last_updated': datetime.now().isoformat(),
+                    'laps': []
+                }
+        except Exception as e:
+            print(f"✗ Error loading lap history: {e}")
+            return {'version': '1.0', 'laps': []}
+
+    def save_lap_history(self, lap_history: dict):
+        """
+        Save lap history to file.
+
+        Args:
+            lap_history: The lap history data to save
+        """
+        try:
+            os.makedirs(os.path.dirname(self.lap_history_file), exist_ok=True)
+            with open(self.lap_history_file, 'w') as f:
+                json.dump(lap_history, f, indent=2)
+            print(f"✓ Lap history saved to {self.lap_history_file}")
+        except Exception as e:
+            print(f"✗ Error saving lap history: {e}")
+
+    def get_lap_history(self) -> list:
+        """
+        Get all lap entries.
+
+        Returns:
+            list: List of lap entry dictionaries
+        """
+        history = self.load_lap_history()
+        return history.get('laps', [])
+
+    def clear_lap_history(self):
+        """Clear all lap history."""
+        empty_history = {
+            'version': '1.0',
+            'created_date': datetime.now().isoformat(),
+            'last_updated': datetime.now().isoformat(),
+            'laps': []
+        }
+        self.save_lap_history(empty_history)
+        print("✓ Lap history cleared")

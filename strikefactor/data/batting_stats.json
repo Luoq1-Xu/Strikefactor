@@ -1,30 +1,30 @@
 {
   "heatmap_data": [
-    102,
-    125,
-    56,
-    312,
-    413,
-    276,
-    478,
-    538,
-    349
+    4,
+    1,
+    0,
+    6,
+    12,
+    2,
+    7,
+    14,
+    6
   ],
   "heatmap_attempts": [
-    607,
-    674,
-    380,
-    1284,
-    1608,
-    1196,
-    1848,
-    2107,
-    1556
+    9,
+    12,
+    2,
+    9,
+    19,
+    6,
+    10,
+    17,
+    7
   ],
-  "total_swings": 11260,
-  "total_hits": 2649,
-  "total_pitches": 34082,
-  "total_at_bats": 76,
-  "last_updated": "2026-01-28T20:44:09.837673",
+  "total_swings": 91,
+  "total_hits": 52,
+  "total_pitches": 125,
+  "total_at_bats": 75,
+  "last_updated": "2026-02-01T22:18:42.796172",
   "version": "1.1"
 }

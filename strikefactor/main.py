@@ -214,6 +214,9 @@ class Game:
         # Sync PitchViz animation timing with display FPS setting
         self.ui_manager.update_view_window_fps(self.settings_manager.get_display_fps())
 
+        # Set callback for PitchViz window close button
+        self.ui_manager.view_window.set_close_callback(self.exit_view_pitches)
+
         # Random scenario generator
         self.random_scenario_generator = RandomScenarioGenerator()
 
@@ -231,7 +234,7 @@ class Game:
 
         # State management (must come after menu_state is initialized)
         self.state_manager = GameStateManager(self)
-        self.state_manager.change_state('menu')
+        self.state_manager.change_state('mode_select')
         self.just_refreshed = 0
         self.current_gamemode = 0
         self.inning_ended = False
@@ -239,7 +242,8 @@ class Game:
         self.pitch_trajectories = []
         self.enhanced_pitch_records = []  # Enhanced pitch data for visualization
         self.last_pitch_information = []
-        
+        self.previous_mode_before_pitchviz = None  # Track mode before entering PitchViz
+
         # Load AI model
         self.ai_model = pickle.load(open(get_path("ai/ai_umpire.pkl"), "rb"))
         
@@ -254,6 +258,29 @@ class Game:
         self.ui_manager.register_button_callback('random_scenario', lambda: self.enter_random_scenario())
         self.ui_manager.register_button_callback('gameday', lambda: self.enter_gameday_mode())
 
+        # Mode selection callbacks
+        self.ui_manager.register_button_callback('arcade_mode', lambda: self.enter_arcade_mode())
+        self.ui_manager.register_button_callback('sandbox_mode', lambda: self.enter_sandbox_mode())
+        self.ui_manager.register_button_callback('back_to_mode_select', lambda: self.return_to_mode_select())
+
+        # Sandbox mode callbacks - pitcher selection
+        self.ui_manager.register_button_callback('sandbox_pitcher_sale', lambda: self._sandbox_switch_pitcher('sale'))
+        self.ui_manager.register_button_callback('sandbox_pitcher_degrom', lambda: self._sandbox_switch_pitcher('degrom'))
+        self.ui_manager.register_button_callback('sandbox_pitcher_sasaki', lambda: self._sandbox_switch_pitcher('sasaki'))
+        self.ui_manager.register_button_callback('sandbox_pitcher_yamamoto', lambda: self._sandbox_switch_pitcher('yamamoto'))
+        self.ui_manager.register_button_callback('sandbox_pitcher_mcclanahan', lambda: self._sandbox_switch_pitcher('mcclanahan'))
+
+        # Sandbox mode callbacks - pitch type selection
+        self.ui_manager.register_button_callback('sandbox_pitch_1', lambda: self._sandbox_select_pitch(0))
+        self.ui_manager.register_button_callback('sandbox_pitch_2', lambda: self._sandbox_select_pitch(1))
+        self.ui_manager.register_button_callback('sandbox_pitch_3', lambda: self._sandbox_select_pitch(2))
+        self.ui_manager.register_button_callback('sandbox_pitch_4', lambda: self._sandbox_select_pitch(3))
+        self.ui_manager.register_button_callback('sandbox_pitch_5', lambda: self._sandbox_select_pitch(4))
+        self.ui_manager.register_button_callback('sandbox_pitch_6', lambda: self._sandbox_select_pitch(5))
+
+        # Sandbox mode - exit button
+        self.ui_manager.register_button_callback('sandbox_exit', lambda: self.return_to_mode_select())
+
         # Navigation callbacks
         self.ui_manager.register_button_callback('main_menu', lambda: self.set_menu_state(0))
         self.ui_manager.register_button_callback('back_to_main_menu', lambda: self.set_menu_state(0))
@@ -266,6 +293,11 @@ class Game:
         self.ui_manager.register_button_callback('strikezone', lambda: self.field_renderer.toggle_strikezone_mode())
         self.ui_manager.register_button_callback('toggle_ump_sound', lambda: self.toggle_ump_sound())
         self.ui_manager.register_button_callback('toggle_batter', lambda: self.batter.toggle_handedness())
+        self.ui_manager.register_button_callback('scout', lambda: self.toggle_scouting_report())
+
+        # Lap feature callbacks
+        self.ui_manager.register_button_callback('lap_stats', lambda: self.create_lap())
+        self.ui_manager.register_button_callback('view_laps', lambda: self.toggle_lap_log())
 
         # Settings menu callbacks
         self.ui_manager.register_button_callback('settings', lambda: self.enter_settings_menu())
@@ -452,7 +484,28 @@ class Game:
         crosshair = create_pci_cursor()
         pygame.mouse.set_cursor(crosshair)
         self.state_manager.handle_menu_state_change(gamemode_name)
-        
+        # Update scouting panel with new pitcher
+        self.ui_manager.update_scouting_panel(self.current_pitcher)
+
+    def toggle_scouting_report(self):
+        """Toggle the scouting report panel visibility."""
+        self.ui_manager.toggle_scouting_panel(self.current_pitcher)
+
+    def create_lap(self):
+        """Create a new lap from current batting stats."""
+        if not self.field_renderer.has_stats_to_lap():
+            self.ui_manager.show_banner("No stats to record!", typing_speed=0.02)
+            return
+
+        lap_entry = self.field_renderer.create_lap()
+        ba = lap_entry.get('batting_average', 0)
+        lap_num = lap_entry.get('lap_number', 0)
+        self.ui_manager.show_banner(f"Lap {lap_num} saved! BA: {ba:.3f}", typing_speed=0.02)
+
+    def toggle_lap_log(self):
+        """Toggle the lap log panel visibility."""
+        self.ui_manager.toggle_lap_log_panel(self.field_renderer)
+
     def enter_random_scenario(self):
         """Enter a random scenario game mode."""
         scenario = self.random_scenario_generator.generate_random_scenario()
@@ -489,6 +542,8 @@ class Game:
 
         # Transition to gameplay state
         self.state_manager.change_state('gameplay')
+        # Update scouting panel with new pitcher
+        self.ui_manager.update_scouting_panel(self.current_pitcher)
 
     def enter_gameday_mode(self):
         """Enter GameDay mode - a full 9-inning simulated game."""
@@ -508,7 +563,57 @@ class Game:
 
         self.menu_state = 'gameday'
         self.state_manager.change_state('gameday')
-        
+        # Update scouting panel with new pitcher
+        self.ui_manager.update_scouting_panel(self.current_pitcher)
+
+    def enter_arcade_mode(self):
+        """Enter Arcade mode (pitcher selection menu)."""
+        self.menu_state = 0
+        self.state_manager.change_state('menu')
+
+    def enter_sandbox_mode(self):
+        """Enter Sandbox mode - direct gameplay with user-controlled pitch selection."""
+        # Set default pitcher
+        self.pitcher_manager.set_current_pitcher('sale')
+
+        # Reset game stats for fresh start
+        self.game_stats.reset_game_stats()
+        self.scoreKeeper.reset()
+
+        # Clear pitch data
+        self.pitch_trajectories = []
+        self.enhanced_pitch_records = []
+        self.pitches_display = []
+
+        # Set cursor
+        crosshair = create_pci_cursor()
+        pygame.mouse.set_cursor(crosshair)
+
+        self.menu_state = 'sandbox_gameplay'
+        self.current_gamemode = 'sandbox_gameplay'
+        self.state_manager.change_state('sandbox_gameplay')
+
+    def _sandbox_switch_pitcher(self, pitcher_name: str):
+        """Switch pitcher in sandbox mode."""
+        if self.state_manager.is_current_state('sandbox_gameplay'):
+            state = self.state_manager.get_current_state()
+            state.switch_pitcher(pitcher_name)
+
+    def _sandbox_select_pitch(self, pitch_index: int):
+        """Select pitch type in sandbox mode by button index."""
+        if self.state_manager.is_current_state('sandbox_gameplay'):
+            state = self.state_manager.get_current_state()
+            pitch_names = self.current_pitcher.get_pitch_names()
+            if pitch_index < len(pitch_names):
+                state.select_pitch(pitch_names[pitch_index])
+
+    def return_to_mode_select(self):
+        """Return to main mode selection menu."""
+        self.menu_state = 'mode_select'
+        self.inning_ended = False
+        self.game_stats.reset_game_stats()
+        self.state_manager.change_state('mode_select')
+
     def set_menu_state(self, state):
         """Set the current menu state."""
         self.menu_state = state
@@ -521,7 +626,11 @@ class Game:
     def exit_view_pitches(self):
         """Exit the view pitches mode."""
         self.ui_manager.hide_view_window()
-        # Return to the appropriate state based on inning status
+
+        # Use stored previous mode to determine where to return
+        previous_mode = self.previous_mode_before_pitchviz
+
+        # Return to the appropriate state based on inning status and mode
         if self.currentouts == 3 and self.inning_ended:
             if self.in_gameday_mode:
                 self.ui_manager.set_button_visibility('gameday_transition')
@@ -531,14 +640,34 @@ class Game:
                 self.ui_manager.set_button_visibility('inning_end')
                 self.menu_state = 'inning_end'
                 self.state_manager.change_state('inning_end')
+        elif previous_mode == 'sandbox_gameplay' or self.current_gamemode == 'sandbox_gameplay':
+            # Return to sandbox gameplay mode
+            self.ui_manager.set_button_visibility('sandbox_gameplay')
+            self.menu_state = 'sandbox_gameplay'
+            self.state_manager.change_state('sandbox_gameplay')
+            # Re-update pitch buttons after returning
+            state = self.state_manager.get_current_state()
+            if hasattr(state, '_update_pitch_buttons'):
+                state._update_pitch_buttons()
         else:
             self.ui_manager.set_button_visibility('in_game')
             self.menu_state = self.current_gamemode
             self.state_manager.change_state('gameplay')
+
+        # Clear the stored previous mode
+        self.previous_mode_before_pitchviz = None
         
     def enter_view_pitches(self):
         """Enter the view pitches mode."""
-        self.ui_manager.set_button_visibility('view_pitches')
+        # Store current mode before switching to view_pitches
+        self.previous_mode_before_pitchviz = self.menu_state
+
+        # Use appropriate visibility state based on current mode
+        if self.menu_state == 'sandbox_gameplay' or self.current_gamemode == 'sandbox_gameplay':
+            self.ui_manager.set_button_visibility('sandbox_view_pitches')
+        else:
+            self.ui_manager.set_button_visibility('view_pitches')
+
         self.ui_manager.update_pitch_info(self.pitch_trajectories, self.last_pitch_information)
         self.ui_manager.show_view_window()
         self.menu_state = 'view_pitches'
@@ -690,6 +819,8 @@ class Game:
             if hasattr(self, 'state_manager') and self.state_manager.current_state:
                 if self.state_manager.current_state.__class__.__name__ == 'GameplayState':
                     current_state = 'in_game'
+                elif self.state_manager.current_state.__class__.__name__ == 'SandboxGameplayState':
+                    current_state = 'sandbox_gameplay'
                 elif self.state_manager.current_state.__class__.__name__ == 'MenuState':
                     if hasattr(self, 'menu_state'):
                         if self.menu_state == 'settings':
@@ -771,7 +902,9 @@ class Game:
         self.ui_manager.clear_pitch_result()
         self.ui_manager.update_pitch_result(pitch_result_string)
         self.ui_manager.update_scoreboard(game_status_result_string)
-        
+        # Refresh scouting panel stats after each pitch
+        self.ui_manager.refresh_scouting_panel()
+
     def check_inning_end(self):
         """Check if the inning should end."""
         if self.currentouts == 3 and not self.inning_ended:
@@ -827,7 +960,7 @@ class Game:
                     running = False
                     break
                     
-            # Check for inning end only when in gameplay state
+            # Check for inning end only when in gameplay state (not sandbox mode - sandbox has unlimited outs)
             if self.state_manager.is_current_state('gameplay'):
                 self.check_inning_end()
             
