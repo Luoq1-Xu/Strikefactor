@@ -51,7 +51,7 @@ class Sasaki(Pitcher):
 
     def FB(self, simulation_func):
         ax, ay = -0.005, 0.0025
-        speed_mph = random.gauss(96.1, 1.0)
+        speed_mph = random.gauss(96.1, 2.0)
         travel_time = calculate_travel_time(speed_mph, self.arm_extension)
 
         # Specify target location directly (with optional randomness)

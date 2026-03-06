@@ -19,6 +19,8 @@ class Degrom(Pitcher):
         self.add_pitch_type(self.FB_chase, "FF_chase")
         self.add_pitch_type(self.SL, "SL")
         self.add_pitch_type(self.CH, "CH")
+        self.add_pitch_type(self.SL_CHASE, "SL_chase")
+        self.add_pitch_type(self.CH_CHASE, "CH_chase")
         
     def draw_pitcher(self, start_time, current_time):
         if current_time == 0 and start_time == 0:
@@ -88,8 +90,8 @@ class Degrom(Pitcher):
         travel_time = calculate_travel_time(speed_mph, self.arm_extension)
 
         # Specify target location directly (with optional randomness)
-        target_x = random.choice([random.uniform(490, 520), random.uniform(600, 650)]) # x position at plate
-        target_y = random.choice([random.uniform(400, 450), random.uniform(550, 600)]) # y position at plate
+        target_x = random.choice([random.uniform(500, 550), random.uniform(700, 750)]) # x position at plate
+        target_y = random.choice([random.uniform(400, 450), random.uniform(500, 550)]) # y position at plate
 
         vx, vy = calculate_pitch_velocity(
             self.release_point,
@@ -101,7 +103,6 @@ class Degrom(Pitcher):
         )
 
         simulation_func(self.release_point, 'jacobdegrom', ax, ay, vx, vy, travel_time, 'FF')
-
 
     def SL(self, simulation_func):
         ax, ay = 0.015, 0.04
@@ -143,4 +144,42 @@ class Degrom(Pitcher):
 
         simulation_func(self.release_point, 'jacobdegrom', ax, ay, vx, vy, travel_time, 'CH')
         
+    def SL_CHASE(self, simulation_func):
+        ax, ay = 0.015, 0.04
+        speed_mph = random.gauss(90.0, 2.5)
+        travel_time = calculate_travel_time(speed_mph, self.arm_extension)
 
+        # Specify target location directly (with optional randomness)
+        target_x = random.choice([random.uniform(500, 550), random.uniform(700, 750)]) # x position at plate
+        target_y = random.uniform(500, 600) # y position at plate
+
+        vx, vy = calculate_pitch_velocity(
+            self.release_point,
+            target_x=target_x,
+            target_y=target_y,
+            ax=ax,
+            ay=ay,
+            traveltime=travel_time
+        )
+
+        simulation_func(self.release_point, 'jacobdegrom', ax, ay, vx, vy, travel_time, 'SL')
+
+    def CH_CHASE(self, simulation_func):
+        ax, ay = -0.015, 0.035
+        speed_mph = random.gauss(88.0, 2.5)
+        travel_time = calculate_travel_time(speed_mph, self.arm_extension)
+
+        # Specify target location directly (with optional randomness)
+        target_x = random.choice([random.uniform(500, 550), random.uniform(700, 750)]) # x position at plate
+        target_y = random.uniform(500, 600) # y position at plate
+
+        vx, vy = calculate_pitch_velocity(
+            self.release_point,
+            target_x=target_x,
+            target_y=target_y,
+            ax=ax,
+            ay=ay,
+            traveltime=travel_time
+        )
+
+        simulation_func(self.release_point, 'jacobdegrom', ax, ay, vx, vy, travel_time, 'CH')

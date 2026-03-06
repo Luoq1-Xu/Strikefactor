@@ -87,7 +87,7 @@ class Sale(Pitcher):
         travel_time = calculate_travel_time(speed_mph, self.arm_extension)
 
         # Specify target location directly (with optional randomness)
-        target_x = random.uniform(490, 670)  # x position at plate
+        target_x = random.uniform(460, 770)  # x position at plate
         target_y = random.uniform(420, 600)  # y position at plate
 
         vx, vy = calculate_pitch_velocity(
@@ -107,7 +107,7 @@ class Sale(Pitcher):
         travel_time = calculate_travel_time(speed_mph, self.arm_extension)
 
         # Specify target location directly (with optional randomness)
-        target_x = random.uniform(490, 670)  # x position at plate
+        target_x = random.uniform(490, 770)  # x position at plate
         target_y = random.uniform(420, 600)  # y position at plate
 
         vx, vy = calculate_pitch_velocity(

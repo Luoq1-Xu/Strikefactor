@@ -90,6 +90,9 @@ class Pitcher:
         return
 
     def pitch(self, simulation_func, pitch_name):
+        if pitch_name not in self.pitch_arsenal:
+            print(f"[WARNING] Unknown pitch '{pitch_name}', falling back to random pitch")
+            pitch_name = random.choice(list(self.pitch_arsenal.keys()))
         self.pitch_arsenal[pitch_name](simulation_func)
 
     def print_basic_stats(self):

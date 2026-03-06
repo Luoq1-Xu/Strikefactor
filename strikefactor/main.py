@@ -550,7 +550,8 @@ class Game:
         from gameplay.gameday_manager import GameDayManager
 
         # Initialize gameday manager and set flag
-        self.gameday_manager = GameDayManager(player_name="Player")
+        difficulty = self.settings_manager.get_difficulty().value
+        self.gameday_manager = GameDayManager(player_name="Player", difficulty=difficulty)
         self.in_gameday_mode = True
 
         # Set starting pitcher (Yamamoto)
@@ -568,11 +569,15 @@ class Game:
 
     def enter_arcade_mode(self):
         """Enter Arcade mode (pitcher selection menu)."""
+        self.in_gameday_mode = False
+        self.gameday_manager = None
         self.menu_state = 0
         self.state_manager.change_state('menu')
 
     def enter_sandbox_mode(self):
         """Enter Sandbox mode - direct gameplay with user-controlled pitch selection."""
+        self.in_gameday_mode = False
+        self.gameday_manager = None
         # Set default pitcher
         self.pitcher_manager.set_current_pitcher('sale')
 
@@ -611,6 +616,8 @@ class Game:
         """Return to main mode selection menu."""
         self.menu_state = 'mode_select'
         self.inning_ended = False
+        self.in_gameday_mode = False
+        self.gameday_manager = None
         self.game_stats.reset_game_stats()
         self.state_manager.change_state('mode_select')
 
@@ -619,6 +626,8 @@ class Game:
         self.menu_state = state
         if state == 0:  # Returning to main menu
             self.inning_ended = False
+            self.in_gameday_mode = False
+            self.gameday_manager = None
             # Reset game stats so a fresh game can be started
             self.game_stats.reset_game_stats()
         self.state_manager.handle_menu_state_change(state)
@@ -914,6 +923,8 @@ class Game:
             if self.in_gameday_mode:
                 # Update player's score in gameday manager (add to cumulative score)
                 self.gameday_manager.player_score += self.scoreKeeper.get_score()
+                # Record half-inning runs for box score tracking
+                self.gameday_manager._current_half_runs = self.scoreKeeper.get_score()
 
                 # DON'T call end_half_inning() here - let the transition state handle it
                 # This ensures the state machine sees the correct inning state

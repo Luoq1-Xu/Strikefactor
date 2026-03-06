@@ -279,6 +279,9 @@ class PitchSimulation:
                 swing_location_y=swing_y, ball_location_y=ball_y, timing_diff=timing_diff
             )
 
+        # DEBUG: Log hit_string from hit_outcome_manager
+        print(f">>> _handle_successful_hit: hit_string='{hit_string}', swing_type={self.swing_type}", flush=True)
+
         # Handle different outcomes
         if hit_string in ["FLYOUT", "GROUNDOUT"]:
             self._handle_out_result(hit_string)
@@ -313,11 +316,23 @@ class PitchSimulation:
         self.is_hit = True
         self.game.hits += 1
 
+        # DEBUG: Log the hit_string being passed
+        print(f">>> _handle_hit_result called with hit_string='{hit_string}'", flush=True)
+        homerun_text = self.game.hit_outcome_manager.get_homerun_text()
+        print(f">>> homerun_text='{homerun_text}', hit_type={self.game.hit_outcome_manager.hit_type}", flush=True)
+
         # Record at-bat (hits count as at-bats in baseball)
         self.game.field_renderer.record_at_bat()
 
-        if self.game.hit_outcome_manager.get_homerun_text() != '':
-            self.game.ui_manager.show_banner("{}".format(self.game.hit_outcome_manager.get_homerun_text()))
+        # Record hit with type information
+        self.game.field_renderer.record_hit(
+            self.game.ball[0],
+            self.game.ball[1],
+            hit_type=hit_string  # Pass hit outcome string for triple slash tracking
+        )
+
+        if homerun_text != '':
+            self.game.ui_manager.show_banner("{}".format(homerun_text))
             self.game.homeruns_allowed += 1
         else:
             self.game.ui_manager.show_banner("{}".format(hit_string))
@@ -382,6 +397,9 @@ class PitchSimulation:
         if self.game.currentballs == 4:
             self.outcome = 'walk'
             self.game.currentwalks += 1
+
+            # Record walk to persistent stats
+            self.game.field_renderer.record_walk()
 
             # Track score before walk for gameday mode
             score_before = self.game.scoreKeeper.get_score() if self.game.in_gameday_mode else 0
@@ -534,11 +552,12 @@ class PitchSimulation:
         # Record attempt if player swung
         if self.game.swing_started > 0:
             self.game.field_renderer.record_attempt(final_x, final_y)
-            
-        # Record hit if it was a successful hit
-        if self.is_hit:
-            self.game.field_renderer.record_hit(final_x, final_y)
-            
+
+        # NOTE: Hit recording moved to _handle_hit_result() to capture hit type
+        # The generic record_hit() call below is commented out to avoid double-recording
+        # if self.is_hit:
+        #     self.game.field_renderer.record_hit(final_x, final_y)
+
         # Save data periodically (every 10 pitches) to prevent too frequent saves
         if self.game.field_renderer.total_pitches % 10 == 0:
             self.game.field_renderer.save_data()

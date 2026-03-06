@@ -29,7 +29,16 @@ class FieldRenderer:
         self.total_hits = 0
         self.total_pitches = 0
         self.total_at_bats = 0  # At-bats: hits + outs + strikeouts (excludes walks, fouls)
-        
+
+        # Triple slash statistics fields (v1.2)
+        self.total_singles = 0
+        self.total_doubles = 0
+        self.total_triples = 0
+        self.total_home_runs = 0
+        self.total_walks = 0
+        self.total_hbp = 0  # Hit by pitch (not yet implemented in game)
+        self.total_sacrifice_flies = 0  # Sacrifice flies (not yet implemented)
+
         # Data file path
         self.data_file = os.path.join(os.path.dirname(__file__), '..', 'data', 'batting_stats.json')
 
@@ -172,17 +181,53 @@ class FieldRenderer:
             else:
                 return 8  # bot_right
     
-    def record_hit(self, x, y):
-        """Record a hit at the given position."""
+    def record_hit(self, x, y, hit_type=None):
+        """
+        Record a hit at the given position with type tracking.
+
+        Args:
+            x: X-coordinate of the hit
+            y: Y-coordinate of the hit
+            hit_type: Type of hit - can be 'SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN' or numeric 1-4
+        """
+        print(f">>> record_hit CALLED: x={x:.1f}, y={y:.1f}, hit_type='{hit_type}'", flush=True)
+
         segment = self.get_zone_segment(x, y)
-        # print(f"Recording HIT at ({x:.1f}, {y:.1f}) -> segment {segment}")
+        print(f"    segment={segment}", flush=True)
+
+        # Record heatmap data only if within strike zone (segment 0-8)
         if 0 <= segment <= 8:
             self.heatmap_data[segment] += 1
-            self.total_hits += 1
-            # print(f"✓ Hit recorded! Segment {segment} now has {self.heatmap_data[segment]} hits / {self.heatmap_attempts[segment]} attempts")
-            
-            # Auto-save data after each hit
-            self.save_data()
+            print(f"    Heatmap updated for segment {segment}", flush=True)
+        else:
+            print(f"    Hit outside strike zone - not added to heatmap", flush=True)
+
+        # ALWAYS record the hit for overall batting statistics (regardless of zone)
+        self.total_hits += 1
+
+        # Track hit type breakdown
+        if hit_type == 'SINGLE' or hit_type == 1:
+            self.total_singles += 1
+            print(f"✓ SINGLE recorded (total: {self.total_singles})", flush=True)
+        elif hit_type == 'DOUBLE' or hit_type == 2:
+            self.total_doubles += 1
+            print(f"✓ DOUBLE recorded (total: {self.total_doubles})", flush=True)
+        elif hit_type == 'TRIPLE' or hit_type == 3:
+            self.total_triples += 1
+            print(f"✓ TRIPLE recorded (total: {self.total_triples})", flush=True)
+        elif hit_type == 'HOME RUN' or hit_type == 4:
+            self.total_home_runs += 1
+            print(f"✓ HOME RUN recorded (total: {self.total_home_runs})", flush=True)
+        else:
+            # Debug: Log unrecognized hit types
+            print(f"⚠ Unknown hit_type: '{hit_type}' (type: {type(hit_type).__name__})", flush=True)
+
+        # Debug: Print current triple slash after each hit
+        print(f"  Triple Slash: {self.get_triple_slash_line()} | AB:{self.total_at_bats} H:{self.total_hits} (1B:{self.total_singles} 2B:{self.total_doubles} 3B:{self.total_triples} HR:{self.total_home_runs})", flush=True)
+
+        # Auto-save data after each hit
+        self.save_data()
+        print(f"    ✓ Data saved successfully", flush=True)
     
     def record_attempt(self, x, y):
         """Record an attempt (swing) at the given position."""
@@ -196,6 +241,16 @@ class FieldRenderer:
     def record_pitch(self):
         """Record that a pitch was thrown (for tracking total pitches)."""
         self.total_pitches += 1
+
+    def record_walk(self):
+        """
+        Record a walk (base on balls).
+
+        Note: Walks do NOT count as at-bats in baseball.
+        """
+        self.total_walks += 1
+        print(f"✓ WALK recorded (total: {self.total_walks})")
+        print(f"  OBP now includes walk: {self.get_triple_slash_line()}")
 
     def record_at_bat(self):
         """
@@ -386,6 +441,15 @@ class FieldRenderer:
         self.total_pitches = 0
         self.total_at_bats = 0
 
+        # Reset triple slash fields
+        self.total_singles = 0
+        self.total_doubles = 0
+        self.total_triples = 0
+        self.total_home_runs = 0
+        self.total_walks = 0
+        self.total_hbp = 0
+        self.total_sacrifice_flies = 0
+
         # Save the reset state
         self.save_data()
         print("✓ All batting statistics have been reset")
@@ -404,7 +468,7 @@ class FieldRenderer:
         try:
             # Ensure data directory exists
             os.makedirs(os.path.dirname(self.data_file), exist_ok=True)
-            
+
             data = {
                 'heatmap_data': self.heatmap_data,
                 'heatmap_attempts': self.heatmap_attempts,
@@ -412,15 +476,23 @@ class FieldRenderer:
                 'total_hits': self.total_hits,
                 'total_pitches': self.total_pitches,
                 'total_at_bats': self.total_at_bats,
+                # Triple slash statistics (v1.2)
+                'total_singles': self.total_singles,
+                'total_doubles': self.total_doubles,
+                'total_triples': self.total_triples,
+                'total_home_runs': self.total_home_runs,
+                'total_walks': self.total_walks,
+                'total_hbp': self.total_hbp,
+                'total_sacrifice_flies': self.total_sacrifice_flies,
                 'last_updated': datetime.now().isoformat(),
-                'version': '1.1'
+                'version': '1.2'  # Updated version
             }
-            
+
             with open(self.data_file, 'w') as f:
                 json.dump(data, f, indent=2)
-                
+
             # print(f"✓ Batting statistics saved to {self.data_file}")
-            
+
         except Exception as e:
             print(f"✗ Error saving batting statistics: {e}")
             
@@ -430,16 +502,38 @@ class FieldRenderer:
             if os.path.exists(self.data_file):
                 with open(self.data_file, 'r') as f:
                     data = json.load(f)
-                
+
                 # Load heatmap data
                 self.heatmap_data = data.get('heatmap_data', [0] * 9)
                 self.heatmap_attempts = data.get('heatmap_attempts', [0] * 9)
-                
+
                 # Load batting statistics
                 self.total_swings = data.get('total_swings', 0)
                 self.total_hits = data.get('total_hits', 0)
                 self.total_pitches = data.get('total_pitches', 0)
                 self.total_at_bats = data.get('total_at_bats', 0)
+
+                # Load v1.2 fields (triple slash statistics)
+                self.total_singles = data.get('total_singles', 0)
+                self.total_doubles = data.get('total_doubles', 0)
+                self.total_triples = data.get('total_triples', 0)
+                self.total_home_runs = data.get('total_home_runs', 0)
+                self.total_walks = data.get('total_walks', 0)
+                self.total_hbp = data.get('total_hbp', 0)
+                self.total_sacrifice_flies = data.get('total_sacrifice_flies', 0)
+
+                # Data validation and migration
+                version = data.get('version', '1.0')
+                if version == '1.1':
+                    print("  Migrating data from v1.1 to v1.2...")
+
+                # Validate data integrity
+                expected_hits = (self.total_singles + self.total_doubles +
+                                 self.total_triples + self.total_home_runs)
+                if expected_hits > 0 and expected_hits != self.total_hits:
+                    print(f"  ⚠ Warning: Hit count mismatch. Expected {expected_hits}, got {self.total_hits}. Recalculating.")
+                    self.total_hits = expected_hits
+                    self.save_data()  # Save corrected data
 
                 print(f"✓ Batting statistics loaded from {self.data_file}")
                 print(f"  Total pitches: {self.total_pitches}, Total at-bats: {self.total_at_bats}, Total hits: {self.total_hits}")
@@ -448,10 +542,10 @@ class FieldRenderer:
                 if self.total_at_bats > 0:
                     overall_avg = self.total_hits / self.total_at_bats
                     print(f"  Overall batting average: {overall_avg:.3f}")
-                    
+
             else:
                 print("No saved batting statistics found. Starting fresh.")
-                
+
         except Exception as e:
             print(f"✗ Error loading batting statistics: {e}")
             print("Starting with fresh data.")
@@ -467,7 +561,71 @@ class FieldRenderer:
         if self.total_at_bats == 0:
             return 0.0
         return self.total_hits / self.total_at_bats
-        
+
+    def get_on_base_percentage(self):
+        """
+        Calculate On-Base Percentage (OBP).
+
+        OBP = (H + BB + HBP) / (AB + BB + HBP + SF)
+        - H: Hits
+        - BB: Walks (Base on Balls)
+        - HBP: Hit By Pitch
+        - AB: At-Bats
+        - SF: Sacrifice Flies
+        """
+        numerator = self.total_hits + self.total_walks + self.total_hbp
+        denominator = (self.total_at_bats + self.total_walks +
+                       self.total_hbp + self.total_sacrifice_flies)
+
+        if denominator == 0:
+            return 0.0
+        return numerator / denominator
+
+    def get_slugging_percentage(self):
+        """
+        Calculate Slugging Percentage (SLG).
+
+        SLG = Total Bases / At-Bats
+        Total Bases = (1B × 1) + (2B × 2) + (3B × 3) + (HR × 4)
+        """
+        if self.total_at_bats == 0:
+            return 0.0
+
+        total_bases = (
+            self.total_singles * 1 +
+            self.total_doubles * 2 +
+            self.total_triples * 3 +
+            self.total_home_runs * 4
+        )
+        return total_bases / self.total_at_bats
+
+    def get_ops(self):
+        """
+        Calculate OPS (On-Base Plus Slugging).
+
+        OPS = OBP + SLG
+        """
+        return self.get_on_base_percentage() + self.get_slugging_percentage()
+
+    def get_triple_slash_line(self):
+        """
+        Get the triple slash line as a formatted string.
+
+        Returns:
+            str: Formatted as ".AVG/.OBP/.SLG"
+        """
+        avg = self.get_overall_batting_average()
+        obp = self.get_on_base_percentage()
+        slg = self.get_slugging_percentage()
+
+        # Format: Remove leading zero for values < 1.0, show 3 decimal places
+        def format_stat(value):
+            if value >= 1.0:
+                return f"{value:.3f}"  # Show "1.000" for perfect
+            return f"{value:.3f}"[1:]  # Remove leading 0 for ".333"
+
+        return f"{format_stat(avg)}/{format_stat(obp)}/{format_stat(slg)}"
+
     def get_batting_statistics(self):
         """Get comprehensive batting statistics."""
         stats = {
@@ -540,7 +698,17 @@ class FieldRenderer:
             'total_pitches': self.total_pitches,
             'total_at_bats': self.total_at_bats,
             'batting_average': round(batting_avg, 3),
-            'duration_seconds': duration
+            'duration_seconds': duration,
+            # Triple slash statistics (v1.2)
+            'triple_slash': self.get_triple_slash_line(),
+            'total_singles': self.total_singles,
+            'total_doubles': self.total_doubles,
+            'total_triples': self.total_triples,
+            'total_home_runs': self.total_home_runs,
+            'total_walks': self.total_walks,
+            'on_base_percentage': round(self.get_on_base_percentage(), 3),
+            'slugging_percentage': round(self.get_slugging_percentage(), 3),
+            'ops': round(self.get_ops(), 3)
         }
 
         # Add to history
