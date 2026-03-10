@@ -18,6 +18,7 @@ from ui.components import create_pci_cursor
 from engine.sound_manager import SoundManager
 from gameplay.batter import Batter
 from config import get_path, resource_path
+from utils.pitch_physics import DEFAULT_CAMERA
 from gameplay.field_renderer import FieldRenderer
 from gameplay.hit_outcome_manager import HitOutcomeManager
 from ui.ui_manager import UIManager
@@ -66,21 +67,19 @@ class AssetManager:
     def create_ball_renderer(self):
         """Create a ball rendering function."""
         counter = 0
-        
+
         def render_ball(screen, ball_pos):
             nonlocal counter
-            max_distance = 4600
-            min_size = 3
-            max_size = 11
-
-            dist = ball_pos[2] / max_distance
-            size = min_size + (max_size - min_size) * (1 - dist)
+            # ball_pos[2] is world-y (feet from plate)
+            world_y = ball_pos[2]
+            proj_radius = DEFAULT_CAMERA.project_radius(world_y)
+            size = max(3, min(11, proj_radius))
             ratio = size / 54
 
             image = pygame.transform.scale(self.ball_list[counter], (int(ratio * 64), int(ratio * 66)))
             screen.blit(image, (ball_pos[0] - (29.22 * ratio), ball_pos[1] - (32.62 * ratio)))
             counter = (counter + 1) % len(self.ball_list)
-            
+
         return render_ball
 class PitcherManager:
     """Manages pitcher instances and AI."""
@@ -894,13 +893,10 @@ class Game:
             # Clear rebind state
             self.key_rebind_action = None
 
-    def _display_pitch_results(self, outcome: str, pitchtype: str, traveltime: float):
+    def _display_pitch_results(self, outcome: str, pitchtype: str, speed_mph: float):
         """Display pitch results on the UI."""
-        # Calculate velocity in MPH using effective distance (60.5 feet - arm extension)
-        distance = 60.5 - self.current_pitcher.arm_extension
-        velocity_mph = (distance / (traveltime / 1000)) * (3600 / 5280)
         pitch_result_string = (
-            f"<font size=5>PITCH {self.pitchnumber}: {pitchtype} {velocity_mph:.1f} MPH<br>{outcome}<br>"
+            f"<font size=5>PITCH {self.pitchnumber}: {pitchtype} {speed_mph:.1f} MPH<br>{outcome}<br>"
             f"COUNT IS {self.currentballs} - {self.currentstrikes}</font>"
         )
         game_status_result_string = (

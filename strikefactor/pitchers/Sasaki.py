@@ -1,7 +1,7 @@
-from utils.physics import calculate_pitch_velocity, calculate_travel_time
 from .pitcher import Pitcher
 import random
 import pygame
+
 
 class Sasaki(Pitcher):
 
@@ -12,7 +12,7 @@ class Sasaki(Pitcher):
                          screen,
                          'Roki Sasaki',
                          1100,
-                         7.1)  # arm_extension in feet
+                         7.1)
         self.load_img(loadfunc, 'assets/images/sasaki/', 14)
         self.add_pitch_type(self.FB, "FF")
         self.add_pitch_type(self.FS, "FS")
@@ -50,42 +50,17 @@ class Sasaki(Pitcher):
             self.draw(self.screen, 14, -9, 12)
 
     def FB(self, simulation_func):
-        ax, ay = -0.005, 0.0025
         speed_mph = random.gauss(96.1, 2.0)
-        travel_time = calculate_travel_time(speed_mph, self.arm_extension)
-
-        # Specify target location directly (with optional randomness)
-        target_x = random.uniform(590, 670)  # x position at plate
-        target_y = random.uniform(410, 560)  # y position at plate
-
-        vx, vy = calculate_pitch_velocity(
-            self.release_point,
-            target_x=target_x,
-            target_y=target_y,
-            ax=ax,
-            ay=ay,
-            traveltime=travel_time
-        )
-
-        simulation_func(self.release_point, 'rokisasaki', ax, ay, vx, vy, travel_time, 'FF')
+        pfx_x = random.gauss(7.0, 1.0)    # arm-side run RHP (inches)
+        pfx_z = random.gauss(16.0, 1.0)   # strong rise (inches)
+        target_x = random.uniform(590, 670)
+        target_y = random.uniform(410, 560)
+        simulation_func(self.release_point, 'rokisasaki', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FF')
 
     def FS(self, simulation_func):
-        ax, ay = -0.005, 0.055
         speed_mph = random.gauss(85.0, 1.0)
-        travel_time = calculate_travel_time(speed_mph, self.arm_extension)
-
-        # Specify target location directly (with optional randomness)
-        target_x = random.uniform(590, 670)  # x position at plate
-        target_y = random.uniform(550, 660)  # y position at plate
-
-        vx, vy = calculate_pitch_velocity(
-            self.release_point,
-            target_x=target_x,
-            target_y=target_y,
-            ax=ax,
-            ay=ay,
-            traveltime=travel_time
-        )
-
-        simulation_func(self.release_point, 'rokisasaki', ax, ay, vx, vy, travel_time, 'FS')
-
+        pfx_x = random.gauss(10.0, 1.0)   # arm-side run (inches)
+        pfx_z = random.gauss(-2.0, 1.0)   # drops (inches)
+        target_x = random.uniform(590, 670)
+        target_y = random.uniform(550, 660)
+        simulation_func(self.release_point, 'rokisasaki', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FS')

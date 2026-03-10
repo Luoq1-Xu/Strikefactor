@@ -1,7 +1,7 @@
 {
   "version": "1.0",
   "created_date": "2026-01-30T15:03:27.058160",
-  "last_updated": "2026-02-06T10:47:10.284734",
+  "last_updated": "2026-03-10T19:55:11.708187",
   "laps": [
     {
       "lap_number": 1,
@@ -244,6 +244,88 @@
       "on_base_percentage": 0.374,
       "slugging_percentage": 0.716,
       "ops": 1.09
+    },
+    {
+      "lap_number": 8,
+      "timestamp": "2026-03-07T16:03:21.237139",
+      "heatmap_data": [
+        25,
+        45,
+        16,
+        48,
+        83,
+        40,
+        47,
+        76,
+        39
+      ],
+      "heatmap_attempts": [
+        126,
+        287,
+        110,
+        211,
+        412,
+        156,
+        245,
+        392,
+        193
+      ],
+      "total_swings": 2132,
+      "total_hits": 653,
+      "total_pitches": 6510,
+      "total_at_bats": 1908,
+      "batting_average": 0.342,
+      "duration_seconds": 282.888895,
+      "triple_slash": ".342/.395/.615",
+      "total_singles": 366,
+      "total_doubles": 140,
+      "total_triples": 61,
+      "total_home_runs": 86,
+      "total_walks": 167,
+      "on_base_percentage": 0.395,
+      "slugging_percentage": 0.615,
+      "ops": 1.01
+    },
+    {
+      "lap_number": 9,
+      "timestamp": "2026-03-10T19:55:11.708187",
+      "heatmap_data": [
+        10,
+        16,
+        11,
+        12,
+        25,
+        15,
+        14,
+        45,
+        16
+      ],
+      "heatmap_attempts": [
+        25,
+        51,
+        26,
+        41,
+        61,
+        36,
+        43,
+        112,
+        54
+      ],
+      "total_swings": 449,
+      "total_hits": 264,
+      "total_pitches": 1183,
+      "total_at_bats": 441,
+      "batting_average": 0.599,
+      "duration_seconds": 2582.945882,
+      "triple_slash": ".599/.623/1.023",
+      "total_singles": 157,
+      "total_doubles": 54,
+      "total_triples": 26,
+      "total_home_runs": 27,
+      "total_walks": 28,
+      "on_base_percentage": 0.623,
+      "slugging_percentage": 1.023,
+      "ops": 1.645
     }
   ]
 }

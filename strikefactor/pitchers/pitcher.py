@@ -1,5 +1,6 @@
 from logging import warning
 import random
+from utils.pitch_physics import DEFAULT_CAMERA
 
 # ANSI color codes for terminal output
 class Colors:
@@ -24,6 +25,17 @@ class Pitcher:
         self.ypos = ypos
         self.release_point = release_point
         self.arm_extension = arm_extension
+        # Derive 3D release position from the sprite's visual release point
+        # so the ball always appears from where the pitcher's hand is in the sprite
+        y0 = 60.5 - arm_extension
+        depth = y0 + DEFAULT_CAMERA.cam_dist
+        release_side = (DEFAULT_CAMERA.screen_center_x - release_point.x) * depth / DEFAULT_CAMERA.scale_x
+        release_height = DEFAULT_CAMERA.cam_height - (release_point.y - DEFAULT_CAMERA.screen_center_y) * depth / DEFAULT_CAMERA.scale_y
+        self.release_pos_3d = (
+            release_side,
+            y0,
+            release_height,
+        )
         self.pitch_count = 0
         self.outs = 0
         self.era = 0

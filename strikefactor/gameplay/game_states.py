@@ -303,11 +303,11 @@ class GameplayState(GameState):
         # This will be handled by the pitch simulation
         self.game.current_pitcher.pitch(self._create_pitch_simulation, selection)
         
-    def _create_pitch_simulation(self, release_point, pitchername, ax, ay, vx, vy, traveltime, pitchtype):
+    def _create_pitch_simulation(self, release_point, pitchername, speed_mph, pfx_x, pfx_z, target_x, target_y, pitchtype):
         """Create and start a pitch simulation."""
         from .pitch_simulation import PitchSimulation
         self.pitch_simulation = PitchSimulation(
-            self.game, release_point, pitchername, ax, ay, vx, vy, traveltime, pitchtype
+            self.game, release_point, pitchername, speed_mph, pfx_x, pfx_z, target_x, target_y, pitchtype
         )
         self.pitch_simulation.run()
         
@@ -509,27 +509,43 @@ class VisualizationState(GameState):
     def render(self, screen):
         """Render the pitch visualization."""
         screen.fill("black")
-        
+
         if not self.game.last_pitch_information:
             return
-            
-        # Draw pitch trajectories up to current frame
+
+        # Draw pitch trajectories up to current frame as thin connected lines
+        # with a small endpoint marker for the final plate location
         for pitch in self.game.pitch_trajectories:
-            for i in range(min(self.current_frame, len(pitch))):
-                if i < len(pitch):
-                    pygame.draw.ellipse(
-                        screen, pitch[i][3],
-                        (int(pitch[i][0]), int(pitch[i][1]), 
-                         int(pitch[i][2]), int(pitch[i][2]))
-                    )
-                else:
-                    # Draw final position if we've run out of frames
-                    pygame.draw.ellipse(
-                        screen, pitch[-1][3],
-                        (int(pitch[-1][0]), int(pitch[-1][1]), 
-                         int(pitch[-1][2]), int(pitch[-1][2]))
-                    )
-                    
+            if len(pitch) < 2:
+                continue
+
+            # Find the last in-flight point (before outcome labels like "strike", "ball", etc.)
+            # This is where the ball arrives at the plate.
+            plate_idx = len(pitch) - 1
+            for idx in range(len(pitch)):
+                if pitch[idx][4]:  # has an outcome label → post-plate point
+                    plate_idx = idx
+                    break
+
+            frame_limit = min(self.current_frame, plate_idx + 1)
+
+            # Determine trail color from the last point's color (outcome-coded)
+            trail_color = pitch[-1][3] if pitch[-1][4] else (180, 180, 180)
+            # Dimmer version for the line
+            dim_color = tuple(max(0, c // 2) for c in trail_color)
+
+            # Draw thin anti-aliased lines between consecutive in-flight points
+            for i in range(1, frame_limit):
+                x0, y0 = int(pitch[i - 1][0]), int(pitch[i - 1][1])
+                x1, y1 = int(pitch[i][0]), int(pitch[i][1])
+                pygame.draw.aaline(screen, dim_color, (x0, y0), (x1, y1))
+
+            # Show endpoint circle as soon as the line reaches the plate
+            if frame_limit >= plate_idx + 1:
+                ep = pitch[plate_idx]
+                pygame.gfxdraw.aacircle(screen, int(ep[0]), int(ep[1]), 4, trail_color)
+                pygame.gfxdraw.filled_circle(screen, int(ep[0]), int(ep[1]), 4, trail_color)
+
         self.game.field_renderer.draw_strikezone()
         self.game.field_renderer.draw_field(self.game.scoreKeeper.get_bases())
         self.game.batter.draw_stance(1)
@@ -775,11 +791,11 @@ class SandboxGameplayState(GameState):
         # Use the selected pitch instead of AI selection
         self.game.current_pitcher.pitch(self._create_pitch_simulation, self.selected_pitch)
 
-    def _create_pitch_simulation(self, release_point, pitchername, ax, ay, vx, vy, traveltime, pitchtype):
+    def _create_pitch_simulation(self, release_point, pitchername, speed_mph, pfx_x, pfx_z, target_x, target_y, pitchtype):
         """Create and start a pitch simulation."""
         from .pitch_simulation import PitchSimulation
         self.pitch_simulation = PitchSimulation(
-            self.game, release_point, pitchername, ax, ay, vx, vy, traveltime, pitchtype
+            self.game, release_point, pitchername, speed_mph, pfx_x, pfx_z, target_x, target_y, pitchtype
         )
         self.pitch_simulation.run()
 
