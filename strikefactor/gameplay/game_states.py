@@ -692,7 +692,7 @@ class SandboxGameplayState(GameState):
     def __init__(self, game):
         super().__init__(game)
         self.pitch_simulation = None
-        self.selected_pitch = None  # Stores the user-selected pitch type
+        self.active_pitches = set()  # Set of toggled-on pitch types
 
     def enter(self):
         """Initialize sandbox gameplay state."""
@@ -700,11 +700,11 @@ class SandboxGameplayState(GameState):
         self._update_pitch_buttons()
         self._refresh_display()
 
-        # Select first pitch type by default if none selected
+        # Enable all pitches by default if none active or pitcher changed
         if self.game.current_pitcher:
             pitch_names = self.game.current_pitcher.get_pitch_names()
-            if pitch_names and (not self.selected_pitch or self.selected_pitch not in pitch_names):
-                self.selected_pitch = pitch_names[0]
+            if not self.active_pitches or not self.active_pitches.issubset(set(pitch_names)):
+                self.active_pitches = set(pitch_names)
                 self._update_pitch_buttons()
                 self._refresh_display()
 
@@ -724,10 +724,10 @@ class SandboxGameplayState(GameState):
             f"BATTING: {triple_slash}<br>"  # Replaced HITS with triple slash
             f"RUNS: {self.game.scoreKeeper.get_score()}</font>"
         )
-        selected_display = self.selected_pitch if self.selected_pitch else "None"
+        active_display = ", ".join(sorted(self.active_pitches)) if self.active_pitches else "None"
         count_string = (
             f"<font size=6>COUNT: {self.game.currentballs}-{self.game.currentstrikes}<br>"  # Increased font size
-            f"PITCH: {selected_display}</font>"
+            f"ACTIVE: {active_display}</font>"
         )
         self.game.ui_manager.update_scoreboard(result)
         self.game.ui_manager.update_pitch_result(count_string)
@@ -737,23 +737,28 @@ class SandboxGameplayState(GameState):
         """Update pitch type buttons for current pitcher."""
         if self.game.current_pitcher:
             pitch_names = self.game.current_pitcher.get_pitch_names()
-            self.game.ui_manager.update_sandbox_pitch_buttons(pitch_names, self.selected_pitch)
+            self.game.ui_manager.update_sandbox_pitch_buttons(pitch_names, self.active_pitches)
 
     def switch_pitcher(self, pitcher_name: str):
         """Switch to a different pitcher."""
         self.game.pitcher_manager.set_current_pitcher(pitcher_name)
 
-        # Reset selected pitch to first available for new pitcher
+        # Enable all pitches for new pitcher
         pitch_names = self.game.current_pitcher.get_pitch_names()
-        self.selected_pitch = pitch_names[0] if pitch_names else None
+        self.active_pitches = set(pitch_names) if pitch_names else set()
 
         self._update_pitch_buttons()
         self._refresh_display()
 
-    def select_pitch(self, pitch_name: str):
-        """Select a pitch type for the next pitch."""
+    def toggle_pitch(self, pitch_name: str):
+        """Toggle a pitch type on or off for random selection."""
         if self.game.current_pitcher and pitch_name in self.game.current_pitcher.get_pitch_names():
-            self.selected_pitch = pitch_name
+            if pitch_name in self.active_pitches:
+                # Don't allow deactivating the last pitch
+                if len(self.active_pitches) > 1:
+                    self.active_pitches.discard(pitch_name)
+            else:
+                self.active_pitches.add(pitch_name)
             self._update_pitch_buttons()
             self._refresh_display()
 
@@ -781,15 +786,18 @@ class SandboxGameplayState(GameState):
         return True
 
     def _initiate_pitch(self):
-        """Start a new pitch simulation with user-selected pitch."""
-        if not self.selected_pitch:
-            return  # No pitch selected
+        """Start a new pitch simulation with a random active pitch."""
+        if not self.active_pitches:
+            return  # No pitches active
+
+        import random
+        chosen_pitch = random.choice(list(self.active_pitches))
 
         self.game.first_pitch_thrown = True
-        self.game.pitch_chosen = self.selected_pitch
+        self.game.pitch_chosen = chosen_pitch
 
-        # Use the selected pitch instead of AI selection
-        self.game.current_pitcher.pitch(self._create_pitch_simulation, self.selected_pitch)
+        # Randomly select from active pitches
+        self.game.current_pitcher.pitch(self._create_pitch_simulation, chosen_pitch)
 
     def _create_pitch_simulation(self, release_point, pitchername, speed_mph, pfx_x, pfx_z, target_x, target_y, pitchtype):
         """Create and start a pitch simulation."""

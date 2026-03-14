@@ -496,13 +496,16 @@ class UIManager:
         """Hide the box score panel."""
         self.box_score_panel.hide()
 
-    def update_sandbox_pitch_buttons(self, pitch_names: list, selected_pitch: str = None):
+    def update_sandbox_pitch_buttons(self, pitch_names: list, active_pitches: set = None):
         """Update sandbox pitch type buttons based on current pitcher's arsenal.
 
         Args:
             pitch_names: List of available pitch type names (e.g., ['FF', 'SL', 'CH'])
-            selected_pitch: Currently selected pitch type to highlight
+            active_pitches: Set of currently active/toggled-on pitch types
         """
+        if active_pitches is None:
+            active_pitches = set()
+
         pitch_buttons = ['sandbox_pitch_1', 'sandbox_pitch_2', 'sandbox_pitch_3',
                          'sandbox_pitch_4', 'sandbox_pitch_5', 'sandbox_pitch_6']
 
@@ -514,8 +517,8 @@ class UIManager:
         for i, pitch_name in enumerate(pitch_names):
             if i < len(pitch_buttons):
                 btn = self.buttons[pitch_buttons[i]]
-                # Add indicator for selected pitch
-                if pitch_name == selected_pitch:
+                # Add indicator for active pitches
+                if pitch_name in active_pitches:
                     btn.set_text(f"[{pitch_name}]")
                 else:
                     btn.set_text(pitch_name)

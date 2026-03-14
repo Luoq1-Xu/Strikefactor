@@ -604,12 +604,12 @@ class Game:
             state.switch_pitcher(pitcher_name)
 
     def _sandbox_select_pitch(self, pitch_index: int):
-        """Select pitch type in sandbox mode by button index."""
+        """Toggle pitch type in sandbox mode by button index."""
         if self.state_manager.is_current_state('sandbox_gameplay'):
             state = self.state_manager.get_current_state()
             pitch_names = self.current_pitcher.get_pitch_names()
             if pitch_index < len(pitch_names):
-                state.select_pitch(pitch_names[pitch_index])
+                state.toggle_pitch(pitch_names[pitch_index])
 
     def return_to_mode_select(self):
         """Return to main mode selection menu."""
