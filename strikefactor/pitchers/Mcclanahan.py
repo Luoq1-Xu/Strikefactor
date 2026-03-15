@@ -62,38 +62,43 @@ class Mcclanahan(Pitcher):
         speed_mph = random.gauss(97.0, 0.5)
         pfx_x = random.gauss(-12.0, 1.0)  # arm-side run LHP (inches)
         pfx_z = random.gauss(16.0, 1.0)   # rise (inches)
-        target_x = random.uniform(560, 700)
-        target_y = random.uniform(400, 540)
+        target_x = random.gauss(630, 45)   # up in zone
+        target_y = random.gauss(430, 35)
+        target_x, target_y = self.get_count_location_modifier(target_x, target_y)
         simulation_func(self.release_point, 'shanemcclanahan', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FF')
 
     def FFI(self, simulation_func):
         speed_mph = random.gauss(97.0, 0.5)
         pfx_x = random.gauss(-12.0, 1.0)
         pfx_z = random.gauss(16.0, 1.0)
-        target_x = random.uniform(560, 680)
-        target_y = random.uniform(420, 560)
+        target_x = random.gauss(620, 40)   # inside to RHB
+        target_y = random.gauss(480, 40)
+        target_x, target_y = self.get_count_location_modifier(target_x, target_y)
         simulation_func(self.release_point, 'shanemcclanahan', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FF')
 
     def SLD(self, simulation_func):
         speed_mph = random.gauss(83.0, 1.0)
         pfx_x = random.gauss(3.0, 0.5)    # glove-side for LHP (inches)
         pfx_z = random.gauss(0.0, 0.5)    # minimal vertical (inches)
-        target_x = random.uniform(540, 720)
-        target_y = random.uniform(480, 620)
+        target_x = random.gauss(640, 50)   # glove-side, low
+        target_y = random.gauss(540, 40)
+        target_x, target_y = self.get_count_location_modifier(target_x, target_y)
         simulation_func(self.release_point, 'shanemcclanahan', speed_mph, pfx_x, pfx_z, target_x, target_y, 'SL')
 
     def CB(self, simulation_func):
         speed_mph = random.gauss(78.0, 1.0)
         pfx_x = random.gauss(6.0, 1.0)    # glove-side (inches)
         pfx_z = random.gauss(-12.0, 1.0)  # drops (inches)
-        target_x = random.uniform(540, 720)
-        target_y = random.uniform(500, 640)
+        target_x = random.gauss(630, 45)   # bury it below zone
+        target_y = random.gauss(570, 40)
+        target_x, target_y = self.get_count_location_modifier(target_x, target_y)
         simulation_func(self.release_point, 'shanemcclanahan', speed_mph, pfx_x, pfx_z, target_x, target_y, 'CB')
 
     def CH(self, simulation_func):
         speed_mph = random.gauss(87.0, 0.5)
         pfx_x = random.gauss(-16.0, 1.0)  # arm-side run LHP (inches)
         pfx_z = random.gauss(8.0, 1.0)    # moderate rise (inches)
-        target_x = random.uniform(540, 720)
-        target_y = random.uniform(480, 620)
+        target_x = random.gauss(640, 45)   # arm-side, low
+        target_y = random.gauss(540, 35)
+        target_x, target_y = self.get_count_location_modifier(target_x, target_y)
         simulation_func(self.release_point, 'shanemcclanahan', speed_mph, pfx_x, pfx_z, target_x, target_y, 'CH')

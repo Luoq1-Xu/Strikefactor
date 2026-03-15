@@ -42,6 +42,43 @@ class PitcherStats:
         self.walks = 0
         self.is_active = False
 
+    @property
+    def fatigue(self) -> float:
+        """Fatigue level from 0.0 to 1.0 based on pitch count."""
+        if self.pitch_count < 30:
+            return 0.0
+        return min(1.0, (self.pitch_count - 30) / 90.0)  # 0 at 30, 1.0 at 120
+
+    def get_fatigue_label(self) -> str:
+        """Get a human-readable fatigue level."""
+        f = self.fatigue
+        if f < 0.15:
+            return "Fresh"
+        elif f < 0.4:
+            return "Low"
+        elif f < 0.65:
+            return "Moderate"
+        elif f < 0.85:
+            return "High"
+        else:
+            return "Gassed"
+
+    def get_mistake_chance(self) -> float:
+        """Chance of throwing a mistake pitch (drifts to center zone)."""
+        if self.pitch_count >= 100:
+            return 0.15
+        elif self.pitch_count >= 80:
+            return 0.08
+        return 0.0
+
+    def get_velocity_modifier(self) -> float:
+        """Velocity multiplier (1.0 = no change, decreases with fatigue)."""
+        return 1.0 - (0.05 * self.fatigue)  # Up to -5% at max fatigue
+
+    def get_movement_modifier(self) -> float:
+        """Movement (acceleration) multiplier, decreases with fatigue."""
+        return 1.0 - (0.10 * self.fatigue)  # Up to -10% at max fatigue
+
     def record_pitch(self):
         """Increment pitch count."""
         self.pitch_count += 1
@@ -115,8 +152,10 @@ class GameDayManager:
         self.opponent_inning_scores = []
         self._current_half_runs = 0
 
-        # Momentum tracking
+        # Momentum tracking (opponent consecutive hits for simulation)
         self._consecutive_hits = 0
+        # Player momentum tracking
+        self.player_consecutive_hits = 0
 
         # Current half-inning state
         self.current_outs = 0
@@ -238,42 +277,35 @@ class GameDayManager:
         # Check if current pitcher is a reliever (not the starter)
         is_starter = (self.current_pitcher_name == self.opponent_pitcher_preset['starter'])
 
+        # Emergency relief: high fatigue + runs allowed this inning
+        if stats.fatigue >= 0.6 and stats.runs_allowed >= 2:
+            return random.random() < 0.85  # 85% emergency pull
+
         # Common: Check runs allowed for any pitcher type
         if stats.runs_allowed >= 5:
-            return random.random() < 0.8  # 80% chance after 5+ runs
+            return random.random() < 0.8
         if stats.runs_allowed >= 3:
-            return random.random() < 0.4  # 40% chance after 3+ runs
+            return random.random() < 0.4
 
         if is_starter:
-            # STARTER thresholds - more conservative
-            if stats.pitch_count >= 90:
-                return random.random() < 0.6
-            if stats.pitch_count >= 100:
-                return random.random() < 0.8
             if stats.pitch_count >= 110:
                 return random.random() < 0.95
+            if stats.pitch_count >= 100:
+                return random.random() < 0.8
+            if stats.pitch_count >= 90:
+                return random.random() < 0.6
         else:
-            # RELIEVER thresholds - VERY AGGRESSIVE
-            # Relievers should pitch 1-3 innings max (3-9 outs)
             innings_pitched = stats.get_innings_pitched()
-
-            # After 3 innings: 90% chance to pull
             if innings_pitched >= 3.0:
                 return random.random() < 0.9
-
-            # After 2 innings: 60% chance
             if innings_pitched >= 2.0:
                 return random.random() < 0.6
-
-            # After 1 inning: 30% chance
             if innings_pitched >= 1.0:
                 return random.random() < 0.3
-
-            # Pitch count thresholds for relievers - MUCH LOWER
             if stats.pitch_count >= 40:
-                return random.random() < 0.8  # 80% chance at 40 pitches
+                return random.random() < 0.8
             if stats.pitch_count >= 30:
-                return random.random() < 0.5  # 50% chance at 30 pitches
+                return random.random() < 0.5
 
         return False
 
@@ -281,6 +313,15 @@ class GameDayManager:
         """Substitute in a relief pitcher (opponent team). Returns new pitcher name or None."""
         if not self.available_opponent_relievers:
             return None
+
+        # Log mound visit event
+        old_pitcher = self.current_pitcher_name
+        mound_event = GameEvent(
+            self.current_inning, self.is_top_inning,
+            "", old_pitcher,
+            f"MOUND VISIT - {old_pitcher.upper()} being relieved"
+        )
+        self.event_log.append(mound_event)
 
         # Set current pitcher as inactive
         self.opponent_pitcher_stats[self.current_pitcher_name].is_active = False
@@ -432,6 +473,13 @@ class GameDayManager:
         # Update player score (runs_scored is already added in check_inning_end)
         # DON'T add it again here
 
+        # Track player momentum
+        if outcome in ['SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN']:
+            self.player_consecutive_hits += 1
+        elif outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT']:
+            self.player_consecutive_hits = 0
+        # WALK doesn't reset streak
+
         # Check for outs
         if outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT']:
             self.current_outs += 1
@@ -447,6 +495,11 @@ class GameDayManager:
             self._current_half_runs = 0
             self.is_top_inning = False
             self.opponent_scorekeeper.reset()
+
+            # In baseball, if home team leads after top of 9th, bottom is not played
+            if self.current_inning >= 9 and self.player_score > self.opponent_score:
+                self.game_over = True
+                return
         else:
             # Bottom half ended
             self.player_inning_scores.append(self._current_half_runs)
@@ -460,6 +513,17 @@ class GameDayManager:
             else:
                 # Move to next inning
                 self.current_inning += 1
+
+    def get_player_momentum_bonus(self) -> float:
+        """Get momentum bonus for player (expands contact window or boosts hit quality).
+        Returns 0.0 if streak < 2, otherwise 0.03 per consecutive hit, max 0.12."""
+        if self.player_consecutive_hits < 2:
+            return 0.0
+        return min(0.12, self.player_consecutive_hits * 0.03)
+
+    def is_player_hot(self) -> bool:
+        """Check if player is on a hot streak (2+ consecutive hits)."""
+        return self.player_consecutive_hits >= 2
 
     def is_inning_over(self) -> bool:
         """Check if the current half-inning is over."""

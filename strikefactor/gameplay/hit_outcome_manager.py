@@ -9,6 +9,7 @@ class HitOutcomeManager:
         self.settings_manager = settings_manager
         self.hit_type = 0
         self.ishomerun = ''
+        self.momentum_bonus = 0.0  # Set by gameday mode for hot streak
 
         # Right-handed batter's hand position
         # These positions are used to determine the contact zone for the bat
@@ -55,7 +56,8 @@ class HitOutcomeManager:
 
         # Out probability scales inversely with quality: high quality = fewer outs
         # Range: quality=1.0 -> out_chance ~1.0, quality=0.0 -> out_chance ~6.0
-        out_chance = (1.0 + 5.0 * (1.0 - quality)) * out_modifier
+        # Momentum bonus reduces out chance (max ~12% reduction)
+        out_chance = (1.0 + 5.0 * (1.0 - quality)) * out_modifier * (1.0 - self.momentum_bonus)
 
         # Determine out type based on vertical offset
         if rand <= out_chance:
@@ -101,7 +103,8 @@ class HitOutcomeManager:
         rand = random.uniform(0, 10)
 
         # Power swings: slightly lower out chance but more variance
-        out_chance = (0.8 + 4.5 * (1.0 - quality)) * out_modifier
+        # Momentum bonus reduces out chance
+        out_chance = (0.8 + 4.5 * (1.0 - quality)) * out_modifier * (1.0 - self.momentum_bonus)
 
         if rand <= out_chance:
             if vertical_offset < -10:

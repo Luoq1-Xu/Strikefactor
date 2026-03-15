@@ -13,6 +13,7 @@ class UIManager:
     def __init__(self, screen, screen_size, theme_path=None):
         self.screen = screen
         self.manager = self._create_ui_manager(screen_size, theme_path)
+        self.small_font = pygame.font.Font(resource_path(get_path("ui/font/8bitoperator_jve.ttf")), 28)
         self.font = pygame.font.Font(resource_path(get_path("ui/font/8bitoperator_jve.ttf")), 48)  # +20% from 40
         self.big_font = pygame.font.Font(resource_path(get_path("ui/font/8bitoperator_jve.ttf")), 84)  # +20% from 70
         self.button_callbacks = {}
@@ -538,10 +539,18 @@ class UIManager:
     def set_button_visibility(self, state, force_show=False):
         """Show or hide buttons based on game state ('in_game', 'pitching', 'menu')."""
 
+        # States that should always show their UI regardless of H-toggle
+        ui_toggle_exempt = {
+            'gameday_start', 'gameday_transition', 'gameday_simulation',
+            'gameday_final', 'main_menu', 'mode_select', 'settings',
+            'key_bindings', 'summary', 'sandbox_placeholder',
+        }
+
         # Check if UI should be hidden due to key binding toggle
         if (self.key_binding_manager and
             not self.key_binding_manager.is_ui_visible() and
-            not force_show):
+            not force_show and
+            state not in ui_toggle_exempt):
             # Hide all UI elements when UI visibility is toggled off (except banner)
             for button in self.buttons.values():
                 button.hide()
@@ -677,6 +686,9 @@ class UIManager:
             self.buttons['main_menu'].show()
             self.scoreboard.hide()
             self.pitch_result.hide()
+            self.scouting_panel.hide()
+            self.lap_log_panel.hide()
+            self.box_score_panel.hide()
         elif state == 'gameday_transition':
             # After player's inning ends, before opponent bats
             self.buttons['next_inning'].show()
@@ -684,6 +696,8 @@ class UIManager:
             self.buttons['main_menu'].show()
             self.scoreboard.hide()
             self.pitch_result.hide()
+            self.scouting_panel.hide()
+            self.lap_log_panel.hide()
         elif state == 'gameday_simulation':
             # After opponent simulation, ready to start player batting
             self.buttons['start_batting'].show()
@@ -691,12 +705,16 @@ class UIManager:
             self.buttons['main_menu'].show()
             self.scoreboard.hide()
             self.pitch_result.hide()
+            self.scouting_panel.hide()
+            self.lap_log_panel.hide()
         elif state == 'gameday_final':
             # Game over screen
             self.buttons['final_menu'].show()
             self.buttons['view_game_log'].show()
             self.scoreboard.hide()
             self.pitch_result.hide()
+            self.scouting_panel.hide()
+            self.lap_log_panel.hide()
         elif state == 'mode_select':
             # Top-level mode selection (Arcade/Sandbox)
             self.buttons['arcade_mode'].show()
@@ -755,11 +773,16 @@ class UIManager:
         font = self.big_font if use_big_font else self.font
         snip = font.render(message[0:counter//speed], True, 'white')
         self.screen.blit(snip, position)
-        
-    def draw_completed_message(self, message, position, use_big_font=False):
+
+    def draw_completed_message(self, message, position, use_big_font=False, use_small_font=False, color='white'):
         """Draws a completed message at the given position."""
-        font = self.big_font if use_big_font else self.font
-        text = font.render(message, True, 'white')
+        if use_big_font:
+            font = self.big_font
+        elif use_small_font:
+            font = self.small_font
+        else:
+            font = self.font
+        text = font.render(message, True, color)
         self.screen.blit(text, position)
 
     def update_settings_button_states(self, settings_manager):

@@ -30,15 +30,33 @@ class PitchSimulation:
             target_x, target_y
         )
 
+        # Apply fatigue modifiers (GameDay mode)
+        vel_mult, move_mult, mistake_chance = self.game.current_pitcher.get_fatigue_modifiers()
+        effective_speed = speed_mph * vel_mult
+        effective_pfx_x = pfx_x * move_mult
+        effective_pfx_z = pfx_z * move_mult
+
+        # Mistake pitch: drift target toward center zone
+        import random as _rng
+        if mistake_chance > 0 and _rng.random() < mistake_chance:
+            # Center zone in feet: roughly x=0, z=2.8 (mid-zone height)
+            self.target_x_ft = self.target_x_ft * 0.3  # Pull 70% toward center
+            self.target_z_ft = self.target_z_ft * 0.3 + 2.8 * 0.7
+            effective_pfx_x *= 0.5  # Reduced break on mistake pitches
+            effective_pfx_z *= 0.5
+
+        # Store effective speed for display
+        self.speed_mph = effective_speed
+
         # Get 3D release position from the current pitcher
         release_pos_3d = self.game.current_pitcher.release_pos_3d
 
         # Create 3D trajectory
         self.trajectory = PitchTrajectory.from_pitch_params(
             release_pos=release_pos_3d,
-            speed_mph=speed_mph,
-            pfx_x_inches=pfx_x,
-            pfx_z_inches=pfx_z,
+            speed_mph=effective_speed,
+            pfx_x_inches=effective_pfx_x,
+            pfx_z_inches=effective_pfx_z,
             target_x_ft=self.target_x_ft,
             target_z_ft=self.target_z_ft,
         )
@@ -303,6 +321,12 @@ class PitchSimulation:
 
         # Track score BEFORE hit for gameday mode (MUST be before calling hit_outcome_manager)
         score_before = self.game.scoreKeeper.get_score() if self.game.in_gameday_mode else 0
+
+        # Apply momentum bonus in gameday mode
+        if self.game.in_gameday_mode and self.game.gameday_manager:
+            self.game.hit_outcome_manager.momentum_bonus = self.game.gameday_manager.get_player_momentum_bonus()
+        else:
+            self.game.hit_outcome_manager.momentum_bonus = 0.0
 
         # Get swing and ball positions for more realistic outcomes
         mousepos = pygame.mouse.get_pos()

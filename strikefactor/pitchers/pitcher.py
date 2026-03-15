@@ -46,6 +46,7 @@ class Pitcher:
         self.pitch_arsenal = {}
         self.actions = []
         self.screen = screen
+        self._fatigue_stats = None  # Set by gameday manager for fatigue modifiers
         self.basic_stats = {
             'pitch_count': 0,
             'strikes': 0,
@@ -331,3 +332,50 @@ class Pitcher:
     
     def get_windup(self):
         return self.windup
+
+    def set_game_ref(self, game):
+        """Store reference to game object for count-aware pitching."""
+        self._game_ref = game
+
+    def get_count_location_modifier(self, base_x, base_y):
+        """Adjust target location based on count. Returns (adjusted_x, adjusted_y)."""
+        zone_center_x, zone_center_y = 630, 485
+
+        # If no game ref, return unmodified
+        if not hasattr(self, '_game_ref') or self._game_ref is None:
+            return base_x, base_y
+
+        strikes = self._game_ref.currentstrikes
+        balls = self._game_ref.currentballs
+
+        if strikes == 2 and balls < 3:  # Pitcher's count — chase/waste
+            offset_x = random.choice([-1, 1]) * random.gauss(60, 20)
+            offset_y = random.gauss(30, 15)  # tend to go low
+            return base_x + offset_x, base_y + offset_y
+
+        elif balls >= 2 and strikes <= 1:  # Hitter's count — must throw strike
+            adjusted_x = base_x * 0.5 + zone_center_x * 0.5
+            adjusted_y = base_y * 0.5 + zone_center_y * 0.5
+            return adjusted_x, adjusted_y
+
+        else:  # Neutral — base Gaussian distribution handles this
+            return base_x, base_y
+
+    def set_fatigue_stats(self, pitcher_stats):
+        """Attach PitcherStats from GameDayManager for fatigue modifiers."""
+        self._fatigue_stats = pitcher_stats
+
+    def clear_fatigue_stats(self):
+        """Remove fatigue stats reference."""
+        self._fatigue_stats = None
+
+    def get_fatigue_modifiers(self):
+        """Get current fatigue modifiers (velocity_mult, movement_mult, mistake_chance).
+        Returns (1.0, 1.0, 0.0) if no fatigue stats attached."""
+        if self._fatigue_stats is None:
+            return 1.0, 1.0, 0.0
+        return (
+            self._fatigue_stats.get_velocity_modifier(),
+            self._fatigue_stats.get_movement_modifier(),
+            self._fatigue_stats.get_mistake_chance(),
+        )

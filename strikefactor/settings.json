@@ -1,6 +1,6 @@
 {
-  "difficulty": "hall_of_fame",
-  "umpire_sound": false,
+  "difficulty": "all_star",
+  "umpire_sound": true,
   "master_volume": 1.0,
   "show_strikezone": true,
   "batter_handedness": "R",

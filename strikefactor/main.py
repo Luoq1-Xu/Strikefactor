@@ -182,6 +182,9 @@ class Game:
         # Core components
         self.asset_manager = AssetManager()
         self.pitcher_manager = PitcherManager(self.screen, self.asset_manager)
+        # Set game ref on all pitchers for count-aware location targeting
+        for pitcher in self.pitcher_manager.pitchers.values():
+            pitcher.set_game_ref(self)
         self.game_stats = GameStats()
         
         # Game systems
@@ -557,6 +560,11 @@ class Game:
         self.pitcher_manager.set_current_pitcher('yamamoto')
         self.current_pitcher = self.pitcher_manager.get_current_pitcher()
 
+        # Attach fatigue stats so pitch simulation applies fatigue modifiers
+        self.current_pitcher.set_fatigue_stats(
+            self.gameday_manager.get_active_pitcher_stats()
+        )
+
         # Reset game stats for fresh start
         self.game_stats.reset_game_stats()
         self.scoreKeeper.reset()
@@ -570,6 +578,7 @@ class Game:
         """Enter Arcade mode (pitcher selection menu)."""
         self.in_gameday_mode = False
         self.gameday_manager = None
+        self.current_gamemode = 0
         self.menu_state = 0
         self.state_manager.change_state('menu')
 
@@ -614,21 +623,31 @@ class Game:
     def return_to_mode_select(self):
         """Return to main mode selection menu."""
         self.menu_state = 'mode_select'
+        self.current_gamemode = 0
         self.inning_ended = False
         self.in_gameday_mode = False
         self.gameday_manager = None
+        self.previous_mode_before_pitchviz = None
         self.game_stats.reset_game_stats()
+        # Clear fatigue stats if a pitcher has them
+        if hasattr(self.current_pitcher, 'clear_fatigue_stats'):
+            self.current_pitcher.clear_fatigue_stats()
         self.state_manager.change_state('mode_select')
 
     def set_menu_state(self, state):
         """Set the current menu state."""
         self.menu_state = state
         if state == 0:  # Returning to main menu
+            self.current_gamemode = 0
             self.inning_ended = False
             self.in_gameday_mode = False
             self.gameday_manager = None
+            self.previous_mode_before_pitchviz = None
             # Reset game stats so a fresh game can be started
             self.game_stats.reset_game_stats()
+            # Clear fatigue stats if a pitcher has them
+            if hasattr(self.current_pitcher, 'clear_fatigue_stats'):
+                self.current_pitcher.clear_fatigue_stats()
         self.state_manager.handle_menu_state_change(state)
         
     def exit_view_pitches(self):
@@ -951,16 +970,18 @@ class Game:
                     running = False
                     break
 
-                # Handle key binding events
+                # Handle key binding events (only in gameplay-related states)
+                _hotkey_states = {'gameplay', 'sandbox_gameplay', 'view_pitches',
+                                  'visualization', 'inning_end'}
                 if event.type == pygame.KEYDOWN:
                     # Check if we're waiting for a key rebind
                     if hasattr(self, 'key_rebind_action') and self.key_rebind_action is not None:
                         self.complete_key_rebind(event.key)
-                    else:
-                        # Normal key handling
+                    elif self.state_manager.current_state_name in _hotkey_states:
                         self.key_binding_manager.handle_key_down(event.key)
                 elif event.type == pygame.KEYUP:
-                    self.key_binding_manager.handle_key_up(event.key)
+                    if self.state_manager.current_state_name in _hotkey_states:
+                        self.key_binding_manager.handle_key_up(event.key)
 
                 # Let state manager handle events
                 if not self.state_manager.handle_event(event):

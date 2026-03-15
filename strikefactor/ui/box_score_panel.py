@@ -7,12 +7,12 @@ from pygame_gui.core import ObjectID
 
 
 # Column layout constants
-TEAM_COL_WIDTH = 80    # Width for team name column
-INNING_COL_WIDTH = 30  # Width for each inning column
-SEP_COL_WIDTH = 10     # Width for the separator "|"
-TOTAL_COL_WIDTH = 30   # Width for the "R" (runs total) column
-ROW_HEIGHT = 22        # Height per row
-PADDING = 6            # Internal padding
+TEAM_COL_WIDTH = 60   # Width for team name column
+INNING_COL_WIDTH = 40  # Width for each inning column
+SEP_COL_WIDTH = 14     # Width for the separator "|"
+TOTAL_COL_WIDTH = 40   # Width for the "R" (runs total) column
+ROW_HEIGHT = 30        # Height per row
+PADDING = 10           # Internal padding
 
 NUM_INNINGS = 9
 PANEL_WIDTH = (TEAM_COL_WIDTH + INNING_COL_WIDTH * NUM_INNINGS
