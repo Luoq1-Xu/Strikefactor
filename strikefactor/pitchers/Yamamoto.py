@@ -12,7 +12,8 @@ class Yamamoto(Pitcher):
                          screen,
                          'Yoshinobu Yamamoto',
                          1100,
-                         6.5)
+                         6.5,
+                         command=0.75)
         self.load_img(loadfunc, 'assets/images/yamamoto/', 14)
         self.add_pitch_type(self.FB, "FF")
         self.add_pitch_type(self.yamamotoSplitter, "FS")
@@ -52,27 +53,21 @@ class Yamamoto(Pitcher):
 
     def FB(self, simulation_func):
         speed_mph = random.gauss(96.0, 1.0)
-        pfx_x = random.gauss(6.0, 1.0)    # arm-side run RHP (inches)
-        pfx_z = random.gauss(14.0, 1.0)   # rise (inches)
-        target_x = random.gauss(630, 35)   # high in zone
-        target_y = random.gauss(450, 40)
-        target_x, target_y = self.get_count_location_modifier(target_x, target_y)
+        pfx_x = random.gauss(6.0, 1.0)
+        pfx_z = random.gauss(14.0, 1.0)
+        target_x, target_y = self.get_pitch_target('FF')
         simulation_func(self.release_point, 'Yamamoto', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FF')
 
     def yamamotoCurve(self, simulation_func):
         speed_mph = random.gauss(73.0, 1.0)
-        pfx_x = random.gauss(-5.0, 1.0)   # glove-side for RHP (inches)
-        pfx_z = random.gauss(-12.0, 1.0)  # heavy drop (inches)
-        target_x = random.gauss(630, 40)   # bury below zone
-        target_y = random.gauss(570, 40)
-        target_x, target_y = self.get_count_location_modifier(target_x, target_y)
+        pfx_x = random.gauss(-5.0, 1.0)
+        pfx_z = random.gauss(-12.0, 1.0)
+        target_x, target_y = self.get_pitch_target('CB')
         simulation_func(self.release_point, 'Yamamoto', speed_mph, pfx_x, pfx_z, target_x, target_y, 'CB')
 
     def yamamotoSplitter(self, simulation_func):
         speed_mph = random.gauss(89.0, 1.0)
-        pfx_x = random.gauss(10.0, 2.0)   # arm-side run (inches)
-        pfx_z = random.gauss(2.0, 1.0)    # minimal rise / slight drop (inches)
-        target_x = random.gauss(640, 40)   # below zone, chase pitch
-        target_y = random.gauss(570, 35)
-        target_x, target_y = self.get_count_location_modifier(target_x, target_y)
+        pfx_x = random.gauss(10.0, 2.0)
+        pfx_z = random.gauss(2.0, 1.0)
+        target_x, target_y = self.get_pitch_target('FS')
         simulation_func(self.release_point, 'Yamamoto', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FS')

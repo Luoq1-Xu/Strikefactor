@@ -12,7 +12,8 @@ class Sasaki(Pitcher):
                          screen,
                          'Roki Sasaki',
                          1100,
-                         7.1)
+                         7.1,
+                         command=0.60)
         self.load_img(loadfunc, 'assets/images/sasaki/', 14)
         self.add_pitch_type(self.FB, "FF")
         self.add_pitch_type(self.FS, "FS")
@@ -51,18 +52,14 @@ class Sasaki(Pitcher):
 
     def FB(self, simulation_func):
         speed_mph = random.gauss(96.1, 2.0)
-        pfx_x = random.gauss(7.0, 1.0)    # arm-side run RHP (inches)
-        pfx_z = random.gauss(16.0, 1.0)   # strong rise (inches)
-        target_x = random.gauss(630, 35)   # high in zone
-        target_y = random.gauss(450, 40)
-        target_x, target_y = self.get_count_location_modifier(target_x, target_y)
+        pfx_x = random.gauss(7.0, 1.0)
+        pfx_z = random.gauss(16.0, 1.0)
+        target_x, target_y = self.get_pitch_target('FF')
         simulation_func(self.release_point, 'rokisasaki', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FF')
 
     def FS(self, simulation_func):
         speed_mph = random.gauss(85.0, 1.0)
-        pfx_x = random.gauss(10.0, 1.0)   # arm-side run (inches)
-        pfx_z = random.gauss(-2.0, 1.0)   # drops (inches)
-        target_x = random.gauss(630, 35)   # below zone, chase pitch
-        target_y = random.gauss(570, 30)
-        target_x, target_y = self.get_count_location_modifier(target_x, target_y)
+        pfx_x = random.gauss(10.0, 1.0)
+        pfx_z = random.gauss(-2.0, 1.0)
+        target_x, target_y = self.get_pitch_target('FS')
         simulation_func(self.release_point, 'rokisasaki', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FS')

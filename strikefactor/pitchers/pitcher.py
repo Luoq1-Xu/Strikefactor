@@ -19,12 +19,38 @@ def colorize(text, color):
 
 class Pitcher:
 
-    def __init__(self, xpos, ypos, release_point, screen, name, windup_time, arm_extension) -> None:
+    # Strike zone boundaries (from config.py STRIKEZONE_RECT)
+    ZONE_LEFT = 565
+    ZONE_RIGHT = 695
+    ZONE_TOP = 410
+    ZONE_BOTTOM = 560
+    ZONE_CENTER_X = 630
+    ZONE_CENTER_Y = 485
+
+    # Intent probabilities: [zone, edge, chase, ball]
+    INTENT_TABLE = {
+        'first_pitch': [0.50, 0.30, 0.15, 0.05],
+        'ahead':       [0.15, 0.25, 0.45, 0.15],
+        'behind':      [0.65, 0.25, 0.05, 0.05],
+        'even':        [0.45, 0.30, 0.20, 0.05],
+        'full':        [0.55, 0.30, 0.10, 0.05],
+    }
+
+    # Per-pitch-category intent bias adjustments
+    PITCH_INTENT_BIAS = {
+        'strike': {'FF': 0.08, 'SI': 0.05},
+        'chase':  {'SL': 0.10, 'CB': 0.10, 'SLD': 0.10, 'FS': 0.08},
+        'low':    {'CH': 0.06},
+    }
+
+    def __init__(self, xpos, ypos, release_point, screen, name, windup_time, arm_extension, command=0.70) -> None:
         self.name = name
         self.xpos = xpos
         self.ypos = ypos
         self.release_point = release_point
         self.arm_extension = arm_extension
+        self.command = command
+        self.command_error_px = 55 - (command * 30)
         # Derive 3D release position from the sprite's visual release point
         # so the ball always appears from where the pitcher's hand is in the sprite
         y0 = 60.5 - arm_extension
@@ -337,29 +363,98 @@ class Pitcher:
         """Store reference to game object for count-aware pitching."""
         self._game_ref = game
 
-    def get_count_location_modifier(self, base_x, base_y):
-        """Adjust target location based on count. Returns (adjusted_x, adjusted_y)."""
-        zone_center_x, zone_center_y = 630, 485
-
-        # If no game ref, return unmodified
+    def _get_count_state(self):
+        """Classify the current count into a state for intent lookup."""
         if not hasattr(self, '_game_ref') or self._game_ref is None:
-            return base_x, base_y
-
-        strikes = self._game_ref.currentstrikes
+            return 'even'
         balls = self._game_ref.currentballs
+        strikes = self._game_ref.currentstrikes
+        if balls == 0 and strikes == 0:
+            return 'first_pitch'
+        if balls == 3 and strikes == 2:
+            return 'full'
+        if strikes == 2 and balls <= 1:
+            return 'ahead'
+        if balls >= 2 and strikes <= 1:
+            return 'behind'
+        return 'even'
 
-        if strikes == 2 and balls < 3:  # Pitcher's count — chase/waste
-            offset_x = random.choice([-1, 1]) * random.gauss(60, 20)
-            offset_y = random.gauss(30, 15)  # tend to go low
-            return base_x + offset_x, base_y + offset_y
+    def get_pitch_target(self, pitch_type='FF'):
+        """Choose a target location using intent system + command error.
+        Returns (target_x, target_y)."""
+        count_state = self._get_count_state()
+        probs = list(self.INTENT_TABLE[count_state])  # [zone, edge, chase, ball]
 
-        elif balls >= 2 and strikes <= 1:  # Hitter's count — must throw strike
-            adjusted_x = base_x * 0.5 + zone_center_x * 0.5
-            adjusted_y = base_y * 0.5 + zone_center_y * 0.5
-            return adjusted_x, adjusted_y
+        # Apply pitch-type bias
+        if pitch_type in self.PITCH_INTENT_BIAS.get('strike', {}):
+            probs[0] += self.PITCH_INTENT_BIAS['strike'][pitch_type]
+        if pitch_type in self.PITCH_INTENT_BIAS.get('chase', {}):
+            probs[2] += self.PITCH_INTENT_BIAS['chase'][pitch_type]
+        if pitch_type in self.PITCH_INTENT_BIAS.get('low', {}):
+            # Bias toward edge (low edge specifically)
+            probs[1] += self.PITCH_INTENT_BIAS['low'][pitch_type]
 
-        else:  # Neutral — base Gaussian distribution handles this
-            return base_x, base_y
+        # Normalize
+        total = sum(probs)
+        probs = [p / total for p in probs]
+
+        # Choose intent
+        intent = random.choices(['zone', 'edge', 'chase', 'ball'], weights=probs, k=1)[0]
+
+        # Pick base target based on intent
+        if intent == 'zone':
+            target_x = random.uniform(self.ZONE_LEFT + 15, self.ZONE_RIGHT - 15)
+            target_y = random.uniform(self.ZONE_TOP + 15, self.ZONE_BOTTOM - 15)
+        elif intent == 'edge':
+            edge = random.choice(['left', 'right', 'top', 'bottom'])
+            if edge == 'left':
+                target_x = self.ZONE_LEFT + random.gauss(0, 10)
+                target_y = random.uniform(self.ZONE_TOP, self.ZONE_BOTTOM)
+            elif edge == 'right':
+                target_x = self.ZONE_RIGHT + random.gauss(0, 10)
+                target_y = random.uniform(self.ZONE_TOP, self.ZONE_BOTTOM)
+            elif edge == 'top':
+                target_x = random.uniform(self.ZONE_LEFT, self.ZONE_RIGHT)
+                target_y = self.ZONE_TOP + random.gauss(0, 10)
+            else:  # bottom
+                target_x = random.uniform(self.ZONE_LEFT, self.ZONE_RIGHT)
+                target_y = self.ZONE_BOTTOM + random.gauss(0, 10)
+        elif intent == 'chase':
+            edge = random.choice(['left', 'right', 'top', 'bottom'])
+            offset = random.uniform(30, 80)
+            if edge == 'left':
+                target_x = self.ZONE_LEFT - offset
+                target_y = random.uniform(self.ZONE_TOP - 20, self.ZONE_BOTTOM + 20)
+            elif edge == 'right':
+                target_x = self.ZONE_RIGHT + offset
+                target_y = random.uniform(self.ZONE_TOP - 20, self.ZONE_BOTTOM + 20)
+            elif edge == 'top':
+                target_x = random.uniform(self.ZONE_LEFT - 20, self.ZONE_RIGHT + 20)
+                target_y = self.ZONE_TOP - offset
+            else:  # bottom — most common chase direction
+                target_x = random.uniform(self.ZONE_LEFT - 20, self.ZONE_RIGHT + 20)
+                target_y = self.ZONE_BOTTOM + offset
+        else:  # ball — clearly outside
+            edge = random.choice(['left', 'right', 'top', 'bottom'])
+            offset = random.uniform(60, 120)
+            if edge == 'left':
+                target_x = self.ZONE_LEFT - offset
+                target_y = random.uniform(self.ZONE_TOP - 40, self.ZONE_BOTTOM + 40)
+            elif edge == 'right':
+                target_x = self.ZONE_RIGHT + offset
+                target_y = random.uniform(self.ZONE_TOP - 40, self.ZONE_BOTTOM + 40)
+            elif edge == 'top':
+                target_x = random.uniform(self.ZONE_LEFT - 40, self.ZONE_RIGHT + 40)
+                target_y = self.ZONE_TOP - offset
+            else:
+                target_x = random.uniform(self.ZONE_LEFT - 40, self.ZONE_RIGHT + 40)
+                target_y = self.ZONE_BOTTOM + offset
+
+        # Apply command error
+        target_x += random.gauss(0, self.command_error_px)
+        target_y += random.gauss(0, self.command_error_px)
+
+        return target_x, target_y
 
     def set_fatigue_stats(self, pitcher_stats):
         """Attach PitcherStats from GameDayManager for fatigue modifiers."""

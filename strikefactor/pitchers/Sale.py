@@ -12,7 +12,8 @@ class Sale(Pitcher):
                          screen,
                          'Chris Sale',
                          1100,
-                         6.7)
+                         6.7,
+                         command=0.80)
         self.load_img(loadfunc, 'assets/images/sale/LEFTY', 9)
         self.add_pitch_type(self.FF, 'FF')
         self.add_pitch_type(self.SL, 'SL')
@@ -43,36 +44,28 @@ class Sale(Pitcher):
 
     def SL(self, simulation_func):
         speed_mph = random.gauss(79.0, 1.0)
-        pfx_x = random.gauss(11.0, 0.5)    # glove-side break (inches)
-        pfx_z = random.gauss(0.0, 0.5)    # minimal vertical (inches)
-        target_x = random.gauss(560, 50)   # low-and-away from RHB
-        target_y = random.gauss(540, 40)
-        target_x, target_y = self.get_count_location_modifier(target_x, target_y)
+        pfx_x = random.gauss(11.0, 0.5)
+        pfx_z = random.gauss(0.0, 0.5)
+        target_x, target_y = self.get_pitch_target('SL')
         simulation_func(self.release_point, 'chrissale', speed_mph, pfx_x, pfx_z, target_x, target_y, 'SL')
 
     def FF(self, simulation_func):
         speed_mph = random.gauss(94.8, 0.25)
-        pfx_x = random.gauss(-9.0, 1.0)   # arm-side run (inches, LHP = catcher's left)
-        pfx_z = random.gauss(15.0, 1.0)   # rise from backspin (inches)
-        target_x = random.gauss(620, 45)   # spread across x, high in zone
-        target_y = random.gauss(440, 40)
-        target_x, target_y = self.get_count_location_modifier(target_x, target_y)
+        pfx_x = random.gauss(-9.0, 1.0)
+        pfx_z = random.gauss(15.0, 1.0)
+        target_x, target_y = self.get_pitch_target('FF')
         simulation_func(self.release_point, 'chrissale', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FF')
 
     def SI(self, simulation_func):
         speed_mph = random.gauss(93.9, 0.25)
-        pfx_x = random.gauss(-8.0, 1.0)  # heavy arm-side run (inches)
-        pfx_z = random.gauss(5.0, 1.0)    # less rise = more sink (inches)
-        target_x = random.gauss(610, 55)   # arm-side, low in zone
-        target_y = random.gauss(530, 40)
-        target_x, target_y = self.get_count_location_modifier(target_x, target_y)
+        pfx_x = random.gauss(-8.0, 1.0)
+        pfx_z = random.gauss(5.0, 1.0)
+        target_x, target_y = self.get_pitch_target('SI')
         simulation_func(self.release_point, 'chrissale', speed_mph, pfx_x, pfx_z, target_x, target_y, 'SI')
 
     def CH(self, simulation_func):
         speed_mph = random.gauss(87.0, 0.50)
-        pfx_x = random.gauss(-17.0, 1.0)  # arm-side run (inches)
-        pfx_z = random.gauss(8.0, 1.0)    # moderate rise (inches)
-        target_x = random.gauss(630, 50)   # arm-side, low in zone
-        target_y = random.gauss(540, 35)
-        target_x, target_y = self.get_count_location_modifier(target_x, target_y)
+        pfx_x = random.gauss(-17.0, 1.0)
+        pfx_z = random.gauss(8.0, 1.0)
+        target_x, target_y = self.get_pitch_target('CH')
         simulation_func(self.release_point, 'chrissale', speed_mph, pfx_x, pfx_z, target_x, target_y, 'CH')

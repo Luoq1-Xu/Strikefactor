@@ -12,7 +12,8 @@ class Degrom(Pitcher):
                          screen,
                          'Jacob deGrom',
                          1100,
-                         6.7)
+                         6.7,
+                         command=0.82)
         self.load_img(loadfunc, 'assets/images/degrom/RIGHTY', 9)
         self.add_pitch_type(self.CB, "CB")
         self.add_pitch_type(self.FF, "FF")
@@ -43,36 +44,28 @@ class Degrom(Pitcher):
 
     def CB(self, simulation_func):
         speed_mph = random.gauss(81.0, 1.0)
-        pfx_x = random.gauss(-6.0, 1.0)   # glove-side for RHP (inches)
-        pfx_z = random.gauss(-10.0, 1.0)  # drops (inches)
-        target_x = random.gauss(630, 35)   # center-ish, bury it
-        target_y = random.gauss(570, 40)   # below zone
-        target_x, target_y = self.get_count_location_modifier(target_x, target_y)
+        pfx_x = random.gauss(-6.0, 1.0)
+        pfx_z = random.gauss(-10.0, 1.0)
+        target_x, target_y = self.get_pitch_target('CB')
         simulation_func(self.release_point, 'jacobdegrom', speed_mph, pfx_x, pfx_z, target_x, target_y, 'CB')
 
     def FF(self, simulation_func):
         speed_mph = random.gauss(99.0, 1.0)
-        pfx_x = random.gauss(8.0, 1.0)    # arm-side run RHP (inches)
-        pfx_z = random.gauss(16.0, 1.0)   # strong rise (inches)
-        target_x = random.gauss(630, 40)   # spread across zone, high
-        target_y = random.gauss(440, 40)
-        target_x, target_y = self.get_count_location_modifier(target_x, target_y)
+        pfx_x = random.gauss(8.0, 1.0)
+        pfx_z = random.gauss(16.0, 1.0)
+        target_x, target_y = self.get_pitch_target('FF')
         simulation_func(self.release_point, 'jacobdegrom', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FF')
 
     def SL(self, simulation_func):
         speed_mph = random.gauss(91.0, 1.0)
-        pfx_x = random.gauss(-2.0, 0.5)   # glove-side break RHP (inches)
-        pfx_z = random.gauss(1.0, 0.5)    # minimal vertical (inches)
-        target_x = random.gauss(580, 40)   # glove-side, low
-        target_y = random.gauss(540, 40)
-        target_x, target_y = self.get_count_location_modifier(target_x, target_y)
+        pfx_x = random.gauss(-2.0, 0.5)
+        pfx_z = random.gauss(1.0, 0.5)
+        target_x, target_y = self.get_pitch_target('SL')
         simulation_func(self.release_point, 'jacobdegrom', speed_mph, pfx_x, pfx_z, target_x, target_y, 'SL')
 
     def CH(self, simulation_func):
         speed_mph = random.gauss(89.0, 1.5)
-        pfx_x = random.gauss(13.0, 1.0)   # heavy arm-side run RHP (inches)
-        pfx_z = random.gauss(8.0, 1.0)    # moderate rise (inches)
-        target_x = random.gauss(670, 40)   # arm-side, low
-        target_y = random.gauss(540, 35)
-        target_x, target_y = self.get_count_location_modifier(target_x, target_y)
+        pfx_x = random.gauss(13.0, 1.0)
+        pfx_z = random.gauss(8.0, 1.0)
+        target_x, target_y = self.get_pitch_target('CH')
         simulation_func(self.release_point, 'jacobdegrom', speed_mph, pfx_x, pfx_z, target_x, target_y, 'CH')

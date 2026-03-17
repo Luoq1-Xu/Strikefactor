@@ -12,7 +12,8 @@ class Mcclanahan(Pitcher):
                          screen,
                          'Shane Mcclanahan',
                          1200,
-                         7.0)
+                         7.0,
+                         command=0.72)
         self.load_img(loadfunc, 'assets/images/mcclanahan/', 17)
         self.add_pitch_type(self.CB, "CB")
         self.add_pitch_type(self.SLD, "SLD")
@@ -60,45 +61,35 @@ class Mcclanahan(Pitcher):
 
     def FFU(self, simulation_func):
         speed_mph = random.gauss(97.0, 0.5)
-        pfx_x = random.gauss(-12.0, 1.0)  # arm-side run LHP (inches)
-        pfx_z = random.gauss(16.0, 1.0)   # rise (inches)
-        target_x = random.gauss(630, 45)   # up in zone
-        target_y = random.gauss(430, 35)
-        target_x, target_y = self.get_count_location_modifier(target_x, target_y)
+        pfx_x = random.gauss(-12.0, 1.0)
+        pfx_z = random.gauss(16.0, 1.0)
+        target_x, target_y = self.get_pitch_target('FF')
         simulation_func(self.release_point, 'shanemcclanahan', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FF')
 
     def FFI(self, simulation_func):
         speed_mph = random.gauss(97.0, 0.5)
         pfx_x = random.gauss(-12.0, 1.0)
         pfx_z = random.gauss(16.0, 1.0)
-        target_x = random.gauss(620, 40)   # inside to RHB
-        target_y = random.gauss(480, 40)
-        target_x, target_y = self.get_count_location_modifier(target_x, target_y)
+        target_x, target_y = self.get_pitch_target('FF')
         simulation_func(self.release_point, 'shanemcclanahan', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FF')
 
     def SLD(self, simulation_func):
         speed_mph = random.gauss(83.0, 1.0)
-        pfx_x = random.gauss(3.0, 0.5)    # glove-side for LHP (inches)
-        pfx_z = random.gauss(0.0, 0.5)    # minimal vertical (inches)
-        target_x = random.gauss(640, 50)   # glove-side, low
-        target_y = random.gauss(540, 40)
-        target_x, target_y = self.get_count_location_modifier(target_x, target_y)
+        pfx_x = random.gauss(3.0, 0.5)
+        pfx_z = random.gauss(0.0, 0.5)
+        target_x, target_y = self.get_pitch_target('SLD')
         simulation_func(self.release_point, 'shanemcclanahan', speed_mph, pfx_x, pfx_z, target_x, target_y, 'SL')
 
     def CB(self, simulation_func):
         speed_mph = random.gauss(78.0, 1.0)
-        pfx_x = random.gauss(6.0, 1.0)    # glove-side (inches)
-        pfx_z = random.gauss(-12.0, 1.0)  # drops (inches)
-        target_x = random.gauss(630, 45)   # bury it below zone
-        target_y = random.gauss(570, 40)
-        target_x, target_y = self.get_count_location_modifier(target_x, target_y)
+        pfx_x = random.gauss(6.0, 1.0)
+        pfx_z = random.gauss(-12.0, 1.0)
+        target_x, target_y = self.get_pitch_target('CB')
         simulation_func(self.release_point, 'shanemcclanahan', speed_mph, pfx_x, pfx_z, target_x, target_y, 'CB')
 
     def CH(self, simulation_func):
         speed_mph = random.gauss(87.0, 0.5)
-        pfx_x = random.gauss(-16.0, 1.0)  # arm-side run LHP (inches)
-        pfx_z = random.gauss(8.0, 1.0)    # moderate rise (inches)
-        target_x = random.gauss(640, 45)   # arm-side, low
-        target_y = random.gauss(540, 35)
-        target_x, target_y = self.get_count_location_modifier(target_x, target_y)
+        pfx_x = random.gauss(-16.0, 1.0)
+        pfx_z = random.gauss(8.0, 1.0)
+        target_x, target_y = self.get_pitch_target('CH')
         simulation_func(self.release_point, 'shanemcclanahan', speed_mph, pfx_x, pfx_z, target_x, target_y, 'CH')

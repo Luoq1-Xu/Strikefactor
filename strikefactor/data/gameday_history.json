@@ -179,7 +179,65 @@
         2
       ],
       "opponent_starter": "yamamoto"
+    },
+    {
+      "date": "2026-03-15T23:48:36.544420",
+      "player_score": 9,
+      "opponent_score": 1,
+      "result": "WIN",
+      "difficulty": "all_star",
+      "player_inning_scores": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        7,
+        1,
+        0
+      ],
+      "opponent_inning_scores": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      "opponent_starter": "yamamoto"
+    },
+    {
+      "date": "2026-03-17T10:20:08.068604",
+      "player_score": 5,
+      "opponent_score": 3,
+      "result": "WIN",
+      "difficulty": "all_star",
+      "player_inning_scores": [
+        0,
+        0,
+        1,
+        4,
+        0,
+        0,
+        0,
+        0
+      ],
+      "opponent_inning_scores": [
+        0,
+        0,
+        0,
+        3,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "opponent_starter": "yamamoto"
     }
   ],
-  "last_updated": "2026-03-14T18:52:33.107922"
+  "last_updated": "2026-03-17T10:20:08.070374"
 }

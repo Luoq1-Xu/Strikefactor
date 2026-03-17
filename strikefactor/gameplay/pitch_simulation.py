@@ -665,3 +665,7 @@ class PitchSimulation:
                 selected=False
             )
             self.game.enhanced_pitch_records.append(enhanced_record)
+
+        # Record pitch to SQLite database
+        from data.pitch_database import PitchDatabaseService
+        PitchDatabaseService.get_instance().record_pitch(self)
