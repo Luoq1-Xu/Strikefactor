@@ -9,151 +9,132 @@ class HitOutcomeManager:
         self.settings_manager = settings_manager
         self.hit_type = 0
         self.ishomerun = ''
+        self.momentum_bonus = 0.0  # Set by gameday mode for hot streak
 
         # Right-handed batter's hand position
         # These positions are used to determine the contact zone for the bat
         self.rhpos = (490, 453)
         self.rhpos_high = (497, 405)
 
+    def _compute_contact_quality(self, swing_location_y, ball_location_y, timing_diff):
+        """Compute a continuous contact quality score from 0.0 (terrible) to 1.0 (perfect).
+
+        Components:
+          - timing_score: how close timing is to perfect (gaussian falloff)
+          - alignment_score: how close bat-ball vertical alignment is (gaussian falloff)
+          - combined via geometric mean so both matter
+        """
+        # --- Timing score (0.0 to 1.0) ---
+        if timing_diff is None:
+            timing_score = 0.7  # default decent
+        else:
+            # Gaussian falloff: perfect at 0ms, sigma ~35ms
+            timing_score = math.exp(-0.5 * (timing_diff / 35.0) ** 2)
+
+        # --- Vertical alignment score (0.0 to 1.0) ---
+        if swing_location_y is None or ball_location_y is None:
+            alignment_score = 0.7
+            vertical_offset = 0.0
+        else:
+            vertical_offset = swing_location_y - ball_location_y  # positive = bat below ball
+            # Gaussian falloff: perfect at 0px, sigma ~25px
+            alignment_score = math.exp(-0.5 * (vertical_offset / 25.0) ** 2)
+
+        # Combined quality via geometric mean
+        quality = math.sqrt(timing_score * alignment_score)
+
+        return quality, vertical_offset
+
     def get_contact_hit_outcome(self, swing_location_y=None, ball_location_y=None, timing_diff=None):
-        # Determine if swing was above/below ball based on swing location
-        location_factor = self._calculate_location_factor(swing_location_y, ball_location_y)
-        timing_factor = self._calculate_timing_factor(timing_diff)
+        quality, vertical_offset = self._compute_contact_quality(
+            swing_location_y, ball_location_y, timing_diff
+        )
 
-        # Get difficulty multipliers
         multipliers = self._get_difficulty_multipliers()
-
-        # Base random value
+        out_modifier = multipliers["out_probability_modifier"]
         rand = random.uniform(0, 10)
 
-        # Apply difficulty multipliers to out probabilities
-        out_modifier = multipliers["out_probability_modifier"]
-        foul_chance = multipliers["foul_ball_chance"]
+        # Out probability scales inversely with quality: high quality = fewer outs
+        # Range: quality=1.0 -> out_chance ~1.0, quality=0.0 -> out_chance ~6.0
+        # Momentum bonus reduces out chance (max ~12% reduction)
+        out_chance = (1.0 + 5.0 * (1.0 - quality)) * out_modifier * (1.0 - self.momentum_bonus)
 
-        # Adjust probabilities based on swing mechanics
-        if location_factor == "high_swing":  # Swing above ball - more likely flyout
-            flyout_threshold = 4 * out_modifier
-            if rand <= flyout_threshold:
+        # Determine out type based on vertical offset
+        if rand <= out_chance:
+            if vertical_offset < -10:  # bat above ball -> flyout
                 return "FLYOUT"
-            elif rand <= 6.5:
-                self.hit_type = 1
-                hit_result = "SINGLE"
-            elif rand <= 8.5:
-                self.hit_type = 2
-                hit_result = "DOUBLE"
-            elif rand <= 9.2:
-                self.hit_type = 3
-                hit_result = "TRIPLE"
-            else:
-                self.hit_type = 4
-                hit_result = "HOME RUN"
-        elif location_factor == "low_swing":  # Swing below ball - more likely groundout
-            groundout_threshold = 5 * out_modifier
-            if rand <= groundout_threshold:
+            elif vertical_offset > 10:  # bat below ball -> groundout
                 return "GROUNDOUT"
-            elif rand <= 7.5:
-                self.hit_type = 1
-                hit_result = "SINGLE"
-            elif rand <= 9:
-                self.hit_type = 2
-                hit_result = "DOUBLE"
-            elif rand <= 9.5:
-                self.hit_type = 3
-                hit_result = "TRIPLE"
             else:
-                self.hit_type = 4
-                hit_result = "HOME RUN"
-        else:  # Good contact - original distribution but with some outs
-            out_threshold = 3 * out_modifier
-            if timing_factor == "way_off" and rand <= out_threshold:
-                return "FLYOUT" if rand <= (out_threshold / 2) else "GROUNDOUT"
-            elif rand <= 7:
-                self.hit_type = 1
-                hit_result = "SINGLE"
-            elif rand <= 8.5:
-                self.hit_type = 2
-                hit_result = "DOUBLE"
-            elif rand <= 9.2:
-                self.hit_type = 3
-                hit_result = "TRIPLE"
-            else:
-                self.hit_type = 4
-                hit_result = "HOME RUN"
+                return "FLYOUT" if random.random() < 0.5 else "GROUNDOUT"
 
-        # Only update runners if it's a hit (not an out)
-        if hit_result not in ["FLYOUT", "GROUNDOUT"]:
-            self.update_runners_and_score()
+        # Hit outcomes: quality shifts weight toward extra-base hits
+        # Normalized remaining probability space
+        hit_rand = random.uniform(0, 1)
 
+        # Quality-scaled thresholds (higher quality = more XBH)
+        single_ceiling = 0.70 - 0.25 * quality   # 0.70 at q=0 -> 0.45 at q=1
+        double_ceiling = single_ceiling + 0.18 + 0.10 * quality  # grows with quality
+        triple_ceiling = double_ceiling + 0.06 + 0.04 * quality
+
+        if hit_rand <= single_ceiling:
+            self.hit_type = 1
+            hit_result = "SINGLE"
+        elif hit_rand <= double_ceiling:
+            self.hit_type = 2
+            hit_result = "DOUBLE"
+        elif hit_rand <= triple_ceiling:
+            self.hit_type = 3
+            hit_result = "TRIPLE"
+        else:
+            self.hit_type = 4
+            hit_result = "HOME RUN"
+
+        self.update_runners_and_score()
         return hit_result
-    
+
     def get_power_hit_outcome(self, swing_location_y=None, ball_location_y=None, timing_diff=None):
-        # Determine if swing was above/below ball based on swing location
-        location_factor = self._calculate_location_factor(swing_location_y, ball_location_y)
-        timing_factor = self._calculate_timing_factor(timing_diff)
+        quality, vertical_offset = self._compute_contact_quality(
+            swing_location_y, ball_location_y, timing_diff
+        )
 
-        # Get difficulty multipliers
         multipliers = self._get_difficulty_multipliers()
-
-        # Base random value
+        out_modifier = multipliers["out_probability_modifier"]
         rand = random.uniform(0, 10)
 
-        # Apply difficulty multipliers to out probabilities
-        out_modifier = multipliers["out_probability_modifier"]
+        # Power swings: slightly lower out chance but more variance
+        # Momentum bonus reduces out chance
+        out_chance = (0.8 + 4.5 * (1.0 - quality)) * out_modifier * (1.0 - self.momentum_bonus)
 
-        # Power swings have different characteristics
-        if location_factor == "high_swing":  # Power swing above ball - more flyouts but stronger hits
-            flyout_threshold = 3.5 * out_modifier
-            if rand <= flyout_threshold:
+        if rand <= out_chance:
+            if vertical_offset < -10:
                 return "FLYOUT"
-            elif rand <= 5:
-                self.hit_type = 1
-                hit_result = "SINGLE"
-            elif rand <= 7:
-                self.hit_type = 2
-                hit_result = "DOUBLE"
-            elif rand <= 8:
-                self.hit_type = 3
-                hit_result = "TRIPLE"
-            else:
-                self.hit_type = 4
-                hit_result = "HOME RUN"
-        elif location_factor == "low_swing":  # Power swing below ball - fewer groundouts, more pop-ups
-            groundout_threshold = 4 * out_modifier
-            if rand <= groundout_threshold:
+            elif vertical_offset > 10:
                 return "GROUNDOUT"
-            elif rand <= 5.5:
-                self.hit_type = 1
-                hit_result = "SINGLE"
-            elif rand <= 7.5:
-                self.hit_type = 2
-                hit_result = "DOUBLE"
-            elif rand <= 8.5:
-                self.hit_type = 3
-                hit_result = "TRIPLE"
             else:
-                self.hit_type = 4
-                hit_result = "HOME RUN"
-        else:  # Good contact with power swing - more extra base hits
-            out_threshold = 2.5 * out_modifier
-            if timing_factor == "way_off" and rand <= out_threshold:
-                return "FLYOUT" if rand <= (out_threshold / 2) else "GROUNDOUT"
-            elif rand <= 2.5:
-                self.hit_type = 1
-                hit_result = "SINGLE"
-            elif rand <= 5.5:
-                self.hit_type = 2
-                hit_result = "DOUBLE"
-            elif rand <= 7:
-                self.hit_type = 3
-                hit_result = "TRIPLE"
-            else:
-                self.hit_type = 4
-                hit_result = "HOME RUN"
+                return "FLYOUT" if random.random() < 0.6 else "GROUNDOUT"
 
-        # Only update runners if it's a hit (not an out)
-        if hit_result not in ["FLYOUT", "GROUNDOUT"]:
-            self.update_runners_and_score()
+        # Power swing: more weight to XBH, especially HR
+        hit_rand = random.uniform(0, 1)
 
+        single_ceiling = 0.40 - 0.20 * quality   # 0.40 at q=0 -> 0.20 at q=1
+        double_ceiling = single_ceiling + 0.25 + 0.05 * quality
+        triple_ceiling = double_ceiling + 0.10 + 0.05 * quality
+
+        if hit_rand <= single_ceiling:
+            self.hit_type = 1
+            hit_result = "SINGLE"
+        elif hit_rand <= double_ceiling:
+            self.hit_type = 2
+            hit_result = "DOUBLE"
+        elif hit_rand <= triple_ceiling:
+            self.hit_type = 3
+            hit_result = "TRIPLE"
+        else:
+            self.hit_type = 4
+            hit_result = "HOME RUN"
+
+        self.update_runners_and_score()
         return hit_result
     
     def power_timing_quality(self, swing_starttime, starttime, traveltime, windup_time):
@@ -192,35 +173,6 @@ class HitOutcomeManager:
         else:
             return 0  # Miss
     
-    def _calculate_location_factor(self, swing_y, ball_y):
-        """Determine swing location relative to ball."""
-        if swing_y is None or ball_y is None:
-            return "good_contact"
-            
-        y_diff = swing_y - ball_y
-        
-        # Thresholds for determining swing location (adjust based on your coordinate system)
-        if y_diff < -20:  # Swing significantly above ball
-            return "high_swing"
-        elif y_diff > 20:  # Swing significantly below ball
-            return "low_swing"
-        else:
-            return "good_contact"
-    
-    def _calculate_timing_factor(self, timing_diff):
-        """Determine timing quality."""
-        if timing_diff is None:
-            return "good_timing"
-            
-        abs_diff = abs(timing_diff)
-        
-        if abs_diff > 60:  # Very late or very early
-            return "way_off"
-        elif abs_diff > 30:  # Somewhat off
-            return "slightly_off"
-        else:
-            return "good_timing"
-        
     # Check for contact based on mouse cursor position when self.ball impacts bat
     def get_ball_to_bat_contact_outcome(self, batpos, ballpos, swing_type, ballsize=11, batter_handedness='R'):
         x = 1 if batter_handedness == "R" else -1

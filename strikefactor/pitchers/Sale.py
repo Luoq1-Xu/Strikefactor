@@ -1,7 +1,7 @@
 from .pitcher import Pitcher
 import random
 import pygame
-from utils.physics import calculate_pitch_velocity, calculate_travel_time
+
 
 class Sale(Pitcher):
 
@@ -12,7 +12,8 @@ class Sale(Pitcher):
                          screen,
                          'Chris Sale',
                          1100,
-                         6.7)  # arm_extension in feet
+                         6.7,
+                         command=0.80)
         self.load_img(loadfunc, 'assets/images/sale/LEFTY', 9)
         self.add_pitch_type(self.FF, 'FF')
         self.add_pitch_type(self.SL, 'SL')
@@ -42,82 +43,29 @@ class Sale(Pitcher):
             self.draw(self.screen, 9, 16, 22)
 
     def SL(self, simulation_func):
-        ax, ay = -0.02, 0.045
         speed_mph = random.gauss(79.0, 1.0)
-        travel_time = calculate_travel_time(speed_mph, self.arm_extension)
-
-        # Specify target location directly (with optional randomness)
-        target_x = random.uniform(490, 700)  # x position at plate
-        target_y = random.uniform(480, 620)  # y position at plate
-
-        vx, vy = calculate_pitch_velocity(
-            self.release_point,
-            target_x=target_x,
-            target_y=target_y,
-            ax=ax,
-            ay=ay,
-            traveltime=travel_time
-        )
-
-        simulation_func(self.release_point, 'chrissale', ax, ay, vx, vy, travel_time, 'SL')
+        pfx_x = random.gauss(11.0, 0.5)
+        pfx_z = random.gauss(0.0, 0.5)
+        target_x, target_y = self.get_pitch_target('SL')
+        simulation_func(self.release_point, 'chrissale', speed_mph, pfx_x, pfx_z, target_x, target_y, 'SL')
 
     def FF(self, simulation_func):
-        ax, ay = 0.005, 0.005
         speed_mph = random.gauss(94.8, 0.25)
-        travel_time = calculate_travel_time(speed_mph, self.arm_extension)
-
-        # Specify target location directly (with optional randomness)
-        target_x = random.uniform(490, 670)  # x position at plate
-        target_y = random.uniform(420, 600)  # y position at plate
-
-        vx, vy = calculate_pitch_velocity(
-            self.release_point,
-            target_x=target_x,
-            target_y=target_y,
-            ax=ax,
-            ay=ay,
-            traveltime=travel_time
-        )
-
-        simulation_func(self.release_point, 'chrissale', ax, ay, vx, vy, travel_time, 'FF')
+        pfx_x = random.gauss(-9.0, 1.0)
+        pfx_z = random.gauss(15.0, 1.0)
+        target_x, target_y = self.get_pitch_target('FF')
+        simulation_func(self.release_point, 'chrissale', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FF')
 
     def SI(self, simulation_func):
-        ax, ay = 0.025, 0.015
         speed_mph = random.gauss(93.9, 0.25)
-        travel_time = calculate_travel_time(speed_mph, self.arm_extension)
-
-        # Specify target location directly (with optional randomness)
-        target_x = random.uniform(490, 670)  # x position at plate
-        target_y = random.uniform(420, 600)  # y position at plate
-
-        vx, vy = calculate_pitch_velocity(
-            self.release_point,
-            target_x=target_x,
-            target_y=target_y,
-            ax=ax,
-            ay=ay,
-            traveltime=travel_time
-        )
-
-        simulation_func(self.release_point, 'chrissale', ax, ay, vx, vy, travel_time, 'SI')
+        pfx_x = random.gauss(-8.0, 1.0)
+        pfx_z = random.gauss(5.0, 1.0)
+        target_x, target_y = self.get_pitch_target('SI')
+        simulation_func(self.release_point, 'chrissale', speed_mph, pfx_x, pfx_z, target_x, target_y, 'SI')
 
     def CH(self, simulation_func):
-        ax, ay = 0.015, 0.025
         speed_mph = random.gauss(87.0, 0.50)
-        travel_time = calculate_travel_time(speed_mph, self.arm_extension)
-
-        # Specify target location directly (with optional randomness)
-        target_x = random.uniform(490, 670)  # x position at plate
-        target_y = random.uniform(420, 600)  # y position at plate
-
-        vx, vy = calculate_pitch_velocity(
-            self.release_point,
-            target_x=target_x,
-            target_y=target_y,
-            ax=ax,
-            ay=ay,
-            traveltime=travel_time
-        )
-
-        simulation_func(self.release_point, 'chrissale', ax, ay, vx, vy, travel_time, 'CH')
-
+        pfx_x = random.gauss(-17.0, 1.0)
+        pfx_z = random.gauss(8.0, 1.0)
+        target_x, target_y = self.get_pitch_target('CH')
+        simulation_func(self.release_point, 'chrissale', speed_mph, pfx_x, pfx_z, target_x, target_y, 'CH')

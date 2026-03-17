@@ -1,7 +1,7 @@
 from .pitcher import Pitcher
-from utils.physics import calculate_travel_time
 import random
 import pygame
+
 
 class Mcclanahan(Pitcher):
 
@@ -12,16 +12,14 @@ class Mcclanahan(Pitcher):
                          screen,
                          'Shane Mcclanahan',
                          1200,
-                         7.0)  # arm_extension in feet
+                         7.0,
+                         command=0.72)
         self.load_img(loadfunc, 'assets/images/mcclanahan/', 17)
         self.add_pitch_type(self.CB, "CB")
         self.add_pitch_type(self.SLD, "SLD")
         self.add_pitch_type(self.CH, "CH")
         self.add_pitch_type(self.FFI, "FFI")
         self.add_pitch_type(self.FFU, "FFU")
-        #self.add_pitch_type(self.CHI, "CHI")
-        #self.add_pitch_type(self.CBO, "CBO")
-        #self.add_pitch_type(self.FFO, "FFO")
 
     def draw_pitcher(self, start_time, current_time):
         if current_time == 0 and start_time == 0:
@@ -62,57 +60,36 @@ class Mcclanahan(Pitcher):
             self.draw(self.screen, 17, -3, 25)
 
     def FFU(self, simulation_func):
-            sampley = random.uniform(-25,20)
-            samplex = random.uniform(-25,10)
-            speed_mph = 97.0
-            travel_time = calculate_travel_time(speed_mph, self.arm_extension)
-            simulation_func(self.release_point, 'shanemcclanahan', 0.015, 0.010, samplex, sampley, travel_time, 'FF')
+        speed_mph = random.gauss(97.0, 0.5)
+        pfx_x = random.gauss(-12.0, 1.0)
+        pfx_z = random.gauss(16.0, 1.0)
+        target_x, target_y = self.get_pitch_target('FF')
+        simulation_func(self.release_point, 'shanemcclanahan', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FF')
 
     def FFI(self, simulation_func):
-        sampley = random.uniform(-15,15)
-        samplex = random.uniform(-30,-35)
-        speed_mph = 97.0
-        travel_time = calculate_travel_time(speed_mph, self.arm_extension)
-        simulation_func(self.release_point, 'shanemcclanahan', 0.005, 0.010, samplex, sampley, travel_time, 'FF')
-
-    def FFO(self, simulation_func):
-        sampley = random.uniform(10,25)
-        samplex = random.uniform(8,10)
-        speed_mph = 97.0
-        travel_time = calculate_travel_time(speed_mph, self.arm_extension)
-        simulation_func(self.release_point, 'shanemcclanahan', 0.005, 0.010, samplex, sampley, travel_time, 'FF')
+        speed_mph = random.gauss(97.0, 0.5)
+        pfx_x = random.gauss(-12.0, 1.0)
+        pfx_z = random.gauss(16.0, 1.0)
+        target_x, target_y = self.get_pitch_target('FF')
+        simulation_func(self.release_point, 'shanemcclanahan', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FF')
 
     def SLD(self, simulation_func):
-            sampley = random.uniform(-10, 15)
-            samplex = random.uniform(-25,15)
-            speed_mph = 83.0
-            travel_time = calculate_travel_time(speed_mph, self.arm_extension)
-            simulation_func(self.release_point, 'shanemcclanahan', -0.01, 0.0350, samplex, sampley, travel_time, 'SL')
-
-    def CHD(self, main_simulation):
-        sampley = random.uniform(-5,15)
-        samplex = random.uniform(-20,10)
-        speed_mph = 87.0
-        travel_time = calculate_travel_time(speed_mph, self.arm_extension)
-        main_simulation(self.release_point, 'shanemcclanahan', 0.015, 0.0275, samplex, sampley, travel_time, 'CH')
+        speed_mph = random.gauss(83.0, 1.0)
+        pfx_x = random.gauss(3.0, 0.5)
+        pfx_z = random.gauss(0.0, 0.5)
+        target_x, target_y = self.get_pitch_target('SLD')
+        simulation_func(self.release_point, 'shanemcclanahan', speed_mph, pfx_x, pfx_z, target_x, target_y, 'SL')
 
     def CB(self, simulation_func):
-            sampley = random.uniform(-25, 5)
-            samplex = random.uniform(-25,15)
-            speed_mph = 78.0
-            travel_time = calculate_travel_time(speed_mph, self.arm_extension)
-            simulation_func(self.release_point, 'shanemcclanahan', -0.01, 0.0450, samplex, sampley, travel_time, 'CB')
-
-    def CBO(self, simulation_func):
-            sampley = random.uniform(-20, 5)
-            samplex = random.uniform(10,15)
-            speed_mph = 78.0
-            travel_time = calculate_travel_time(speed_mph, self.arm_extension)
-            simulation_func(self.release_point, 'shanemcclanahan', -0.01, 0.0450, samplex, sampley, travel_time, 'CB')
+        speed_mph = random.gauss(78.0, 1.0)
+        pfx_x = random.gauss(6.0, 1.0)
+        pfx_z = random.gauss(-12.0, 1.0)
+        target_x, target_y = self.get_pitch_target('CB')
+        simulation_func(self.release_point, 'shanemcclanahan', speed_mph, pfx_x, pfx_z, target_x, target_y, 'CB')
 
     def CH(self, simulation_func):
-        sampley = random.uniform(-10, 20)
-        samplex = random.uniform(-45, 0)
-        speed_mph = 87.0
-        travel_time = calculate_travel_time(speed_mph, self.arm_extension)
-        simulation_func(self.release_point, 'shanemcclanahan', 0.015, 0.0275, samplex, sampley, travel_time, 'CH')
+        speed_mph = random.gauss(87.0, 0.5)
+        pfx_x = random.gauss(-16.0, 1.0)
+        pfx_z = random.gauss(8.0, 1.0)
+        target_x, target_y = self.get_pitch_target('CH')
+        simulation_func(self.release_point, 'shanemcclanahan', speed_mph, pfx_x, pfx_z, target_x, target_y, 'CH')

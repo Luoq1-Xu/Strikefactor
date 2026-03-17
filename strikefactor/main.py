@@ -18,6 +18,7 @@ from ui.components import create_pci_cursor
 from engine.sound_manager import SoundManager
 from gameplay.batter import Batter
 from config import get_path, resource_path
+from utils.pitch_physics import DEFAULT_CAMERA
 from gameplay.field_renderer import FieldRenderer
 from gameplay.hit_outcome_manager import HitOutcomeManager
 from ui.ui_manager import UIManager
@@ -66,21 +67,19 @@ class AssetManager:
     def create_ball_renderer(self):
         """Create a ball rendering function."""
         counter = 0
-        
+
         def render_ball(screen, ball_pos):
             nonlocal counter
-            max_distance = 4600
-            min_size = 3
-            max_size = 11
-
-            dist = ball_pos[2] / max_distance
-            size = min_size + (max_size - min_size) * (1 - dist)
+            # ball_pos[2] is world-y (feet from plate)
+            world_y = ball_pos[2]
+            proj_radius = DEFAULT_CAMERA.project_radius(world_y)
+            size = max(3, min(11, proj_radius))
             ratio = size / 54
 
             image = pygame.transform.scale(self.ball_list[counter], (int(ratio * 64), int(ratio * 66)))
             screen.blit(image, (ball_pos[0] - (29.22 * ratio), ball_pos[1] - (32.62 * ratio)))
             counter = (counter + 1) % len(self.ball_list)
-            
+
         return render_ball
 class PitcherManager:
     """Manages pitcher instances and AI."""
@@ -183,6 +182,9 @@ class Game:
         # Core components
         self.asset_manager = AssetManager()
         self.pitcher_manager = PitcherManager(self.screen, self.asset_manager)
+        # Set game ref on all pitchers for count-aware location targeting
+        for pitcher in self.pitcher_manager.pitchers.values():
+            pitcher.set_game_ref(self)
         self.game_stats = GameStats()
         
         # Game systems
@@ -550,12 +552,18 @@ class Game:
         from gameplay.gameday_manager import GameDayManager
 
         # Initialize gameday manager and set flag
-        self.gameday_manager = GameDayManager(player_name="Player")
+        difficulty = self.settings_manager.get_difficulty().value
+        self.gameday_manager = GameDayManager(player_name="Player", difficulty=difficulty)
         self.in_gameday_mode = True
 
         # Set starting pitcher (Yamamoto)
         self.pitcher_manager.set_current_pitcher('yamamoto')
         self.current_pitcher = self.pitcher_manager.get_current_pitcher()
+
+        # Attach fatigue stats so pitch simulation applies fatigue modifiers
+        self.current_pitcher.set_fatigue_stats(
+            self.gameday_manager.get_active_pitcher_stats()
+        )
 
         # Reset game stats for fresh start
         self.game_stats.reset_game_stats()
@@ -568,11 +576,16 @@ class Game:
 
     def enter_arcade_mode(self):
         """Enter Arcade mode (pitcher selection menu)."""
+        self.in_gameday_mode = False
+        self.gameday_manager = None
+        self.current_gamemode = 0
         self.menu_state = 0
         self.state_manager.change_state('menu')
 
     def enter_sandbox_mode(self):
         """Enter Sandbox mode - direct gameplay with user-controlled pitch selection."""
+        self.in_gameday_mode = False
+        self.gameday_manager = None
         # Set default pitcher
         self.pitcher_manager.set_current_pitcher('sale')
 
@@ -600,27 +613,41 @@ class Game:
             state.switch_pitcher(pitcher_name)
 
     def _sandbox_select_pitch(self, pitch_index: int):
-        """Select pitch type in sandbox mode by button index."""
+        """Toggle pitch type in sandbox mode by button index."""
         if self.state_manager.is_current_state('sandbox_gameplay'):
             state = self.state_manager.get_current_state()
             pitch_names = self.current_pitcher.get_pitch_names()
             if pitch_index < len(pitch_names):
-                state.select_pitch(pitch_names[pitch_index])
+                state.toggle_pitch(pitch_names[pitch_index])
 
     def return_to_mode_select(self):
         """Return to main mode selection menu."""
         self.menu_state = 'mode_select'
+        self.current_gamemode = 0
         self.inning_ended = False
+        self.in_gameday_mode = False
+        self.gameday_manager = None
+        self.previous_mode_before_pitchviz = None
         self.game_stats.reset_game_stats()
+        # Clear fatigue stats if a pitcher has them
+        if hasattr(self.current_pitcher, 'clear_fatigue_stats'):
+            self.current_pitcher.clear_fatigue_stats()
         self.state_manager.change_state('mode_select')
 
     def set_menu_state(self, state):
         """Set the current menu state."""
         self.menu_state = state
         if state == 0:  # Returning to main menu
+            self.current_gamemode = 0
             self.inning_ended = False
+            self.in_gameday_mode = False
+            self.gameday_manager = None
+            self.previous_mode_before_pitchviz = None
             # Reset game stats so a fresh game can be started
             self.game_stats.reset_game_stats()
+            # Clear fatigue stats if a pitcher has them
+            if hasattr(self.current_pitcher, 'clear_fatigue_stats'):
+                self.current_pitcher.clear_fatigue_stats()
         self.state_manager.handle_menu_state_change(state)
         
     def exit_view_pitches(self):
@@ -885,13 +912,10 @@ class Game:
             # Clear rebind state
             self.key_rebind_action = None
 
-    def _display_pitch_results(self, outcome: str, pitchtype: str, traveltime: float):
+    def _display_pitch_results(self, outcome: str, pitchtype: str, speed_mph: float):
         """Display pitch results on the UI."""
-        # Calculate velocity in MPH using effective distance (60.5 feet - arm extension)
-        distance = 60.5 - self.current_pitcher.arm_extension
-        velocity_mph = (distance / (traveltime / 1000)) * (3600 / 5280)
         pitch_result_string = (
-            f"<font size=5>PITCH {self.pitchnumber}: {pitchtype} {velocity_mph:.1f} MPH<br>{outcome}<br>"
+            f"<font size=5>PITCH {self.pitchnumber}: {pitchtype} {speed_mph:.1f} MPH<br>{outcome}<br>"
             f"COUNT IS {self.currentballs} - {self.currentstrikes}</font>"
         )
         game_status_result_string = (
@@ -914,6 +938,8 @@ class Game:
             if self.in_gameday_mode:
                 # Update player's score in gameday manager (add to cumulative score)
                 self.gameday_manager.player_score += self.scoreKeeper.get_score()
+                # Record half-inning runs for box score tracking
+                self.gameday_manager._current_half_runs = self.scoreKeeper.get_score()
 
                 # DON'T call end_half_inning() here - let the transition state handle it
                 # This ensures the state machine sees the correct inning state
@@ -944,16 +970,18 @@ class Game:
                     running = False
                     break
 
-                # Handle key binding events
+                # Handle key binding events (only in gameplay-related states)
+                _hotkey_states = {'gameplay', 'sandbox_gameplay', 'view_pitches',
+                                  'visualization', 'inning_end'}
                 if event.type == pygame.KEYDOWN:
                     # Check if we're waiting for a key rebind
                     if hasattr(self, 'key_rebind_action') and self.key_rebind_action is not None:
                         self.complete_key_rebind(event.key)
-                    else:
-                        # Normal key handling
+                    elif self.state_manager.current_state_name in _hotkey_states:
                         self.key_binding_manager.handle_key_down(event.key)
                 elif event.type == pygame.KEYUP:
-                    self.key_binding_manager.handle_key_up(event.key)
+                    if self.state_manager.current_state_name in _hotkey_states:
+                        self.key_binding_manager.handle_key_up(event.key)
 
                 # Let state manager handle events
                 if not self.state_manager.handle_event(event):
