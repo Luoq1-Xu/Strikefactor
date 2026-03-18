@@ -1,6 +1,6 @@
 # ⚾ StrikeFactor
 
-A pygame baseball batting simulator that puts you in the batter's box against elite MLB pitchers. Easy to start up and quickly jump into the action. Face off against AI-controlled pitchers with realistic pitch physics and precise timing mechanics.
+A pygame baseball batting simulator that puts you in the batter's box against elite MLB pitchers. Easy to start up and quickly jump into the action. Face off against AI-controlled pitchers with Statcast-style 3D pitch physics, continuous contact quality scoring, and precise timing mechanics.
 
 ## 🎮 Getting Started
 
@@ -18,6 +18,8 @@ python strikefactor/main.py
 5. **Make contact** - Press **W** for a contact swing or **E** for a power swing at just the right moment
 
 The key is timing and positioning - swing too early or too late, and you'll miss. Power swings have a smaller contact window (requiring more precise timing) but yield better hit outcomes. Contact swings are easier to connect but produce weaker results.
+
+Contact quality is scored on a continuous 0.0–1.0 scale using timing accuracy and vertical bat-ball alignment (combined via geometric mean), so both dimensions matter equally.
 
 ## 🎯 Game Modes
 
@@ -62,7 +64,7 @@ Five elite pitchers, each with unique pitch arsenals and AI behavior:
 | **Yoshinobu Yamamoto** | R | Fastball (96), Splitter (89), Curveball (73) |
 | **Shane McClanahan** | L | Fastball (97), Slider (83), Changeup (87), Curveball (78) |
 
-Each pitcher has a pre-trained Q-learning AI model that adapts pitch selection based on the game situation.
+Each pitcher has a pre-trained Q-learning AI model that adapts pitch selection based on the game situation. Pitchers also use an intent-based targeting system that classifies count state (first pitch, ahead, behind, even, full) and adjusts zone/edge/chase/ball probabilities accordingly, with per-pitch-type biases (e.g., fastballs target the zone more, sliders target the chase zone).
 
 ## 🎮 Controls
 
@@ -139,12 +141,46 @@ Snapshot and track your batting performance over time:
 - Lap history persists across sessions in `lap_history.json`
 - Great for tracking improvement over multiple practice sessions
 
+### Pitch Database
+Every pitch is recorded to a SQLite database (`strikefactor.db`) with:
+- Full 9-parameter kinematics (position, velocity, acceleration)
+- 20-point sampled trajectory for each pitch
+- At-bat context (count, outs, runners, batter handedness, previous pitch)
+- Swing data (type, timing, outcome)
+- Derived metrics (speed, horizontal/vertical break, plate location)
+- Session tracking with timestamps for longitudinal analysis
+
 ### Statistics Tracking
 - Hit location heatmap (9-segment strikezone breakdown)
 - Batting average by zone
 - Career statistics saved to `batting_stats.json` (cumulative all-time stats)
 - Triple slash line (BA/OBP/SLG) and OPS
 - In-game stats: hits, walks, strikeouts, runs
+
+## ⚾ Pitch Physics
+
+### Statcast-Style 3D Simulation
+Pitches are modeled using MLB Statcast's 9-parameter constant-acceleration kinematic model:
+- Full 3D trajectory tracking: x (horizontal), y (toward pitcher), z (vertical)
+- Realistic air drag deceleration (~30 ft/s²)
+- Magnus force acceleration for spin-induced pitch movement (break)
+- Umpire camera projection converts 3D world coordinates to 2D screen view
+- Each pitcher has a 3D release position computed from their sprite and camera geometry
+
+### Contact Quality Gradient
+Hit outcomes use a continuous quality score (0.0–1.0) based on:
+- **Timing accuracy**: Gaussian falloff centered on perfect contact (σ ~35ms)
+- **Vertical alignment**: Gaussian falloff centered on perfect bat-ball alignment (σ ~25px)
+- Combined via geometric mean so both timing and position matter equally
+- Higher quality reduces out probability and increases extra-base hit chance
+- Separate outcome tables for contact swings (more singles) vs power swings (more XBH)
+
+### Pitcher Fatigue
+- Fatigue builds from pitch 50 onward (0.0–1.0 scale)
+- Velocity penalty: up to -5% at max fatigue
+- Movement penalty: up to -10% at max fatigue
+- Mistake pitch chance: increases with fatigue (up to 15% at 100+ pitches)
+- Fatigue labels: Fresh → Low → Moderate → High → Gassed
 
 ## 🤖 AI System
 
@@ -155,6 +191,13 @@ Q-learning based pitch selection that considers:
 - Previous pitch history
 - Adaptive learning from player behavior
 - Zone/chase pitch targeting for advanced pitchers (e.g., deGrom)
+
+### Intent-Based Pitch Targeting
+Count-aware pitch location system layered on top of Q-learning:
+- Count state classification: `first_pitch`, `ahead`, `behind`, `even`, `full`
+- Intent probability table determines zone vs. edge vs. chase vs. ball targeting
+- Per-pitch-type biases (fastballs favor zone, sliders favor chase, changeups favor edge)
+- Command error based on pitcher's individual command rating
 
 ### Umpire AI
 Pre-trained ML model for consistent ball/strike calls based on pitch location.

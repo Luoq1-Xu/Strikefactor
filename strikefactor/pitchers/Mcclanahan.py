@@ -16,10 +16,9 @@ class Mcclanahan(Pitcher):
                          command=0.72)
         self.load_img(loadfunc, 'assets/images/mcclanahan/', 17)
         self.add_pitch_type(self.CB, "CB")
-        self.add_pitch_type(self.SLD, "SLD")
+        self.add_pitch_type(self.SL, "SL")
         self.add_pitch_type(self.CH, "CH")
-        self.add_pitch_type(self.FFI, "FFI")
-        self.add_pitch_type(self.FFU, "FFU")
+        self.add_pitch_type(self.FF, "FF")
 
     def draw_pitcher(self, start_time, current_time):
         if current_time == 0 and start_time == 0:
@@ -59,29 +58,22 @@ class Mcclanahan(Pitcher):
         elif current_time > start_time + 1320:
             self.draw(self.screen, 17, -3, 25)
 
-    def FFU(self, simulation_func):
+    def FF(self, simulation_func):
         speed_mph = random.gauss(97.0, 0.5)
         pfx_x = random.gauss(-12.0, 1.0)
         pfx_z = random.gauss(16.0, 1.0)
         target_x, target_y = self.get_pitch_target('FF')
         simulation_func(self.release_point, 'shanemcclanahan', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FF')
 
-    def FFI(self, simulation_func):
-        speed_mph = random.gauss(97.0, 0.5)
-        pfx_x = random.gauss(-12.0, 1.0)
-        pfx_z = random.gauss(16.0, 1.0)
-        target_x, target_y = self.get_pitch_target('FF')
-        simulation_func(self.release_point, 'shanemcclanahan', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FF')
-
-    def SLD(self, simulation_func):
-        speed_mph = random.gauss(83.0, 1.0)
+    def SL(self, simulation_func):
+        speed_mph = random.gauss(89.0, 1.0)
         pfx_x = random.gauss(3.0, 0.5)
         pfx_z = random.gauss(0.0, 0.5)
-        target_x, target_y = self.get_pitch_target('SLD')
+        target_x, target_y = self.get_pitch_target('SL')
         simulation_func(self.release_point, 'shanemcclanahan', speed_mph, pfx_x, pfx_z, target_x, target_y, 'SL')
 
     def CB(self, simulation_func):
-        speed_mph = random.gauss(78.0, 1.0)
+        speed_mph = random.gauss(84.0, 1.0)
         pfx_x = random.gauss(6.0, 1.0)
         pfx_z = random.gauss(-12.0, 1.0)
         target_x, target_y = self.get_pitch_target('CB')

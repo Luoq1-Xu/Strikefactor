@@ -1,7 +1,7 @@
 {
   "version": "1.0",
   "created_date": "2026-01-30T15:03:27.058160",
-  "last_updated": "2026-03-10T19:55:11.708187",
+  "last_updated": "2026-03-17T21:18:42.135571",
   "laps": [
     {
       "lap_number": 1,
@@ -326,6 +326,47 @@
       "on_base_percentage": 0.623,
       "slugging_percentage": 1.023,
       "ops": 1.645
+    },
+    {
+      "lap_number": 10,
+      "timestamp": "2026-03-17T21:18:42.135571",
+      "heatmap_data": [
+        2,
+        12,
+        6,
+        12,
+        19,
+        18,
+        23,
+        38,
+        19
+      ],
+      "heatmap_attempts": [
+        42,
+        88,
+        42,
+        69,
+        113,
+        78,
+        98,
+        178,
+        113
+      ],
+      "total_swings": 821,
+      "total_hits": 226,
+      "total_pitches": 2503,
+      "total_at_bats": 754,
+      "batting_average": 0.3,
+      "duration_seconds": 894.696978,
+      "triple_slash": ".300/.327/.593",
+      "total_singles": 101,
+      "total_doubles": 61,
+      "total_triples": 32,
+      "total_home_runs": 32,
+      "total_walks": 31,
+      "on_base_percentage": 0.327,
+      "slugging_percentage": 0.593,
+      "ops": 0.92
     }
   ]
 }

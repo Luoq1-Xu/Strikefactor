@@ -16,8 +16,10 @@ class Yamamoto(Pitcher):
                          command=0.75)
         self.load_img(loadfunc, 'assets/images/yamamoto/', 14)
         self.add_pitch_type(self.FB, "FF")
-        self.add_pitch_type(self.yamamotoSplitter, "FS")
-        self.add_pitch_type(self.yamamotoCurve, "CB")
+        self.add_pitch_type(self.FS, "FS")
+        self.add_pitch_type(self.CB, "CB")
+        self.add_pitch_type(self.FC, "FC")
+        self.add_pitch_type(self.SI, "SI")
 
     def draw_pitcher(self, start_time, current_time):
         if current_time == 0 and start_time == 0:
@@ -58,14 +60,28 @@ class Yamamoto(Pitcher):
         target_x, target_y = self.get_pitch_target('FF')
         simulation_func(self.release_point, 'Yamamoto', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FF')
 
-    def yamamotoCurve(self, simulation_func):
-        speed_mph = random.gauss(73.0, 1.0)
+    def FC(self, simulation_func):
+        speed_mph = random.gauss(92.0, 1.0)
+        pfx_x = random.gauss(-2.0, 0.5)
+        pfx_z = random.gauss(5.0, 1.0)
+        target_x, target_y = self.get_pitch_target('FC')
+        simulation_func(self.release_point, 'Yamamoto', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FC')
+
+    def SI(self, simulation_func):
+        speed_mph = random.gauss(95.0, 1.0)
+        pfx_x = random.gauss(8.0, 0.5)
+        pfx_z = random.gauss(4.0, 1.0)
+        target_x, target_y = self.get_pitch_target('SI')
+        simulation_func(self.release_point, 'Yamamoto', speed_mph, pfx_x, pfx_z, target_x, target_y, 'SI')
+
+    def CB(self, simulation_func):
+        speed_mph = random.gauss(77.0, 1.0)
         pfx_x = random.gauss(-5.0, 1.0)
         pfx_z = random.gauss(-12.0, 1.0)
         target_x, target_y = self.get_pitch_target('CB')
         simulation_func(self.release_point, 'Yamamoto', speed_mph, pfx_x, pfx_z, target_x, target_y, 'CB')
 
-    def yamamotoSplitter(self, simulation_func):
+    def FS(self, simulation_func):
         speed_mph = random.gauss(89.0, 1.0)
         pfx_x = random.gauss(10.0, 2.0)
         pfx_z = random.gauss(2.0, 1.0)
