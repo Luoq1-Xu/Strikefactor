@@ -49,11 +49,6 @@ class FieldRenderer:
         # Load existing data if available
         self.load_data()
         
-    def set_strikezone_mode(self, mode):
-        """Set the strike zone display mode (1, 2, 3, 4, or 5)."""
-        if 1 <= mode <= 5:
-            self.strikezonedrawn = mode
-    
     def toggle_strikezone_mode(self):
         """Cycle through strike zone display modes."""
         self.strikezonedrawn = self.strikezonedrawn + 1 if self.strikezonedrawn < 5 else 1
@@ -454,15 +449,6 @@ class FieldRenderer:
         self.save_data()
         print("✓ All batting statistics have been reset")
     
-    def add_test_heatmap_data(self):
-        """Add test data for heatmap visualization."""
-        # Add realistic batting average test data (hits per segment)
-        # These should show varying performance levels across the zone
-        self.heatmap_data = [2, 8, 1, 6, 12, 3, 1, 4, 2]      # hits per segment  
-        self.heatmap_attempts = [20, 25, 18, 30, 35, 28, 15, 22, 17]  # attempts per segment
-        # This gives batting averages of: [0.10, 0.32, 0.06, 0.20, 0.34, 0.11, 0.07, 0.18, 0.12]
-        # Should show: blue, red, blue, white, red, blue, blue, blue/white, blue
-        
     def save_data(self):
         """Save heatmap and batting statistics to file."""
         try:
@@ -625,33 +611,6 @@ class FieldRenderer:
             return f"{value:.3f}"[1:]  # Remove leading 0 for ".333"
 
         return f"{format_stat(avg)}/{format_stat(obp)}/{format_stat(slg)}"
-
-    def get_batting_statistics(self):
-        """Get comprehensive batting statistics."""
-        stats = {
-            'overall_average': self.get_overall_batting_average(),
-            'total_pitches': self.total_pitches,
-            'total_swings': self.total_swings,
-            'total_hits': self.total_hits,
-            'total_at_bats': self.total_at_bats,
-            'swing_percentage': self.total_swings / max(self.total_pitches, 1),
-            'zone_averages': []
-        }
-        
-        # Calculate per-zone averages
-        for i in range(9):
-            if self.heatmap_attempts[i] > 0:
-                avg = self.heatmap_data[i] / self.heatmap_attempts[i]
-            else:
-                avg = 0.0
-            stats['zone_averages'].append({
-                'zone': i,
-                'average': avg,
-                'hits': self.heatmap_data[i],
-                'attempts': self.heatmap_attempts[i]
-            })
-
-        return stats
 
     # ==================== Lap Feature Methods ====================
 

@@ -15,7 +15,7 @@ class Sasaki(Pitcher):
                          7.1,
                          command=0.60)
         self.load_img(loadfunc, 'assets/images/sasaki/', 14)
-        self.add_pitch_type(self.FB, "FF")
+        self.add_pitch_type(self.FF, "FF")
         self.add_pitch_type(self.FS, "FS")
 
     def draw_pitcher(self, start_time, current_time):
@@ -50,8 +50,8 @@ class Sasaki(Pitcher):
         elif current_time > start_time + 1120:
             self.draw(self.screen, 14, -9, 12)
 
-    def FB(self, simulation_func):
-        speed_mph = random.gauss(96.1, 2.0)
+    def FF(self, simulation_func):
+        speed_mph = random.gauss(96.1, 0.8)
         pfx_x = random.gauss(7.0, 1.0)
         pfx_z = random.gauss(16.0, 1.0)
         target_x, target_y = self.get_pitch_target('FF')

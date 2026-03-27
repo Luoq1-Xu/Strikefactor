@@ -2,7 +2,7 @@ import pygame
 import pygame.gfxdraw
 import pygame_gui
 import json
-from config import SCREEN_WIDTH, SCREEN_HEIGHT, get_path, resource_path
+from config import get_path, resource_path
 
 
 def create_pci_cursor():

@@ -192,7 +192,7 @@ class PitchSimulation:
         self.game.batter.leg_kick(current_time, self.starttime + self.windup - 300)
         self.game.field_renderer.draw_strikezone()
         self.game.field_renderer.draw_field(self.game.scoreKeeper.get_bases())
-        pygame.display.flip()
+        self.game.flip_display()
 
     def _is_ball_in_flight(self, current_time):
         """Check if ball is in flight and available for hitting."""
@@ -216,7 +216,7 @@ class PitchSimulation:
         self._update_ball_position(current_time)
         self.game.field_renderer.draw_strikezone()
         self.game.field_renderer.draw_field(self.game.scoreKeeper.get_bases())
-        pygame.display.flip()
+        self.game.flip_display()
 
         # Ball reaching glove sound
         if ((current_time > (self.arrival_time - 30) and self.soundplayed == 0 and self.on_time == 0) or
@@ -227,7 +227,7 @@ class PitchSimulation:
 
     def _handle_swing_input(self, event, current_time):
         """Handle swing input from player."""
-        mousepos = pygame.mouse.get_pos()
+        mousepos = self.game.get_mouse_pos()
         self.swing_starttime = pygame.time.get_ticks()
         self.contact_time = self.swing_starttime + 150
 
@@ -260,7 +260,7 @@ class PitchSimulation:
         self.game.field_renderer.draw_field(self.game.scoreKeeper.get_bases())
         pygame.gfxdraw.aacircle(self.game.screen, int(self.game.ball[0]), int(self.game.ball[1]),
                                self.game.fourseamballsize, (255,255,255))
-        pygame.display.flip()
+        self.game.flip_display()
 
         if not self.pitch_results_done:
             self._evaluate_contact()
@@ -278,7 +278,7 @@ class PitchSimulation:
 
     def _evaluate_contact(self):
         """Evaluate the contact outcome based on timing."""
-        mousepos = pygame.mouse.get_pos()
+        mousepos = self.game.get_mouse_pos()
 
         if self.on_time == 1:  # Foul ball timing
             outcome = self.game.hit_outcome_manager.get_ball_to_bat_contact_outcome(
@@ -329,7 +329,7 @@ class PitchSimulation:
             self.game.hit_outcome_manager.momentum_bonus = 0.0
 
         # Get swing and ball positions for more realistic outcomes
-        mousepos = pygame.mouse.get_pos()
+        mousepos = self.game.get_mouse_pos()
         swing_y = mousepos[1]
         ball_y = self.game.ball[1]
 
@@ -435,7 +435,7 @@ class PitchSimulation:
         self.game.field_renderer.draw_field(self.game.scoreKeeper.get_bases())
         pygame.gfxdraw.aacircle(self.game.screen, int(self.game.ball[0]), int(self.game.ball[1]),
                                self.game.fourseamballsize, (255,255,255))
-        pygame.display.flip()
+        self.game.flip_display()
 
         if not self.pitch_results_done:
             self._make_ball_strike_call()
@@ -456,7 +456,7 @@ class PitchSimulation:
         self.game.balls += 1
         self.new_entry['ball'] = True
         if self.game.umpsound:
-            self.game.sound_manager.schedule_sound('ball', delay=200)
+            self.game.sound_manager.schedule_sound('ball', delay=450)
         self.game.currentballs += 1
         self.game.pitchnumber += 1
 
@@ -473,7 +473,7 @@ class PitchSimulation:
             runs_scored = self.game.scoreKeeper.get_score() - score_before
 
             self.game._display_pitch_results("WALK", self.pitchtype, self.speed_mph)
-            self.game.ui_manager.show_banner("WALK")
+            self.game.ui_manager.schedule_banner("WALK", delay=450)
 
             # Record in gameday mode
             if self.game.in_gameday_mode:
@@ -497,9 +497,9 @@ class PitchSimulation:
 
         # Play sounds
         if self.game.swing_started == 0 and self.game.currentstrikes == 3 and self.game.umpsound:
-            self.game.sound_manager.schedule_sound('strike3', delay=200)
+            self.game.sound_manager.schedule_sound('strike3', delay=450)
         elif self.game.swing_started == 0 and self.game.currentstrikes != 3 and self.game.umpsound:
-            self.game.sound_manager.schedule_sound('strike', delay=200)
+            self.game.sound_manager.schedule_sound('strike', delay=450)
 
         if self.game.currentstrikes == 3:
             self.outcome = 'strikeout'
@@ -516,7 +516,7 @@ class PitchSimulation:
                 self.new_entry['swinging_strike'] = True
                 self.game._display_pitch_results("SWINGING STRIKE", self.pitchtype, self.speed_mph)
 
-            self.game.ui_manager.show_banner("STRIKEOUT")
+            self.game.ui_manager.schedule_banner("STRIKEOUT", delay=450)
 
             # Record in gameday mode
             if self.game.in_gameday_mode:
@@ -644,8 +644,39 @@ class PitchSimulation:
         self.game.last_pitch_type_thrown = self.pitchtype
         self.game.pitchDataManager.insert_row(self.new_data_entry)
 
-        new_state = (self.game.currentouts, self.game.currentstrikes, self.game.currentballs,
-                    self.game.scoreKeeper.get_runners_on_base(), self.game.hits, self.game.scoreKeeper.get_score())
+        # Record batter tendency data
+        did_swing = self.game.swing_started > 0
+        is_first_pitch = (self.game.pitchnumber <= 1 and
+                          self.previous_state[1] == 0 and self.previous_state[2] == 0)
+        count_state = self.game.current_pitcher._get_count_state()
+        self.game.batter_profile.record_pitch(
+            ball_x=self.game.ball[0],
+            ball_y=self.game.ball[1],
+            pitch_type=self.pitchtype,
+            did_swing=did_swing,
+            count_state=count_state,
+            is_first_pitch=is_first_pitch,
+            handedness=self.game.batter.get_handedness(),
+        )
+
+        # Track pitch history for sequencing
+        self.game.pitch_history.append(self.pitchtype)
+        # Keep only last 5 pitches
+        if len(self.game.pitch_history) > 5:
+            self.game.pitch_history = self.game.pitch_history[-5:]
+
+        # Build new state with richer representation
+        from ai.AI_2 import build_state
+        new_state = build_state(
+            outs=self.game.currentouts,
+            strikes=self.game.currentstrikes,
+            balls=self.game.currentballs,
+            runners=self.game.scoreKeeper.get_runners_on_base(),
+            pitch_number_in_ab=self.game.pitchnumber,
+            prev_pitch=self.game.last_pitch_type_thrown,
+            handedness=self.game.batter.get_handedness(),
+            score_diff=self.game.scoreKeeper.get_score(),
+        )
         self.game.current_pitcher.get_ai().update(self.previous_state, self.game.pitch_chosen,
                                                  new_state, self.game.outcome_value[self.outcome])
         self.game.current_state = new_state

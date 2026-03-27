@@ -11,7 +11,8 @@ from pitchers.Sale import Sale
 from pitchers.Degrom import Degrom
 from pitchers.Yamamoto import Yamamoto
 from pitchers.Sasaki import Sasaki
-from ai.AI_2 import ERAI
+from ai.AI_2 import ERAI, build_state
+from ai.batter_profile import BatterProfile
 
 # Import game components
 from ui.components import create_pci_cursor
@@ -102,11 +103,36 @@ class PitcherManager:
             'mcclanahan': Mcclanahan(self.screen, self.asset_manager.load_pitcher_sprites_experimental)
         }
         
-        # Attach AI to each pitcher
-        for pitcher in self.pitchers.values():
+        # Pitcher-specific tunnel pairs: {pitch: [good follow-ups]}
+        tunnel_pairs = {
+            'sale': {
+                'FF': ['SL', 'CH'], 'SI': ['CH', 'SL'],
+                'SL': ['FF', 'SI'], 'CH': ['FF', 'SI'],
+            },
+            'degrom': {
+                'FF': ['SL', 'CB', 'CH'], 'SL': ['FF', 'CH'],
+                'CB': ['FF'], 'CH': ['FF', 'SL'],
+            },
+            'sasaki': {
+                'FF': ['FS'], 'FS': ['FF'],
+            },
+            'yamamoto': {
+                'FF': ['FS', 'CB', 'FC'], 'FS': ['FF', 'SI'],
+                'CB': ['FF', 'FC'], 'FC': ['FS', 'CB'], 'SI': ['FS', 'CB'],
+            },
+            'mcclanahan': {
+                'FF': ['SL', 'CB', 'CH'], 'SL': ['FF', 'CH'],
+                'CB': ['FF'], 'CH': ['FF', 'SL'],
+            },
+        }
+
+        # Attach AI to each pitcher with tunnel pairs
+        for name, pitcher in self.pitchers.items():
             ai = ERAI(pitcher.get_pitch_names())
+            if name in tunnel_pairs:
+                ai.set_tunnel_pairs(tunnel_pairs[name])
             pitcher.attach_ai(ai)
-            
+
         # Set default pitcher
         self.current_pitcher = self.pitchers['sale']
         
@@ -150,8 +176,9 @@ class GameStats:
         self.hits = 0
         self.last_pitch_type_thrown = None
         self.first_pitch_thrown = False
-        self.current_state = (0, 0, 0, 0, 0, 0)
+        self.current_state = build_state(0, 0, 0, 0, 0, None, 'R', 0)
         self.pitch_chosen = None
+        self.pitch_history = []
 
 class Game:
     """Main game class - refactored for better OOP design."""
@@ -170,12 +197,70 @@ class Game:
         pygame.mouse.set_cursor(crosshair)
         
     def _setup_display(self):
-        """Setup the game display."""
-        self.screen = pygame.display.set_mode((1280, 720), pygame.RESIZABLE)
+        """Setup the game display with scaling support."""
+        from config import SCREEN_WIDTH, SCREEN_HEIGHT
+        self.internal_width = SCREEN_WIDTH
+        self.internal_height = SCREEN_HEIGHT
+        self.window = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.RESIZABLE)
+        self.screen = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+        self.fullscreen = False
+        self._update_scaling()
         self.clock = pygame.time.Clock()
         icon = pygame.image.load(get_path("assets/images/icon.png")).convert_alpha()
         pygame.display.set_icon(icon)
         pygame.display.set_caption('StrikeFactor 0.1')
+
+    def _update_scaling(self):
+        """Compute scale factor and letterbox offset for current window size."""
+        win_w, win_h = self.window.get_size()
+        scale_x = win_w / self.internal_width
+        scale_y = win_h / self.internal_height
+        self._scale = min(scale_x, scale_y)
+        self._scaled_w = int(self.internal_width * self._scale)
+        self._scaled_h = int(self.internal_height * self._scale)
+        self._offset_x = (win_w - self._scaled_w) // 2
+        self._offset_y = (win_h - self._scaled_h) // 2
+
+    def get_mouse_pos(self):
+        """Get mouse position translated to internal surface coordinates."""
+        wx, wy = pygame.mouse.get_pos()
+        return self._window_to_internal(wx, wy)
+
+    def _window_to_internal(self, wx, wy):
+        """Convert window coordinates to internal 1280x720 coordinates."""
+        ix = (wx - self._offset_x) / self._scale
+        iy = (wy - self._offset_y) / self._scale
+        # Clamp to internal bounds
+        ix = max(0, min(self.internal_width - 1, ix))
+        iy = max(0, min(self.internal_height - 1, iy))
+        return (int(ix), int(iy))
+
+    def _translate_mouse_event(self, event):
+        """Create a copy of a mouse event with translated coordinates."""
+        if not hasattr(event, 'pos'):
+            return event
+        new_pos = self._window_to_internal(*event.pos)
+        if event.type == pygame.MOUSEMOTION:
+            return pygame.event.Event(event.type, pos=new_pos, rel=event.rel, buttons=event.buttons, touch=getattr(event, 'touch', False))
+        elif event.type in (pygame.MOUSEBUTTONDOWN, pygame.MOUSEBUTTONUP):
+            return pygame.event.Event(event.type, pos=new_pos, button=event.button, touch=getattr(event, 'touch', False))
+        return event
+
+    def flip_display(self):
+        """Scale internal surface to window and flip. Use instead of pygame.display.flip()."""
+        self.window.fill((0, 0, 0))
+        scaled = pygame.transform.smoothscale(self.screen, (self._scaled_w, self._scaled_h))
+        self.window.blit(scaled, (self._offset_x, self._offset_y))
+        pygame.display.flip()
+
+    def toggle_fullscreen(self):
+        """Toggle between fullscreen and windowed mode."""
+        self.fullscreen = not self.fullscreen
+        if self.fullscreen:
+            self.window = pygame.display.set_mode((0, 0), pygame.FULLSCREEN | pygame.RESIZABLE)
+        else:
+            self.window = pygame.display.set_mode((self.internal_width, self.internal_height), pygame.RESIZABLE)
+        self._update_scaling()
         
     def _initialize_components(self):
         """Initialize all game components."""
@@ -194,6 +279,7 @@ class Game:
         self.field_renderer = FieldRenderer(self.screen)
         self.scoreKeeper = ScoreKeeper()
         self.pitchDataManager = PitchDataManager()
+        self.batter_profile = BatterProfile()
 
         # GameDay mode management
         self.gameday_manager = None
@@ -472,12 +558,21 @@ class Game:
     @property
     def outcome_value(self):
         return self.game_stats.outcome_value
-        
+
+    @property
+    def pitch_history(self):
+        return self.game_stats.pitch_history
+
+    @pitch_history.setter
+    def pitch_history(self, value):
+        self.game_stats.pitch_history = value
+
     def enter_gamemode(self, gamemode_name: str, pitcher_name: str):
         """Enter a specific game mode with a pitcher."""
         self.menu_state = gamemode_name
         self.pitcher_manager.set_current_pitcher(pitcher_name)
         self.game_stats.reset_game_stats()
+        self.batter_profile.reset()
         self.inning_ended = False
         self.just_refreshed = 1
         self.pitches_display = []
@@ -518,6 +613,7 @@ class Game:
         
         # Set up the game state with the scenario
         self.game_stats.reset_game_stats()
+        self.batter_profile.reset()
         self.game_stats.currentballs = scenario['balls']
         self.game_stats.currentstrikes = scenario['strikes']
         self.game_stats.currentouts = scenario['outs']
@@ -567,6 +663,7 @@ class Game:
 
         # Reset game stats for fresh start
         self.game_stats.reset_game_stats()
+        self.batter_profile.reset()
         self.scoreKeeper.reset()
 
         self.menu_state = 'gameday'
@@ -591,6 +688,7 @@ class Game:
 
         # Reset game stats for fresh start
         self.game_stats.reset_game_stats()
+        self.batter_profile.reset()
         self.scoreKeeper.reset()
 
         # Clear pitch data
@@ -970,6 +1068,20 @@ class Game:
                     running = False
                     break
 
+                # Handle window resize
+                if event.type in (pygame.VIDEORESIZE, pygame.WINDOWRESIZED):
+                    self._update_scaling()
+                    continue
+
+                # F11 fullscreen toggle
+                if event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
+                    self.toggle_fullscreen()
+                    continue
+
+                # Translate mouse events to internal coordinates
+                if hasattr(event, 'pos'):
+                    event = self._translate_mouse_event(event)
+
                 # Handle key binding events (only in gameplay-related states)
                 _hotkey_states = {'gameplay', 'sandbox_gameplay', 'view_pitches',
                                   'visualization', 'inning_end'}
@@ -996,12 +1108,13 @@ class Game:
             self.state_manager.update(time_delta)
             self.ui_manager.update(time_delta)
             
-            # Render current state
+            # Render current state to internal surface
             self.screen.fill("black")
             self.state_manager.render(self.screen)
             self.ui_manager.draw()
-            
-            pygame.display.flip()
+
+            # Scale and flip
+            self.flip_display()
             
         # Cleanup
         self.cleanup()

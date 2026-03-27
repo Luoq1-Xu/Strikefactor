@@ -388,8 +388,21 @@ class UIManager:
         self.banner.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': typing_speed})
         self.banner.show()
 
+    def schedule_banner(self, text, delay=450, typing_speed=0.1):
+        """Schedule a banner to show after a delay (in ms), to sync with umpire call."""
+        self._pending_banner = {
+            'text': text,
+            'typing_speed': typing_speed,
+            'show_time': pygame.time.get_ticks() + delay
+        }
+
     def update(self, time_delta):
         """Updates the UI manager and all UI elements."""
+        # Check for pending scheduled banners
+        if hasattr(self, '_pending_banner') and self._pending_banner is not None:
+            if pygame.time.get_ticks() >= self._pending_banner['show_time']:
+                self.show_banner(self._pending_banner['text'], self._pending_banner['typing_speed'])
+                self._pending_banner = None
         self.manager.update(time_delta)
 
     def draw(self):

@@ -1,5 +1,8 @@
 import random
 
+# Version tag for state format compatibility
+AI_VERSION = 2
+
 class ERAI():
 
     def __init__(self, actions: list, alpha=0.5, epsilon=0.1):
@@ -16,6 +19,33 @@ class ERAI():
         self.alpha = alpha
         self.epsilon = epsilon
         self.actions = actions
+        self.version = AI_VERSION
+
+    # --- Pitch Sequencing Data ---
+
+    # Tunnel pairs: pitches that look similar out of the hand but break differently.
+    # Defined as {pitch_type: [good_follow_up_pitches]}
+    # Can be overridden per-pitcher via set_tunnel_pairs().
+    DEFAULT_TUNNEL_PAIRS = {
+        'FF': ['SL', 'CH', 'CB', 'SLD', 'FS'],
+        'SI': ['CH', 'SL', 'CB'],
+        'SL': ['FF', 'SI', 'CH'],
+        'CB': ['FF', 'SI'],
+        'CH': ['FF', 'SI', 'SL'],
+        'FS': ['FF', 'SI'],
+        'SLD': ['FF', 'SI'],
+    }
+
+    TUNNEL_BONUS = 0.25       # Q-value bonus for good tunnel follow-up
+    REPETITION_PENALTY = -0.4  # Penalty for throwing same pitch 3x in a row
+
+    def set_tunnel_pairs(self, tunnel_pairs):
+        """Override default tunnel pairs with pitcher-specific ones."""
+        self._tunnel_pairs = tunnel_pairs
+
+    def _get_tunnel_pairs(self):
+        """Get active tunnel pairs (pitcher-specific or default)."""
+        return getattr(self, '_tunnel_pairs', self.DEFAULT_TUNNEL_PAIRS)
 
     def update(self, old_state, action, new_state, reward):
         """
@@ -74,9 +104,10 @@ class ERAI():
                 q_values.append(0)
         return max(q_values)
 
-    def choose_action(self, state, epsilon=True):
+    def choose_action(self, state, epsilon=True, batter_profile=None,
+                      pitch_history=None, count_state='even'):
         """
-        Given a state `state`, return an action `(i, j)` to take.
+        Given a state `state`, return an action to take.
 
         If `epsilon` is `False`, then return the best action
         available in the state (the one with the highest Q-value,
@@ -86,23 +117,80 @@ class ERAI():
         `self.epsilon` choose a random available action,
         otherwise choose the best action available.
 
-        If multiple actions have the same Q-value, any of those
-        options is an acceptable return value.
+        Additional modifiers:
+        - batter_profile: BatterProfile instance for tendency-based bonuses
+        - pitch_history: list of recent pitch types thrown (most recent last)
+        - count_state: current count state string for batter profile bonuses
         """
         actions = self.actions
         action_value = {}
+
+        # Base Q-values
         for action in actions:
             if (state, action) in self.q:
                 action_value[action] = self.q[(state, action)]
             else:
                 action_value[action] = 0
-        max_actions = [action for action in actions if action_value[action] == max(action_value.values())]
-        if len(max_actions) > 1:
-            best_action = random.choice(max_actions)
-        else:
-            best_action = max_actions[0]
+
+        # Apply batter tendency bonuses
+        if batter_profile is not None:
+            bonuses = batter_profile.get_pitch_bonuses(actions, count_state)
+            for action in actions:
+                action_value[action] += bonuses.get(action, 0.0)
+
+        # Apply sequencing modifiers
+        if pitch_history:
+            tunnel_pairs = self._get_tunnel_pairs()
+            last_pitch = pitch_history[-1] if pitch_history else None
+
+            for action in actions:
+                # Tunnel bonus: reward pitches that tunnel well off the previous pitch
+                if last_pitch and last_pitch in tunnel_pairs:
+                    if action in tunnel_pairs[last_pitch]:
+                        action_value[action] += self.TUNNEL_BONUS
+
+                # Repetition penalty: penalize throwing same pitch 3+ times in a row
+                if len(pitch_history) >= 2:
+                    if pitch_history[-1] == action and pitch_history[-2] == action:
+                        action_value[action] += self.REPETITION_PENALTY
+
+        # Find best action(s)
+        max_val = max(action_value.values())
+        max_actions = [a for a in actions if action_value[a] == max_val]
+        best_action = random.choice(max_actions) if len(max_actions) > 1 else max_actions[0]
+
         if epsilon:
             random_action = random.choice(actions)
-            return random.choices([random_action, best_action], weights=[self.epsilon, 1-self.epsilon], k=1)[0]
+            return random.choices([random_action, best_action],
+                                  weights=[self.epsilon, 1 - self.epsilon], k=1)[0]
         else:
             return best_action
+
+
+def build_state(outs, strikes, balls, runners, pitch_number_in_ab,
+                prev_pitch, handedness, score_diff):
+    """Build a bounded state tuple for the AI.
+
+    Args:
+        outs: Current outs (0-2)
+        strikes: Current strikes (0-2)
+        balls: Current balls (0-3)
+        runners: Number of runners on base (0-3)
+        pitch_number_in_ab: Pitch number in current at-bat (1+)
+        prev_pitch: Previous pitch type string, or None
+        handedness: Batter handedness ('L' or 'R')
+        score_diff: Runs allowed minus runs scored (positive = pitcher losing)
+
+    Returns:
+        Bounded state tuple for Q-learning lookup.
+    """
+    # Cap pitch number at 4+ bucket
+    pitch_bucket = min(pitch_number_in_ab, 4)
+
+    # Clamp score differential to [-2, 2] buckets
+    score_bucket = max(-2, min(2, score_diff))
+
+    # Previous pitch as string or 'none'
+    prev = prev_pitch if prev_pitch is not None else 'none'
+
+    return (outs, strikes, balls, runners, pitch_bucket, prev, handedness, score_bucket)

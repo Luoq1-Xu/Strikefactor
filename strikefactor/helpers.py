@@ -2,7 +2,7 @@ import pygame
 import pygame_gui
 import random
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import List, Tuple, Optional
 from pygame_gui.elements.ui_window import UIWindow
 from pygame_gui.elements.ui_image import UIImage
@@ -63,32 +63,6 @@ class EnhancedPitchRecord:
         base_type = self.pitch_type.split('_')[0] if '_' in self.pitch_type else self.pitch_type
         return PITCH_TYPE_NAMES.get(self.pitch_type, PITCH_TYPE_NAMES.get(base_type, self.pitch_type))
 
-# Button class
-class Button():
-    def __init__(self, x, y, image, scale):
-        width = image.get_width()
-        height = image.get_height()
-        self.image = pygame.transform.scale(image, (int(width * scale), int(height * scale)))
-        self.rect = self.image.get_rect()
-        self.rect.topleft = (x,y)
-        self.clicked = False
-
-    def draw(self, screen):
-        action = False
-        mousepos = pygame.mouse.get_pos()
-        
-        if self.rect.collidepoint(mousepos):
-            if pygame.mouse.get_pressed()[0] == 1 and self.clicked == False:
-                self.clicked = True
-                action = True
-            
-        if pygame.mouse.get_pressed()[0] == 0:
-            self.clicked = False
-
-        screen.blit(self.image, (self.rect.x, self.rect.y))
-
-        return action
-    
 # Runner class
 class Runner:
 
@@ -672,41 +646,6 @@ class StatSwing(UIWindow):
 
         super().update(time_delta)
 
-# Asset class to store all assets (images, sounds, etc.)
-class AssetEngine:
-    def __init__(self):
-        self.images = {}
-        self.sounds = {}
-
-    def load_image(self, path):
-        if path not in self.images:
-            self.images[path] = pygame.image.load(path)
-        return self.images[path]
-
-    def load_sound(self, path):
-        if path not in self.sounds:
-            self.sounds[path] = pygame.mixer.Sound(path)
-        return self.sounds[path]
-
-class StateEngine:
-    def __init__(self):
-        self.states = {}
-
-    def add_state(self, name, state):
-        self.states[name] = state
-
-    def get_state(self, name):
-        return self.states[name]
-
-    def remove_state(self, name):
-        del self.states[name]
-
-    def clear_states(self):
-        self.states = {}
-
-class GUImanager:
-    pass
-
 class PitchDataManager:
 
     def __init__(self):
@@ -719,52 +658,3 @@ class PitchDataManager:
         pd.DataFrame(self.records).to_csv(file, mode='a', header=False, index=False)
         print("Data appended to file")
 
-class Ball:
-    def __init__(self, images, screen):
-        self.true_x = 0
-        self.true_y = 0
-        self.true_z = 0
-        self.size = 0
-        self.images = images
-        self.screen = screen
-        self.projected_x = 0
-        self.projected_y = 0
-        self.scale = 0
-
-    def set_position(self, x, y, z):
-        self.true_x = x
-        self.true_y = y
-        self.true_z = z
-        self.counter = 0
-
-    def set_z(self, z):
-        self.true_z = z
-
-    def set_size(self, size):
-        self.size = size
-
-    def print_position(self):
-        print(f"X: {self.true_x}, Y: {self.true_y}, Z: {self.true_z}")
-
-    def draw(self):
-        image = pygame.transform.scale(self.images[self.counter], (self.size, self.size))
-        self.screen.blit(image, (self.x, self.y))
-        self.counter = (self.counter + 1) % len(self.images)
-        return 
-    
-    def draw_with_pos(self, x, y, size):
-        ratio = size / 64
-        image = pygame.transform.scale(self.images[self.counter], (int(ratio * 64), int(ratio * 66)))
-        self.screen.blit(image, (x  - (29.22 * ratio), y - (32.62 * ratio)))
-        self.counter = (self.counter + 1) % len(self.images)
-        return
-    
-    def update_projection_details(self, x, y, scale):
-        self.projected_x = x
-        self.projected_y = y
-        self.scale = scale
-    
-    def blit_ball_outline(self):
-        pygame.gfxdraw.aacircle(self.screen, int(self.projected_x), int(self.projected_y), 11, (255, 255, 255))
-
-    

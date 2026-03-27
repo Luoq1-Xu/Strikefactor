@@ -1,4 +1,3 @@
-from logging import warning
 import random
 from utils.pitch_physics import DEFAULT_CAMERA
 
@@ -133,28 +132,6 @@ class Pitcher:
             print(f"[WARNING] Unknown pitch '{pitch_name}', falling back to random pitch")
             pitch_name = random.choice(list(self.pitch_arsenal.keys()))
         self.pitch_arsenal[pitch_name](simulation_func)
-
-    def print_basic_stats(self):
-        print(f"Pitch Count: {self.basic_stats['pitch_count']}")
-        print(f"Strikes: {self.basic_stats['strikes']}")
-        print(f"Balls: {self.basic_stats['balls']}")
-        print(f"Strikeouts: {self.basic_stats['strikeouts']}")
-        print(f"Walks: {self.basic_stats['walks']}")
-        print(f"Outs: {self.basic_stats['outs']}")
-        print(f"Hits Allowed: {self.basic_stats['hits_allowed']}")
-        print(f"Runs Allowed: {self.basic_stats['runs_allowed']}")
-        print(f"Home Runs Allowed: {self.basic_stats['home_runs_allowed']}")
-
-    def print_stats(self):
-        print(f'ERA: {self.era}')
-        print(f'Outs: {self.outs}')
-        print(f'Runs: {self.runs}')
-        print(f'Strikeouts: {self.strikeouts}')
-        print(f'Walks: {self.walks}')
-        print(f"Innings Pitched: {self.outs/3.0}")
-        print(f"Hits Allowed: {self.hits_allowed}")
-        print(f"WHIP: { (self.hits_allowed + self.walks) / (self.outs / 3.0) }")
-        print(f"Pitches Thrown: {self.pitch_count}")
 
     # --- Stat Calculation Methods ---
     def _get_innings_pitched(self):
@@ -379,8 +356,12 @@ class Pitcher:
             return 'behind'
         return 'even'
 
+    # Pitch categories for sequencing logic
+    FASTBALL_TYPES = {'FF', 'SI'}
+    BREAKING_TYPES = {'SL', 'CB', 'SLD', 'FS', 'CH', 'FC'}
+
     def get_pitch_target(self, pitch_type='FF'):
-        """Choose a target location using intent system + command error.
+        """Choose a target location using intent system + command error + sequencing.
         Returns (target_x, target_y)."""
         count_state = self._get_count_state()
         probs = list(self.INTENT_TABLE[count_state])  # [zone, edge, chase, ball]
@@ -450,9 +431,54 @@ class Pitcher:
                 target_x = random.uniform(self.ZONE_LEFT - 40, self.ZONE_RIGHT + 40)
                 target_y = self.ZONE_BOTTOM + offset
 
+        # Apply sequence-aware location bias
+        target_x, target_y = self._apply_sequence_bias(
+            target_x, target_y, pitch_type, intent
+        )
+
         # Apply command error
         target_x += random.gauss(0, self.command_error_px)
         target_y += random.gauss(0, self.command_error_px)
+
+        return target_x, target_y
+
+    def _apply_sequence_bias(self, target_x, target_y, pitch_type, intent):
+        """Adjust target location based on the previous pitch for tunneling effect.
+
+        Key sequencing patterns:
+        - Fastball up → breaking ball down (classic tunnel setup)
+        - After a low pitch, bias next pitch higher (eye-level change)
+        - After inside, bias outside (and vice versa)
+        """
+        if not hasattr(self, '_game_ref') or self._game_ref is None:
+            return target_x, target_y
+
+        prev_pitch = self._game_ref.last_pitch_type_thrown
+        if prev_pitch is None:
+            return target_x, target_y
+
+        # Only apply sequencing bias for zone/edge/chase intents (not waste pitches)
+        if intent == 'ball':
+            return target_x, target_y
+
+        prev_is_fastball = prev_pitch in self.FASTBALL_TYPES
+        curr_is_breaking = pitch_type in self.BREAKING_TYPES
+        curr_is_fastball = pitch_type in self.FASTBALL_TYPES
+        prev_is_breaking = prev_pitch in self.BREAKING_TYPES
+
+        # Classic tunnel: fastball up → breaking ball low
+        # Bias breaking balls down after a fastball
+        if prev_is_fastball and curr_is_breaking:
+            # Pull target toward lower third of zone / below zone
+            low_target = self.ZONE_BOTTOM + random.uniform(0, 30)
+            target_y = target_y * 0.6 + low_target * 0.4
+
+        # Reverse tunnel: breaking ball low → fastball up
+        # Bias fastballs up after a breaking ball
+        elif prev_is_breaking and curr_is_fastball:
+            # Pull target toward upper third of zone
+            high_target = self.ZONE_TOP + random.uniform(-10, 20)
+            target_y = target_y * 0.6 + high_target * 0.4
 
         return target_x, target_y
 

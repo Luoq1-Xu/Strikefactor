@@ -6,7 +6,6 @@ Each state handles its own rendering, input processing, and state transitions.
 import pygame
 import pygame.gfxdraw
 import pygame_gui
-import sys
 from abc import ABC, abstractmethod
 from typing import Optional
 from gameplay.gameday_manager import GameDayManager
@@ -294,7 +293,13 @@ class GameplayState(GameState):
     def _initiate_pitch(self):
         """Start a new pitch simulation."""
         self.game.first_pitch_thrown = True
-        selection = self.game.current_pitcher.ai.choose_action(self.game.current_state)
+        count_state = self.game.current_pitcher._get_count_state()
+        selection = self.game.current_pitcher.ai.choose_action(
+            self.game.current_state,
+            batter_profile=self.game.batter_profile,
+            pitch_history=self.game.pitch_history,
+            count_state=count_state,
+        )
         pitch_names = self.game.current_pitcher.get_pitch_names()
         if selection not in pitch_names:
             selection = pitch_names[0]
