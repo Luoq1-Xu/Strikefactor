@@ -237,7 +237,37 @@
         0
       ],
       "opponent_starter": "yamamoto"
+    },
+    {
+      "date": "2026-03-27T10:10:04.447185",
+      "player_score": 2,
+      "opponent_score": 7,
+      "result": "LOSS",
+      "difficulty": "hall_of_fame",
+      "player_inning_scores": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0
+      ],
+      "opponent_inning_scores": [
+        0,
+        0,
+        3,
+        2,
+        0,
+        0,
+        0,
+        2,
+        0
+      ],
+      "opponent_starter": "yamamoto"
     }
   ],
-  "last_updated": "2026-03-17T10:20:08.070374"
+  "last_updated": "2026-03-27T10:10:04.447955"
 }

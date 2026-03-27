@@ -53,6 +53,7 @@ PITCH_NAMES = {
     "CB": "Curveball",
     "CH": "Changeup",
     "FS": "Splitter",
+    "FC": "Cutter",
 }
 
 PITCHER_DISPLAY = {
