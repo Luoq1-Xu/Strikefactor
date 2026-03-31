@@ -393,14 +393,22 @@ def fig7_dashboard():
             "SELECT COUNT(*) as c FROM at_bats WHERE pitcher_name = ? AND final_outcome IN ('SINGLE','DOUBLE','TRIPLE','HOME RUN')",
             (pn,)
         )[0]["c"]
+        singles = fetch("SELECT COUNT(*) as c FROM at_bats WHERE pitcher_name = ? AND final_outcome = 'SINGLE'", (pn,))[0]["c"]
+        doubles = fetch("SELECT COUNT(*) as c FROM at_bats WHERE pitcher_name = ? AND final_outcome = 'DOUBLE'", (pn,))[0]["c"]
+        triples = fetch("SELECT COUNT(*) as c FROM at_bats WHERE pitcher_name = ? AND final_outcome = 'TRIPLE'", (pn,))[0]["c"]
+        homers = fetch("SELECT COUNT(*) as c FROM at_bats WHERE pitcher_name = ? AND final_outcome = 'HOME RUN'", (pn,))[0]["c"]
         walks = fetch("SELECT COUNT(*) as c FROM at_bats WHERE pitcher_name = ? AND final_outcome = 'walk'", (pn,))[0]["c"]
         ks = fetch("SELECT COUNT(*) as c FROM at_bats WHERE pitcher_name = ? AND final_outcome = 'strikeout'", (pn,))[0]["c"]
         ab_no_walk = abs_total - walks
+        total_bases = singles + 2 * doubles + 3 * triples + 4 * homers
         ba = hits / ab_no_walk if ab_no_walk > 0 else 0
         obp = (hits + walks) / abs_total if abs_total > 0 else 0
-        table_data.append([PITCHER_DISPLAY.get(pn, pn), abs_total, hits, walks, ks, f"{ba:.3f}", f"{obp:.3f}"])
+        slg = total_bases / ab_no_walk if ab_no_walk > 0 else 0
+        ops = obp + slg
+        table_data.append([PITCHER_DISPLAY.get(pn, pn), abs_total, hits, walks, ks,
+                           f"{ba:.3f}", f"{obp:.3f}", f"{slg:.3f}", f"{ops:.3f}"])
 
-    col_labels = ["Pitcher", "PA", "H", "BB", "K", "AVG", "OBP"]
+    col_labels = ["Pitcher", "PA", "H", "BB", "K", "AVG", "OBP", "SLG", "OPS"]
     table = ax_d.table(cellText=table_data, colLabels=col_labels, loc="center",
                         cellLoc="center")
     table.auto_set_font_size(False)

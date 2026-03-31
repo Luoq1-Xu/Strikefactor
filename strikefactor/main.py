@@ -128,7 +128,7 @@ class PitcherManager:
 
         # Attach AI to each pitcher with tunnel pairs
         for name, pitcher in self.pitchers.items():
-            ai = ERAI(pitcher.get_pitch_names())
+            ai = self._load_ai(name, pitcher)
             if name in tunnel_pairs:
                 ai.set_tunnel_pairs(tunnel_pairs[name])
             pitcher.attach_ai(ai)
@@ -149,6 +149,40 @@ class PitcherManager:
     def get_current_pitcher(self):
         """Get the current active pitcher."""
         return self.current_pitcher
+
+    def _load_ai(self, name, pitcher):
+        """Load a pitcher's AI from disk, or create a fresh one if unavailable."""
+        import sys
+        import ai.AI_2 as AI_2
+        sys.modules['AI_2'] = AI_2
+
+        pitcher_pitch_names = set(pitcher.get_pitch_names())
+        ai_file = get_path(f"ai/{name}_ai.pkl")
+        try:
+            with open(ai_file, "rb") as f:
+                ai = pickle.load(f)
+            if set(ai.actions) == pitcher_pitch_names:
+                print(f"Loaded AI for {name} ({len(ai.q)} Q-values)")
+                return ai
+            else:
+                print(f"AI action mismatch for {name}, creating fresh AI")
+        except (FileNotFoundError, Exception) as e:
+            print(f"No saved AI for {name}, creating fresh AI: {e}")
+        return ERAI(pitcher.get_pitch_names())
+
+    def save_all_ai(self):
+        """Save all pitcher AIs to disk."""
+        for name, pitcher in self.pitchers.items():
+            ai = pitcher.get_ai()
+            if ai is None:
+                continue
+            ai_file = get_path(f"ai/{name}_ai.pkl")
+            try:
+                with open(ai_file, "wb") as f:
+                    pickle.dump(ai, f)
+                print(f"Saved AI for {name} ({len(ai.q)} Q-values)")
+            except Exception as e:
+                print(f"Failed to save AI for {name}: {e}")
 
 class GameStats:
     """Manages game statistics and state."""
@@ -720,6 +754,7 @@ class Game:
 
     def return_to_mode_select(self):
         """Return to main mode selection menu."""
+        self.pitcher_manager.save_all_ai()
         self.menu_state = 'mode_select'
         self.current_gamemode = 0
         self.inning_ended = False
@@ -736,6 +771,7 @@ class Game:
         """Set the current menu state."""
         self.menu_state = state
         if state == 0:  # Returning to main menu
+            self.pitcher_manager.save_all_ai()
             self.current_gamemode = 0
             self.inning_ended = False
             self.in_gameday_mode = False
@@ -1122,7 +1158,12 @@ class Game:
     def cleanup(self):
         """Clean up resources."""
         print("Game shutting down...")
-        
+
+        # Save pitcher AI learning progress
+        if hasattr(self, 'pitcher_manager'):
+            print("Saving pitcher AI models...")
+            self.pitcher_manager.save_all_ai()
+
         # Save final batting statistics before exit
         if hasattr(self, 'field_renderer'):
             print("Saving final batting statistics...")
