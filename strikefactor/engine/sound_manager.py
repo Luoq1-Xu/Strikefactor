@@ -19,32 +19,61 @@ class SoundManager:
             'pop4': "POP4.mp3",
             'pop5': "POP5.mp3",
             'pop6': "POP6.mp3",
-            'strike': "STRIKECALL.mp3",
-            'ball': "BALLCALL.mp3",
             'foul': "FOULBALL.mp3",
             'single': "SINGLE.mp3",
             'double': "DOUBLE.mp3",
             'triple': "TRIPLE.mp3",
             'homerun': "HOMERUN.mp3",
-            'strike3': "CALLEDSTRIKE3.mp3",
             'sizzle': "sss.mp3"
         }
-        
+
         for name, filename in sound_files.items():
-            # Prepend the directory path
             full_path = resource_path(get_path(os.path.join(self.sound_dir, filename)))
             if os.path.exists(full_path):
                 self.sounds[name] = pygame.mixer.Sound(full_path)
             else:
                 print(f"Warning: Sound file not found at {full_path}")
+
+        # Load umpire sounds from subdirectories
+        umpire_dir = os.path.join(self.sound_dir, "umpire_sounds")
+
+        # Load all strike call variants for random selection
+        self.strike_sounds = []
+        strike_dir = resource_path(get_path(os.path.join(umpire_dir, "strike")))
+        if os.path.isdir(strike_dir):
+            for f in os.listdir(strike_dir):
+                if f.endswith(".mp3"):
+                    self.strike_sounds.append(pygame.mixer.Sound(os.path.join(strike_dir, f)))
+
+        # Load strike 3 call
+        strike3_path = resource_path(get_path(os.path.join(umpire_dir, "strike_3", "strike_3.mp3")))
+        if os.path.exists(strike3_path):
+            self.sounds['strike3'] = pygame.mixer.Sound(strike3_path)
+
+        # Load ball call variants for random selection (excluding low-ball-specific call)
+        self.ball_sounds = []
+        ball_dir = resource_path(get_path(os.path.join(umpire_dir, "ball")))
+        if os.path.isdir(ball_dir):
+            for f in os.listdir(ball_dir):
+                if f.endswith(".mp3") and f != "no_thats_down_ball.mp3":
+                    self.ball_sounds.append(pygame.mixer.Sound(os.path.join(ball_dir, f)))
+
+        # Load low ball specific call
+        ball_low_path = resource_path(get_path(os.path.join(umpire_dir, "ball", "no_thats_down_ball.mp3")))
+        if os.path.exists(ball_low_path):
+            self.sounds['ball_low'] = pygame.mixer.Sound(ball_low_path)
             
     def play(self, sound_name):
-        if sound_name in self.sounds:
+        if sound_name == 'strike' and self.strike_sounds:
+            random.choice(self.strike_sounds).play()
+        elif sound_name == 'ball' and self.ball_sounds:
+            random.choice(self.ball_sounds).play()
+        elif sound_name in self.sounds:
             self.sounds[sound_name].play()
-            
+
     def schedule_sound(self, sound_name, delay=1000):
         """Schedule a sound to be played after a delay"""
-        if sound_name in self.sounds:
+        if sound_name in self.sounds or (sound_name == 'strike' and self.strike_sounds) or (sound_name == 'ball' and self.ball_sounds) or sound_name == 'ball_low':
             play_time = pygame.time.get_ticks() + delay
             self.pending_sounds.append((play_time, sound_name))
     

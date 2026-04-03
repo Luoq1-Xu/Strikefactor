@@ -23,6 +23,7 @@ from utils.pitch_physics import DEFAULT_CAMERA
 from gameplay.field_renderer import FieldRenderer
 from gameplay.hit_outcome_manager import HitOutcomeManager
 from ui.ui_manager import UIManager
+from ui.scorebug import Scorebug
 from helpers import ScoreKeeper, PitchDataManager
 from gameplay.game_state_manager import GameStateManager
 from gameplay.random_scenario import RandomScenarioGenerator
@@ -339,6 +340,9 @@ class Game:
         # Set callback for PitchViz window close button
         self.ui_manager.view_window.set_close_callback(self.exit_view_pitches)
 
+        # Scorebug overlay
+        self.scorebug = Scorebug(self)
+
         # Random scenario generator
         self.random_scenario_generator = RandomScenarioGenerator()
 
@@ -357,7 +361,6 @@ class Game:
         # State management (must come after menu_state is initialized)
         self.state_manager = GameStateManager(self)
         self.state_manager.change_state('mode_select')
-        self.just_refreshed = 0
         self.current_gamemode = 0
         self.inning_ended = False
         self.pitches_display = []
@@ -385,7 +388,14 @@ class Game:
         self.ui_manager.register_button_callback('sandbox_mode', lambda: self.enter_sandbox_mode())
         self.ui_manager.register_button_callback('back_to_mode_select', lambda: self.return_to_mode_select())
 
-        # Sandbox mode callbacks - pitcher selection
+        # Sandbox menu callbacks - pitcher selection (enters gameplay)
+        self.ui_manager.register_button_callback('sandbox_menu_sale', lambda: self._enter_sandbox_gameplay('sale'))
+        self.ui_manager.register_button_callback('sandbox_menu_degrom', lambda: self._enter_sandbox_gameplay('degrom'))
+        self.ui_manager.register_button_callback('sandbox_menu_sasaki', lambda: self._enter_sandbox_gameplay('sasaki'))
+        self.ui_manager.register_button_callback('sandbox_menu_yamamoto', lambda: self._enter_sandbox_gameplay('yamamoto'))
+        self.ui_manager.register_button_callback('sandbox_menu_mcclanahan', lambda: self._enter_sandbox_gameplay('mcclanahan'))
+
+        # Sandbox gameplay callbacks - pitcher switching
         self.ui_manager.register_button_callback('sandbox_pitcher_sale', lambda: self._sandbox_switch_pitcher('sale'))
         self.ui_manager.register_button_callback('sandbox_pitcher_degrom', lambda: self._sandbox_switch_pitcher('degrom'))
         self.ui_manager.register_button_callback('sandbox_pitcher_sasaki', lambda: self._sandbox_switch_pitcher('sasaki'))
@@ -400,7 +410,8 @@ class Game:
         self.ui_manager.register_button_callback('sandbox_pitch_5', lambda: self._sandbox_select_pitch(4))
         self.ui_manager.register_button_callback('sandbox_pitch_6', lambda: self._sandbox_select_pitch(5))
 
-        # Sandbox mode - exit button
+        # Sandbox mode - system buttons
+        self.ui_manager.register_button_callback('sandbox_sound', lambda: self.toggle_ump_sound())
         self.ui_manager.register_button_callback('sandbox_exit', lambda: self.return_to_mode_select())
 
         # Navigation callbacks
@@ -608,10 +619,10 @@ class Game:
         self.game_stats.reset_game_stats()
         self.batter_profile.reset()
         self.inning_ended = False
-        self.just_refreshed = 1
         self.pitches_display = []
         self.pitch_trajectories = []
         self.enhanced_pitch_records = []
+        self.scorebug.last_pitch_type = ""  # Reset last pitch display
         crosshair = create_pci_cursor()
         pygame.mouse.set_cursor(crosshair)
         self.state_manager.handle_menu_state_change(gamemode_name)
@@ -665,8 +676,8 @@ class Game:
         # Set menu state and initialize
         self.menu_state = f"Random: {pitcher_name.title()}"
         self.inning_ended = False
-        self.just_refreshed = 1
         self.pitches_display = []
+        self.scorebug.last_pitch_type = ""  # Reset last pitch display
 
         # Reset cursor (like in enter_gamemode)
         crosshair = create_pci_cursor()
@@ -714,11 +725,16 @@ class Game:
         self.state_manager.change_state('menu')
 
     def enter_sandbox_mode(self):
-        """Enter Sandbox mode - direct gameplay with user-controlled pitch selection."""
+        """Enter Sandbox mode - show pitcher selection menu."""
         self.in_gameday_mode = False
         self.gameday_manager = None
-        # Set default pitcher
-        self.pitcher_manager.set_current_pitcher('sale')
+        self.menu_state = 'sandbox_menu'
+        self.current_gamemode = 0
+        self.state_manager.change_state('sandbox_menu')
+
+    def _enter_sandbox_gameplay(self, pitcher_name: str):
+        """Enter sandbox gameplay with the selected pitcher."""
+        self.pitcher_manager.set_current_pitcher(pitcher_name)
 
         # Reset game stats for fresh start
         self.game_stats.reset_game_stats()
@@ -974,6 +990,9 @@ class Game:
         new_visibility = not current_visibility
         self.key_binding_manager.set_ui_visibility(new_visibility)
 
+        # Toggle scorebug visibility in sync
+        self.scorebug.visible = new_visibility
+
         if new_visibility:
             # Determine current state
             current_state = 'main_menu'  # default
@@ -1047,19 +1066,8 @@ class Game:
             self.key_rebind_action = None
 
     def _display_pitch_results(self, outcome: str, pitchtype: str, speed_mph: float):
-        """Display pitch results on the UI."""
-        pitch_result_string = (
-            f"<font size=5>PITCH {self.pitchnumber}: {pitchtype} {speed_mph:.1f} MPH<br>{outcome}<br>"
-            f"COUNT IS {self.currentballs} - {self.currentstrikes}</font>"
-        )
-        game_status_result_string = (
-            f"<font size=5>CURRENT OUTS : {self.currentouts}<br>"
-            f"STRIKEOUTS : {self.currentstrikeouts}<br>WALKS : {self.currentwalks}<br>"
-            f"HITS : {self.hits}<br>RUNS SCORED: {self.scoreKeeper.get_score()}</font>"
-        )
-        self.ui_manager.clear_pitch_result()
-        self.ui_manager.update_pitch_result(pitch_result_string)
-        self.ui_manager.update_scoreboard(game_status_result_string)
+        """Display pitch results on the scorebug."""
+        self.scorebug.set_last_pitch(pitchtype, speed_mph, outcome)
         # Refresh scouting panel stats after each pitch
         self.ui_manager.refresh_scouting_panel()
 
@@ -1147,6 +1155,9 @@ class Game:
             # Render current state to internal surface
             self.screen.fill("black")
             self.state_manager.render(self.screen)
+            # Draw scorebug during gameplay states
+            if self.state_manager.current_state_name in ('gameplay', 'sandbox_gameplay', 'inning_end'):
+                self.scorebug.draw(self.screen)
             self.ui_manager.draw()
 
             # Scale and flip
