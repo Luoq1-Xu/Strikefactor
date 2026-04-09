@@ -17,6 +17,7 @@ class Sasaki(Pitcher):
         self.load_img(loadfunc, 'assets/images/sasaki/', 14)
         self.add_pitch_type(self.FF, "FF")
         self.add_pitch_type(self.FS, "FS")
+        self.add_pitch_type(self.SL, "SL")
 
     def draw_pitcher(self, start_time, current_time):
         if current_time == 0 and start_time == 0:
@@ -51,15 +52,22 @@ class Sasaki(Pitcher):
             self.draw(self.screen, 14, -9, 12)
 
     def FF(self, simulation_func):
-        speed_mph = random.gauss(96.1, 0.8)
+        speed_mph = random.gauss(97.1, 0.8)
         pfx_x = random.gauss(7.0, 1.0)
         pfx_z = random.gauss(16.0, 1.0)
         target_x, target_y = self.get_pitch_target('FF')
         simulation_func(self.release_point, 'rokisasaki', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FF')
 
     def FS(self, simulation_func):
-        speed_mph = random.gauss(85.0, 1.0)
+        speed_mph = random.gauss(85.4, 1.0)
         pfx_x = random.gauss(10.0, 1.0)
         pfx_z = random.gauss(-2.0, 1.0)
         target_x, target_y = self.get_pitch_target('FS')
         simulation_func(self.release_point, 'rokisasaki', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FS')
+
+    def SL(self, simulation_func):
+        speed_mph = random.gauss(86.0, 1.0)
+        pfx_x = random.gauss(-1.0, 1.0)
+        pfx_z = random.gauss(-2.0, 1.0)
+        target_x, target_y = self.get_pitch_target('SL')
+        simulation_func(self.release_point, 'rokisasaki', speed_mph, pfx_x, pfx_z, target_x, target_y, 'SL')

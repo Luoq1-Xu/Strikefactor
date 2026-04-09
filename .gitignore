@@ -58,10 +58,8 @@ docs/_build/
 *.swp
 .DS_Store
 
-# StrikeFactor runtime data (frequently changing, not source)
+# StrikeFactor runtime data
 strikefactor/data/strikefactor.db
-strikefactor/data/batting_stats.json
-strikefactor/ai/*.pkl
 
 # Generated analysis output
 analysis_output/
