@@ -51,3 +51,21 @@ coverage.xml
 # Sphinx documentation
 docs/_build/
 .env
+
+# IDE / editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# StrikeFactor runtime data (frequently changing, not source)
+strikefactor/data/strikefactor.db
+strikefactor/data/batting_stats.json
+strikefactor/ai/*.pkl
+
+# Generated analysis output
+analysis_output/
+
+# User-local config
+settings.json
+key_bindings.json
