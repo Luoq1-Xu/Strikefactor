@@ -57,38 +57,50 @@ class UIManager:
     def _create_game_buttons(self, manager):
         """Creates and returns a dictionary of in-game UI buttons."""
         buttons = {
+            # View toggles group
             'strikezone': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((0, 100), (200, 100)),
-                text='STRIKEZONE', manager=manager),
-            'scout': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((0, 0), (200, 100)),
-                text='SCOUT', manager=manager),
-            'main_menu': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((0, 620), (200, 100)),
-                text='MAIN MENU', manager=manager),
-            'toggle_ump_sound': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((0, 200), (200, 100)),
-                text='TOGGLEUMP', manager=manager),
-            'view_pitches': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((0, 300), (200, 100)),
-                text='PITCHVIZ', manager=manager),
-            'return_to_game': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((0, 300), (200, 100)),
-                text='RETURN', manager=manager),
+                relative_rect=pygame.Rect((6, 200), (120, 28)),
+                text='ZONE', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
             'toggle_batter': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((0, 400), (200, 100)),
-                text='BATTER', manager=manager),
-            'lap_stats': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((0, 500), (100, 50)),
-                text='LAP', manager=manager,
-                object_id=ObjectID(class_id='@sandbox_button')),
-            'view_laps': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((100, 500), (100, 50)),
-                text='LOG', manager=manager,
-                object_id=ObjectID(class_id='@sandbox_button')),
+                relative_rect=pygame.Rect((6, 230), (120, 28)),
+                text='BATTER', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
             'visualise': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((0, 550), (200, 70)),
-                text='TRACK', manager=manager),
+                relative_rect=pygame.Rect((6, 260), (120, 28)),
+                text='TRACK', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
+            # Analysis group
+            'scout': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((6, 296), (120, 28)),
+                text='SCOUT', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
+            'view_pitches': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((6, 326), (120, 28)),
+                text='PITCHVIZ', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
+            'return_to_game': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((6, 326), (120, 28)),
+                text='RETURN', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
+            # Session group
+            'lap_stats': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((6, 362), (58, 28)),
+                text='LAP', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
+            'view_laps': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((68, 362), (58, 28)),
+                text='LOG', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
+            # System group
+            'toggle_ump_sound': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((6, 398), (120, 28)),
+                text='SOUND', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
+            'main_menu': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((6, 428), (120, 28)),
+                text='MENU', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
 
             # Pitcher selection buttons for main  menu
             'sale': pygame_gui.elements.UIButton(
@@ -130,7 +142,8 @@ class UIManager:
             # Button for inning end screen
             'continue_to_summary': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((540, 630), (200, 50)),
-                text='CONTINUE', manager=manager),
+                text='CONTINUE', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button_primary')),
 
             # Settings menu buttons
             'settings': pygame_gui.elements.UIButton(
@@ -240,58 +253,85 @@ class UIManager:
                 relative_rect=pygame.Rect((50, 650), (150, 50)),
                 text='Back', manager=manager),
 
-            # Sandbox mode - Pitcher selection buttons (left side, below gameplay buttons)
+            # Sandbox menu - Pitcher selection buttons (matching arcade layout)
+            'sandbox_menu_sale': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((400, 500), (190, 50)),
+                text='Chris Sale', manager=manager,
+                object_id=ObjectID(class_id='@pitcher_button')),
+            'sandbox_menu_degrom': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((400, 600), (190, 50)),
+                text='Jacob deGrom', manager=manager,
+                object_id=ObjectID(class_id='@pitcher_button')),
+            'sandbox_menu_sasaki': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((600, 500), (190, 50)),
+                text='Roki Sasaki', manager=manager,
+                object_id=ObjectID(class_id='@pitcher_button')),
+            'sandbox_menu_yamamoto': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((600, 600), (190, 50)),
+                text='Y. Yamamoto', manager=manager,
+                object_id=ObjectID(class_id='@pitcher_button')),
+            'sandbox_menu_mcclanahan': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((800, 500), (190, 50)),
+                text='S. Mcclanahan', manager=manager,
+                object_id=ObjectID(class_id='@pitcher_button')),
+
+            # Sandbox gameplay - Pitcher switch buttons (left sidebar, broadcast style)
             'sandbox_pitcher_sale': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((210, 100), (120, 35)),
-                text='Sale', manager=manager,
-                object_id=ObjectID(class_id='@sandbox_button')),
+                relative_rect=pygame.Rect((6, 356), (120, 28)),
+                text='SALE', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitcher_degrom': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((210, 140), (120, 35)),
-                text='deGrom', manager=manager,
-                object_id=ObjectID(class_id='@sandbox_button')),
+                relative_rect=pygame.Rect((6, 384), (120, 28)),
+                text='DEGROM', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitcher_sasaki': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((210, 180), (120, 35)),
-                text='Sasaki', manager=manager,
-                object_id=ObjectID(class_id='@sandbox_button')),
+                relative_rect=pygame.Rect((6, 412), (120, 28)),
+                text='SASAKI', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitcher_yamamoto': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((210, 220), (120, 35)),
-                text='Yamamoto', manager=manager,
-                object_id=ObjectID(class_id='@sandbox_button')),
+                relative_rect=pygame.Rect((6, 440), (120, 28)),
+                text='YAMAMOTO', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitcher_mcclanahan': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((210, 260), (120, 35)),
-                text='McClanahan', manager=manager,
-                object_id=ObjectID(class_id='@sandbox_button')),
+                relative_rect=pygame.Rect((6, 468), (120, 28)),
+                text='MCCLANAHAN', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
 
-            # Sandbox mode - Dynamic pitch type buttons (2x3 grid below pitchers)
+            # Sandbox gameplay - Pitch toggle buttons (left sidebar, 2-column broadcast style)
             'sandbox_pitch_1': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((210, 310), (55, 40)),
+                relative_rect=pygame.Rect((6, 508), (58, 28)),
                 text='', manager=manager,
-                object_id=ObjectID(class_id='@sandbox_pitch_button')),
+                object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitch_2': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((270, 310), (55, 40)),
+                relative_rect=pygame.Rect((68, 508), (58, 28)),
                 text='', manager=manager,
-                object_id=ObjectID(class_id='@sandbox_pitch_button')),
+                object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitch_3': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((210, 355), (55, 40)),
+                relative_rect=pygame.Rect((6, 538), (58, 28)),
                 text='', manager=manager,
-                object_id=ObjectID(class_id='@sandbox_pitch_button')),
+                object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitch_4': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((270, 355), (55, 40)),
+                relative_rect=pygame.Rect((68, 538), (58, 28)),
                 text='', manager=manager,
-                object_id=ObjectID(class_id='@sandbox_pitch_button')),
+                object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitch_5': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((210, 400), (55, 40)),
+                relative_rect=pygame.Rect((6, 568), (58, 28)),
                 text='', manager=manager,
-                object_id=ObjectID(class_id='@sandbox_pitch_button')),
+                object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitch_6': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((270, 400), (55, 40)),
+                relative_rect=pygame.Rect((68, 568), (58, 28)),
                 text='', manager=manager,
-                object_id=ObjectID(class_id='@sandbox_pitch_button')),
+                object_id=ObjectID(class_id='@broadcast_button')),
 
-            # Sandbox mode - Exit button (bottom left)
+            # Sandbox gameplay - System buttons (left sidebar bottom)
+            'sandbox_sound': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((6, 608), (120, 28)),
+                text='SOUND', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_exit': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((50, 650), (150, 50)),
-                text='EXIT', manager=manager)
+                relative_rect=pygame.Rect((6, 636), (120, 28)),
+                text='EXIT', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button'))
         }
         return buttons
 
@@ -556,7 +596,7 @@ class UIManager:
         ui_toggle_exempt = {
             'gameday_start', 'gameday_transition', 'gameday_simulation',
             'gameday_final', 'main_menu', 'mode_select', 'settings',
-            'key_bindings', 'summary', 'sandbox_placeholder',
+            'key_bindings', 'summary', 'sandbox_menu',
         }
 
         # Check if UI should be hidden due to key binding toggle
@@ -590,10 +630,9 @@ class UIManager:
             self.buttons['scout'].show()
             self.buttons['lap_stats'].show()
             self.buttons['view_laps'].show()
-            # Only show textboxes if UI is visible
-            if not self.key_binding_manager or self.key_binding_manager.is_ui_visible():
-                self.scoreboard.show()
-                self.pitch_result.show()
+            # Scorebug handles stats display during gameplay
+            self.scoreboard.hide()
+            self.pitch_result.hide()
         elif state == 'pitching':
             # All buttons are hidden during the pitch animation
             pass
@@ -608,9 +647,9 @@ class UIManager:
             self.buttons['scout'].show()
             self.buttons['lap_stats'].show()
             self.buttons['view_laps'].show()
-            if not self.key_binding_manager or self.key_binding_manager.is_ui_visible():
-                self.scoreboard.show()
-                self.pitch_result.show()
+            # Scorebug handles stats display
+            self.scoreboard.hide()
+            self.pitch_result.hide()
         elif state == 'main_menu':
             self.buttons['sale'].show()
             self.buttons['degrom'].show()
@@ -638,9 +677,8 @@ class UIManager:
             self.buttons['scout'].show()
             self.buttons['lap_stats'].show()
             self.buttons['view_laps'].show()
-            if not self.key_binding_manager or self.key_binding_manager.is_ui_visible():
-                self.scoreboard.show()
-                self.pitch_result.show()
+            self.scoreboard.hide()
+            self.pitch_result.hide()
         elif state == 'summary':
             self.buttons['back_to_main_menu'].show()
             self.banner.hide()
@@ -659,10 +697,8 @@ class UIManager:
             self.buttons['view_laps'].show()
             self.scouting_panel.hide()
             self.lap_log_panel.hide()
-            # Only show textboxes if UI is visible
-            if not self.key_binding_manager or self.key_binding_manager.is_ui_visible():
-                self.scoreboard.show()
-                self.pitch_result.show()
+            self.scoreboard.hide()
+            self.pitch_result.hide()
         elif state == 'settings':
             self.buttons['back_to_main'].show()
             self.buttons['difficulty_rookie'].show()
@@ -737,49 +773,56 @@ class UIManager:
             self.pitch_result.hide()
             self.scouting_panel.hide()
             self.box_score_panel.hide()
-        elif state == 'sandbox_placeholder':
-            # Sandbox mode placeholder
+        elif state == 'sandbox_menu':
+            # Sandbox mode menu - pitcher selection (matching arcade aesthetic)
+            self.buttons['sandbox_menu_sale'].show()
+            self.buttons['sandbox_menu_degrom'].show()
+            self.buttons['sandbox_menu_sasaki'].show()
+            self.buttons['sandbox_menu_yamamoto'].show()
+            self.buttons['sandbox_menu_mcclanahan'].show()
             self.buttons['back_to_mode_select'].show()
             self.banner.hide()
             self.scoreboard.hide()
             self.pitch_result.hide()
             self.scouting_panel.hide()
+            self.lap_log_panel.hide()
+            self.box_score_panel.hide()
         elif state == 'sandbox_gameplay':
-            # Sandbox gameplay mode - pitcher and pitch selection visible
-            # Pitcher selection buttons
+            # Sandbox gameplay - broadcast-style left sidebar
+            # Standard controls
+            self.buttons['strikezone'].show()
+            self.buttons['toggle_batter'].show()
+            self.buttons['view_pitches'].show()
+            # Pitcher switch buttons
             self.buttons['sandbox_pitcher_sale'].show()
             self.buttons['sandbox_pitcher_degrom'].show()
             self.buttons['sandbox_pitcher_sasaki'].show()
             self.buttons['sandbox_pitcher_yamamoto'].show()
             self.buttons['sandbox_pitcher_mcclanahan'].show()
+            # Pitch buttons shown via update_sandbox_pitch_buttons()
+            # System buttons
+            self.buttons['sandbox_sound'].show()
             self.buttons['sandbox_exit'].show()
-            # Pitch buttons will be shown via update_sandbox_pitch_buttons()
-            # Standard gameplay elements (subset - no scouting for sandbox)
-            self.buttons['strikezone'].show()
-            self.buttons['toggle_batter'].show()
-            self.buttons['view_pitches'].show()
             self.banner.hide()
             self.scouting_panel.hide()
-            # Only show textboxes if UI is visible
-            if not self.key_binding_manager or self.key_binding_manager.is_ui_visible():
-                self.scoreboard.show()
-                self.pitch_result.show()
+            self.scoreboard.hide()
+            self.pitch_result.hide()
         elif state == 'sandbox_view_pitches':
-            # Sandbox mode view pitches - show sandbox-specific buttons
+            # Sandbox mode view pitches - same sidebar layout
+            self.buttons['strikezone'].show()
+            self.buttons['toggle_batter'].show()
+            self.buttons['view_pitches'].show()
             self.buttons['sandbox_pitcher_sale'].show()
             self.buttons['sandbox_pitcher_degrom'].show()
             self.buttons['sandbox_pitcher_sasaki'].show()
             self.buttons['sandbox_pitcher_yamamoto'].show()
             self.buttons['sandbox_pitcher_mcclanahan'].show()
+            self.buttons['sandbox_sound'].show()
             self.buttons['sandbox_exit'].show()
-            self.buttons['strikezone'].show()
-            self.buttons['toggle_batter'].show()
-            self.buttons['view_pitches'].show()
             self.banner.hide()
             self.scouting_panel.hide()
-            if not self.key_binding_manager or self.key_binding_manager.is_ui_visible():
-                self.scoreboard.show()
-                self.pitch_result.show()
+            self.scoreboard.hide()
+            self.pitch_result.hide()
 
     def draw_typing_effect(self, message, counter, speed, position, use_big_font=False):
         """Draws text with a typing effect at the given position."""

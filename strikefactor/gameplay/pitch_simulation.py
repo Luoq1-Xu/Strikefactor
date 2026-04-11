@@ -456,7 +456,10 @@ class PitchSimulation:
         self.game.balls += 1
         self.new_entry['ball'] = True
         if self.game.umpsound:
-            self.game.sound_manager.schedule_sound('ball', delay=450)
+            if self.game.ball[1] > 560:  # Below strike zone (ZONE_BOTTOM)
+                self.game.sound_manager.schedule_sound('ball_low', delay=450)
+            else:
+                self.game.sound_manager.schedule_sound('ball', delay=450)
         self.game.currentballs += 1
         self.game.pitchnumber += 1
 

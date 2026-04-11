@@ -145,7 +145,12 @@ class PitchDataExtractor:
         plate_x, _, plate_z = traj.position_at(traj.travel_time)
 
         # Game mode
-        game_mode = "gameday" if sim.game.in_gameday_mode else "arcade"
+        if sim.game.in_gameday_mode:
+            game_mode = "gameday"
+        elif getattr(sim.game, 'menu_state', None) == 'sandbox_gameplay':
+            game_mode = "sandbox"
+        else:
+            game_mode = "arcade"
 
         # Difficulty
         difficulty = str(sim.game.settings_manager.get_difficulty())

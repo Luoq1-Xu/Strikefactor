@@ -59,7 +59,7 @@ class LapLogPanel(UIPanel):
             text='CLOSE',
             manager=self.ui_manager,
             container=self,
-            object_id=ObjectID(class_id='@sandbox_button')
+            object_id=ObjectID(class_id='@broadcast_button')
         )
 
     def update_data(self, laps: list, current_stats: dict = None):

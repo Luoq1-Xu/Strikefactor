@@ -247,28 +247,10 @@ class GameplayState(GameState):
         self.pitch_simulation = None
         
     def _refresh_display(self):
-        """Refresh the game display with current stats."""
-        if self.game.just_refreshed == 1:
-            # Calculate triple slash statistics
-            triple_slash = self.game.field_renderer.get_triple_slash_line()
+        """Refresh the game display - scorebug handles stats rendering."""
+        self.game.ui_manager.hide_banner()
+        self.game.current_gamemode = self.game.menu_state
 
-            result = (
-                f"<font size=6>CURRENT OUTS : {self.game.currentouts}<br>"  # Increased font size
-                f"STRIKEOUTS : {self.game.currentstrikeouts}<br>"
-                f"WALKS : {self.game.currentwalks}<br>"
-                f"BATTING : {triple_slash}<br>"  # Replaced HITS with triple slash
-                f"RUNS SCORED: {self.game.scoreKeeper.get_score()}</font>"
-            )
-            count_string = (
-                f"<font size=6><br>COUNT IS "  # Increased font size
-                f"{self.game.currentballs} - {self.game.currentstrikes}</font>"
-            )
-            self.game.ui_manager.update_scoreboard(result)
-            self.game.ui_manager.update_pitch_result(count_string)
-            self.game.ui_manager.hide_banner()
-            self.game.just_refreshed = 0
-            self.game.current_gamemode = self.game.menu_state
-            
     def update(self, time_delta: float):
         """Update gameplay logic."""
         if self.pitch_simulation and self.pitch_simulation.running:
@@ -661,23 +643,55 @@ class InningEndState(GameState):
 
 
 class SandboxMenuState(GameState):
-    """Placeholder state for Sandbox mode (future implementation)."""
+    """Sandbox mode menu with pitcher selection and typing effect."""
 
     def __init__(self, game):
         super().__init__(game)
+        self.messages = ["Sandbox Mode", "Select A Pitcher"]
+        self.active_message = 0
+        self.counter = 0
+        self.textoffset = 0
+        self.messages_finished = 0
+        self.done = False
+        self.running = True
 
     def enter(self):
         """Initialize sandbox menu state."""
         self.game.ui_manager.hide_banner()
-        self.game.ui_manager.set_button_visibility('sandbox_placeholder')
+        self.game.ui_manager.set_button_visibility('sandbox_menu')
+        # Reset typing effect
+        self.active_message = 0
+        self.counter = 0
+        self.textoffset = 0
+        self.messages_finished = 0
+        self.done = False
+        self.running = True
 
     def exit(self):
         """Clean up sandbox menu state."""
         pass
 
     def update(self, time_delta: float):
-        """Update sandbox menu logic."""
-        pass
+        """Update typing effect."""
+        if not self.running:
+            return
+
+        message = self.messages[self.active_message]
+
+        # Update typing effect
+        if self.counter < self.game.speed * len(message):
+            self.counter += 1
+        elif self.counter >= self.game.speed * len(message):
+            self.done = True
+
+        # Handle message progression
+        if (self.active_message < len(self.messages) - 1) and self.done:
+            pygame.time.delay(500)
+            self.active_message += 1
+            self.done = False
+            self.textoffset += 100
+            self.counter = 0
+            self.messages_finished += 1
 
     def handle_event(self, event):
         """Handle sandbox menu events."""
@@ -687,14 +701,23 @@ class SandboxMenuState(GameState):
         return True
 
     def render(self, screen):
-        """Render the sandbox menu placeholder."""
+        """Render the sandbox menu with typing effect."""
         screen.fill("black")
-        # Draw placeholder text
-        self.game.ui_manager.draw_completed_message(
-            "SANDBOX MODE", (450, 250), use_big_font=True
-        )
-        self.game.ui_manager.draw_completed_message(
-            "Coming Soon!", (500, 400), use_big_font=False
+
+        # Draw completed messages
+        if self.messages_finished > 0:
+            offset = 0
+            for i in range(self.messages_finished):
+                self.game.ui_manager.draw_completed_message(
+                    self.messages[i], (100, 170 + offset), use_big_font=True
+                )
+                offset += 100
+
+        # Draw current message with typing effect
+        message = self.messages[self.active_message]
+        self.game.ui_manager.draw_typing_effect(
+            message, self.counter, self.game.speed,
+            (100, 170 + self.textoffset), use_big_font=True
         )
 
 
@@ -725,24 +748,7 @@ class SandboxGameplayState(GameState):
         self.pitch_simulation = None
 
     def _refresh_display(self):
-        """Refresh the game display with current stats."""
-        # Calculate triple slash statistics
-        triple_slash = self.game.field_renderer.get_triple_slash_line()
-
-        result = (
-            f"<font size=6>OUTS: {self.game.currentouts}<br>"  # Increased font size
-            f"STRIKEOUTS: {self.game.currentstrikeouts}<br>"
-            f"WALKS: {self.game.currentwalks}<br>"
-            f"BATTING: {triple_slash}<br>"  # Replaced HITS with triple slash
-            f"RUNS: {self.game.scoreKeeper.get_score()}</font>"
-        )
-        active_display = ", ".join(sorted(self.active_pitches)) if self.active_pitches else "None"
-        count_string = (
-            f"<font size=6>COUNT: {self.game.currentballs}-{self.game.currentstrikes}<br>"  # Increased font size
-            f"ACTIVE: {active_display}</font>"
-        )
-        self.game.ui_manager.update_scoreboard(result)
-        self.game.ui_manager.update_pitch_result(count_string)
+        """Refresh the game display - scorebug handles stats rendering."""
         self.game.ui_manager.hide_banner()
 
     def _update_pitch_buttons(self):
@@ -783,7 +789,6 @@ class SandboxGameplayState(GameState):
             self.pitch_simulation = None
             self.game.ui_manager.set_button_visibility('sandbox_gameplay')
             self._update_pitch_buttons()
-            self._refresh_display()
 
     def handle_event(self, event):
         """Handle sandbox gameplay events."""
@@ -1146,7 +1151,7 @@ class GameDayTransitionState(GameState):
         self.game.game_stats.reset_game_stats()
         self.game.scoreKeeper.reset()
         self.game.inning_ended = False
-        self.game.just_refreshed = 1  # Force scoreboard refresh with clean stats
+        self.game.scorebug.last_pitch_type = ""  # Reset last pitch display for new inning
 
         # Clear pitch data from previous inning
         self.game.pitch_trajectories = []
