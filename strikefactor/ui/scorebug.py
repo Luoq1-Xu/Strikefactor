@@ -203,6 +203,49 @@ class Scorebug:
             color = self.OUT_COLOR if i < outs else self.DOT_OFF_COLOR
             pygame.draw.circle(screen, color, (cx, row_y), dot_r)
 
+        self._draw_challenge_pips(screen, x + 95, y_center)
+
+    def _draw_challenge_pips(self, screen, x, y_center):
+        """Draw remaining ABS challenge pips for the batting side."""
+        cm = getattr(self.game, "challenge_manager", None)
+        if cm is None:
+            return
+
+        if self.game.in_gameday_mode and self.game.gameday_manager is not None:
+            side = "away" if self.game.gameday_manager.is_top_inning else "home"
+        else:
+            side = "home"
+
+        from config import ABS_PINK
+
+        label = self.label_font.render("ABS", True, self.LABEL_COLOR)
+        screen.blit(label, (x, y_center - 17))
+
+        # Unlimited mode (sandbox): draw a single infinity symbol instead of pips.
+        if cm.is_unlimited():
+            inf_surf = self.font.render("∞", True, ABS_PINK)
+            screen.blit(inf_surf, (x + 4, y_center - 8))
+            return
+
+        remaining = cm.remaining(side)
+        per_side = cm.per_side
+        diamond_size = 6
+        gap = 18
+        for i in range(per_side):
+            cx = x + 6 + i * gap
+            cy = y_center + 4
+            points = [
+                (cx, cy - diamond_size),
+                (cx + diamond_size, cy),
+                (cx, cy + diamond_size),
+                (cx - diamond_size, cy),
+            ]
+            if i < remaining:
+                pygame.draw.polygon(screen, ABS_PINK, points)
+                pygame.draw.polygon(screen, (255, 255, 255), points, 1)
+            else:
+                pygame.draw.polygon(screen, self.DOT_OFF_COLOR, points, 1)
+
     def _draw_last_pitch(self, screen, y, y_center):
         """Draw last pitch type + speed + outcome with brief highlight."""
         x = self.LAST_PITCH_X

@@ -8,7 +8,7 @@ from utils.pitch_physics import PitchTrajectory, UmpireCamera, DEFAULT_CAMERA
 
 # Load the model once, ideally passed in or as a singleton
 import pickle
-from config import get_path
+from config import get_path, ABS_ZONE, ABS_BALL_RADIUS
 model = pickle.load(open(get_path("ai/ai_umpire.pkl"), "rb"))
 
 class PitchSimulation:
@@ -68,6 +68,9 @@ class PitchSimulation:
         self.running = True
         self.game.first_pitch_thrown = True
         self.game.swing_started = 0
+        # New pitch started → previous-pitch challenge window closes.
+        if hasattr(self.game, 'clear_pending_challenge'):
+            self.game.clear_pending_challenge()
 
         # Initialize ball at projected release position
         proj = self.camera.project(*release_pos_3d)
@@ -468,15 +471,47 @@ class PitchSimulation:
             self._make_ball_strike_call()
 
     def _make_ball_strike_call(self):
-        """Make the umpire's ball/strike call."""
+        """Make the umpire's ball/strike call and open the ABS challenge window."""
         self.pitch_results_done = True
 
-        # Check if it's a ball (outside zone and not swung at)
-        if not model.predict(pd.DataFrame([[self.game.ball[0], self.game.ball[1]]],
-                                         columns=['finalx', 'finaly'])) and self.game.swing_started == 0:
+        is_taken = (self.game.swing_started == 0)
+
+        # Determine umpire's call AND geometric truth at the same point.
+        umpire_says_ball = (
+            not model.predict(pd.DataFrame([[self.game.ball[0], self.game.ball[1]]],
+                                           columns=['finalx', 'finaly']))
+            and is_taken
+        )
+        truth_strike = collision(
+            self.game.ball[0], self.game.ball[1], ABS_BALL_RADIUS, *ABS_ZONE
+        )
+        original_call = "ball" if umpire_says_ball else "strike"
+
+        # Snapshot the full game state BEFORE commit so the ABS challenge can
+        # fully reverse it later — including terminal walks and strikeouts.
+        snapshot = None
+        if is_taken and hasattr(self.game, 'snapshot_for_abs'):
+            snapshot = self.game.snapshot_for_abs()
+
+        if umpire_says_ball:
             self._handle_ball_call()
         else:
             self._handle_strike_call()
+
+        # Only taken pitches are challengeable per MLB rule.
+        if not is_taken or snapshot is None:
+            return
+
+        if hasattr(self.game, 'open_abs_challenge_window'):
+            self.game.open_abs_challenge_window(
+                ball_xy=(self.game.ball[0], self.game.ball[1]),
+                original_call=original_call,
+                truth_strike=bool(truth_strike),
+                trajectory=list(self.game.last_pitch_information),
+                pitchtype=self.pitchtype,
+                speed_mph=self.speed_mph,
+                snapshot=snapshot,
+            )
 
     def _handle_ball_call(self):
         """Handle ball call."""
