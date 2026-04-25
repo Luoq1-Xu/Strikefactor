@@ -120,6 +120,18 @@
         }
     },
 
+    "@settings_button":
+    {
+        "font":
+        {
+            "name": "8bitoperator_jve",
+            "size": "24",
+            "bold": "0",
+            "italic": "0",
+            "regular_path": "8bitoperator_jve.ttf"
+        }
+    },
+
     "window.#title_bar":
     {
         "font":

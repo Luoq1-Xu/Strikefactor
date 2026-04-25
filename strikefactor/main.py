@@ -27,6 +27,8 @@ from ui.scorebug import Scorebug
 from helpers import ScoreKeeper, PitchDataManager
 from gameplay.game_state_manager import GameStateManager
 from gameplay.random_scenario import RandomScenarioGenerator
+from gameplay.challenge_manager import ChallengeManager
+from ui.abs_challenge_overlay import ABSChallengeOverlay
 from settings_manager import SettingsManager
 
 class AssetManager:
@@ -320,6 +322,12 @@ class Game:
         self.gameday_manager = None
         self.in_gameday_mode = False
 
+        # ABS challenge system
+        self.challenge_manager = ChallengeManager()
+        self.abs_overlay = ABSChallengeOverlay(self)
+        self.pending_challenge = None
+        self._abs_overturned_pending = False
+
         # Settings management (initialize early so other components can use it)
         self.settings_manager = SettingsManager()
 
@@ -447,6 +455,7 @@ class Game:
         # Settings toggle callbacks
         self.ui_manager.register_button_callback('toggle_ump_sound_settings', lambda: self.toggle_umpire_sound_setting())
         self.ui_manager.register_button_callback('toggle_strikezone_settings', lambda: self.toggle_strikezone_setting())
+        self.ui_manager.register_button_callback('toggle_abs_settings', lambda: self.toggle_abs_setting())
         self.ui_manager.register_button_callback('reset_settings', lambda: self.reset_settings())
 
         # FPS settings callbacks
@@ -619,6 +628,8 @@ class Game:
         self.pitcher_manager.set_current_pitcher(pitcher_name)
         self.game_stats.reset_game_stats()
         self.batter_profile.reset()
+        self.challenge_manager.set_unlimited(False)
+        self.challenge_manager.reset_all()
         self.inning_ended = False
         self.pitches_display = []
         self.pitch_trajectories = []
@@ -660,6 +671,8 @@ class Game:
         # Set up the game state with the scenario
         self.game_stats.reset_game_stats()
         self.batter_profile.reset()
+        self.challenge_manager.set_unlimited(False)
+        self.challenge_manager.reset_all()
         self.game_stats.currentballs = scenario['balls']
         self.game_stats.currentstrikes = scenario['strikes']
         self.game_stats.currentouts = scenario['outs']
@@ -723,6 +736,8 @@ class Game:
         self.game_stats.reset_game_stats()
         self.batter_profile.reset()
         self.scoreKeeper.reset()
+        self.challenge_manager.set_unlimited(False)
+        self.challenge_manager.reset_all()
         self.inning_ended = False
 
         self.menu_state = 'gameday'
@@ -753,6 +768,9 @@ class Game:
         self.game_stats.reset_game_stats()
         self.batter_profile.reset()
         self.scoreKeeper.reset()
+        self.challenge_manager.reset_all()
+        # Sandbox is for exploration — challenges are unlimited there.
+        self.challenge_manager.set_unlimited(True)
 
         # Clear pitch data
         self.pitch_trajectories = []
@@ -893,11 +911,10 @@ class Game:
         self.state_manager.change_state('menu')
 
     def exit_settings_menu(self):
-        """Exit settings menu and return to main menu."""
-        self.menu_state = 0
-        self.ui_manager.set_button_visibility('main_menu')
+        """Exit settings menu and return to the mode-select screen."""
+        self.menu_state = 'mode_select'
         self.ui_manager.hide_banner()
-        self.state_manager.change_state('menu')
+        self.state_manager.change_state('mode_select')
 
     def set_difficulty(self, difficulty_level):
         """Set the difficulty level."""
@@ -917,6 +934,16 @@ class Game:
         """Toggle strikezone display setting."""
         current = self.settings_manager.get_setting("show_strikezone")
         self.settings_manager.set_setting("show_strikezone", not current)
+        self.ui_manager.update_settings_button_states(self.settings_manager)
+
+    def toggle_abs_setting(self):
+        """Toggle MLB-style ABS ball/strike challenge system on or off."""
+        current = self.settings_manager.get_setting("abs_enabled")
+        self.settings_manager.set_setting("abs_enabled", not current)
+        # If disabling mid-state, drop any in-flight challenge prompt so the
+        # gameplay overlay stops drawing it immediately.
+        if not self.settings_manager.get_setting("abs_enabled"):
+            self.pending_challenge = None
         self.ui_manager.update_settings_button_states(self.settings_manager)
 
     def reset_settings(self):
@@ -952,6 +979,7 @@ class Game:
         self.key_binding_manager.register_callback(KeyAction.VIEW_PITCHES, self.toggle_view_pitches)
         self.key_binding_manager.register_callback(KeyAction.MAIN_MENU, lambda: self.set_menu_state(0))
         self.key_binding_manager.register_callback(KeyAction.TOGGLE_TRACK, self.toggle_track)
+        self.key_binding_manager.register_callback(KeyAction.CHALLENGE, self.request_abs_challenge)
 
     def enter_key_bindings_menu(self):
         """Enter key bindings configuration menu."""
@@ -1078,6 +1106,355 @@ class Game:
         self.scorebug.set_last_pitch(pitchtype, speed_mph, outcome)
         # Refresh scouting panel stats after each pitch
         self.ui_manager.refresh_scouting_panel()
+
+    # ------------------------------------------------------------------
+    # ABS challenge system
+    # ------------------------------------------------------------------
+
+    def snapshot_for_abs(self):
+        """Capture mutable state needed to roll back an umpire's call."""
+        import copy
+        snap = {
+            'game_stats': copy.deepcopy(self.game_stats),
+            'scoreKeeper': copy.deepcopy(self.scoreKeeper),
+            'inning_ended': self.inning_ended,
+            'last_pitch_information': copy.deepcopy(self.last_pitch_information),
+            'menu_state': self.menu_state,
+            'state_name': self.state_manager.current_state_name,
+        }
+        if self.gameday_manager is not None:
+            snap['gameday'] = {
+                'player_score': self.gameday_manager.player_score,
+                'opponent_score': self.gameday_manager.opponent_score,
+                '_current_half_runs': self.gameday_manager._current_half_runs,
+                'current_outs': self.gameday_manager.current_outs,
+                '_consecutive_hits': self.gameday_manager._consecutive_hits,
+                'player_consecutive_hits': self.gameday_manager.player_consecutive_hits,
+                'event_log_len': len(self.gameday_manager.event_log),
+                'is_walkoff': self.gameday_manager.is_walkoff,
+                'game_over': self.gameday_manager.game_over,
+                'opponent_pitcher_stats': copy.deepcopy(self.gameday_manager.opponent_pitcher_stats),
+                'player_pitcher_stats': copy.deepcopy(self.gameday_manager.player_pitcher_stats),
+                'player_inning_scores': list(self.gameday_manager.player_inning_scores),
+                'opponent_inning_scores': list(self.gameday_manager.opponent_inning_scores),
+            }
+        snap['field_renderer'] = {
+            'total_pitches': getattr(self.field_renderer, 'total_pitches', 0),
+            'total_at_bats': getattr(self.field_renderer, 'total_at_bats', 0),
+            'total_walks': getattr(self.field_renderer, 'total_walks', 0),
+            'hit_records_len': len(getattr(self.field_renderer, 'hit_records', [])),
+        }
+        return snap
+
+    def restore_for_abs(self, snap):
+        """Roll the game back to the snapshot and cancel any scheduled side effects."""
+        import copy
+        src = snap['game_stats']
+        for attr in ('strikes', 'balls', 'currentballs', 'currentstrikes',
+                     'currentouts', 'currentstrikeouts', 'currentwalks',
+                     'homeruns_allowed', 'hits', 'pitchnumber',
+                     'last_pitch_type_thrown', 'first_pitch_thrown',
+                     'pitch_chosen', 'current_state', 'current_pitches'):
+            if hasattr(src, attr):
+                setattr(self.game_stats, attr, getattr(src, attr))
+        if hasattr(src, 'pitch_history'):
+            self.game_stats.pitch_history = list(src.pitch_history)
+
+        # Re-clone the saved ScoreKeeper as a single object so that the
+        # references between `runners` and `basesfilled` stay intact —
+        # walk_event() mutates Runner objects via basesfilled and expects them
+        # to be the same instances stored in `runners`.
+        sk_clone = copy.deepcopy(snap['scoreKeeper'])
+        self.scoreKeeper.bases = sk_clone.bases
+        self.scoreKeeper.runners = sk_clone.runners
+        self.scoreKeeper.basesfilled = sk_clone.basesfilled
+        self.scoreKeeper.score = sk_clone.score
+
+        self.inning_ended = snap['inning_ended']
+        self.last_pitch_information = list(snap['last_pitch_information'])
+
+        # If the call moved us to a different state (e.g. inning_end after a
+        # strike-3 walkoff), walk back to where we were when the pitch ended.
+        if snap.get('state_name') and self.state_manager.current_state_name != snap['state_name']:
+            self.menu_state = snap.get('menu_state', self.menu_state)
+            self.state_manager.change_state(snap['state_name'])
+
+        if 'gameday' in snap and self.gameday_manager is not None:
+            gd = snap['gameday']
+            self.gameday_manager.player_score = gd['player_score']
+            self.gameday_manager.opponent_score = gd['opponent_score']
+            self.gameday_manager._current_half_runs = gd['_current_half_runs']
+            self.gameday_manager.current_outs = gd['current_outs']
+            self.gameday_manager._consecutive_hits = gd['_consecutive_hits']
+            self.gameday_manager.player_consecutive_hits = gd['player_consecutive_hits']
+            self.gameday_manager.event_log = self.gameday_manager.event_log[:gd['event_log_len']]
+            self.gameday_manager.is_walkoff = gd['is_walkoff']
+            self.gameday_manager.game_over = gd['game_over']
+            self.gameday_manager.opponent_pitcher_stats = copy.deepcopy(gd['opponent_pitcher_stats'])
+            self.gameday_manager.player_pitcher_stats = copy.deepcopy(gd['player_pitcher_stats'])
+            self.gameday_manager.player_inning_scores = list(gd['player_inning_scores'])
+            self.gameday_manager.opponent_inning_scores = list(gd['opponent_inning_scores'])
+
+        fr = snap['field_renderer']
+        if hasattr(self.field_renderer, 'total_pitches'):
+            self.field_renderer.total_pitches = fr['total_pitches']
+        if hasattr(self.field_renderer, 'total_at_bats'):
+            self.field_renderer.total_at_bats = fr['total_at_bats']
+        if hasattr(self.field_renderer, 'total_walks'):
+            self.field_renderer.total_walks = fr['total_walks']
+        if hasattr(self.field_renderer, 'hit_records'):
+            self.field_renderer.hit_records = self.field_renderer.hit_records[:fr['hit_records_len']]
+
+        # Cancel scheduled side effects from the original (now-undone) call.
+        if hasattr(self.ui_manager, '_pending_banner'):
+            self.ui_manager._pending_banner = None
+        self.ui_manager.hide_banner()
+        if hasattr(self.sound_manager, 'pending_sounds'):
+            self.sound_manager.pending_sounds = []
+
+    def dispatch_ball_call(self, pitchtype, speed_mph, ball_y, *, with_sound=True):
+        """Apply a ball call against the current game state. Mirrors
+        PitchSimulation._handle_ball_call but without sim-local fields, so
+        the ABS reversal can use it."""
+        self.balls += 1
+        if with_sound and self.umpsound:
+            if ball_y > 560:
+                self.sound_manager.schedule_sound('ball_low', delay=450)
+            else:
+                self.sound_manager.schedule_sound('ball', delay=450)
+        self.currentballs += 1
+        self.pitchnumber += 1
+
+        if self.currentballs == 4:
+            self.currentwalks += 1
+            self.field_renderer.record_walk()
+            score_before = self.scoreKeeper.get_score() if self.in_gameday_mode else 0
+            self.scoreKeeper.update_walk_event()
+            runs_scored = self.scoreKeeper.get_score() - score_before
+            self._display_pitch_results("WALK", pitchtype, speed_mph)
+            self.ui_manager.schedule_banner("WALK", delay=450)
+            if self.in_gameday_mode and self.gameday_manager is not None:
+                self.gameday_manager.record_player_at_bat(
+                    'WALK', runs_scored=runs_scored, pitches_thrown=self.pitchnumber
+                )
+                self._abs_check_walkoff()
+            self.currentstrikes = 0
+            self.currentballs = 0
+            self.pitchnumber = 0
+        else:
+            self._display_pitch_results("BALL", pitchtype, speed_mph)
+
+    def dispatch_strike_call(self, pitchtype, speed_mph, *, with_sound=True,
+                              was_swung=False):
+        """Apply a strike call. Mirrors PitchSimulation._handle_strike_call."""
+        self.strikes += 1
+        self.pitchnumber += 1
+        self.currentstrikes += 1
+
+        if with_sound and not was_swung and self.umpsound:
+            if self.currentstrikes == 3:
+                self.sound_manager.schedule_sound('strike3', delay=450)
+            else:
+                self.sound_manager.schedule_sound('strike', delay=450)
+
+        label = "SWINGING STRIKE" if was_swung else "CALLED STRIKE"
+
+        if self.currentstrikes == 3:
+            self.currentstrikeouts += 1
+            self.currentouts += 1
+            self.field_renderer.record_at_bat()
+            self._display_pitch_results(label, pitchtype, speed_mph)
+            self.ui_manager.schedule_banner("STRIKEOUT", delay=450)
+            if self.in_gameday_mode and self.gameday_manager is not None:
+                self.gameday_manager.record_player_at_bat(
+                    'STRIKEOUT', runs_scored=0, pitches_thrown=self.pitchnumber
+                )
+            self.pitchnumber = 0
+            self.currentstrikes = 0
+            self.currentballs = 0
+        else:
+            self._display_pitch_results(label, pitchtype, speed_mph)
+
+    def _abs_check_walkoff(self):
+        """Trigger walkoff handling after an ABS-applied walk in gameday."""
+        if (self.in_gameday_mode and self.gameday_manager is not None
+                and self.gameday_manager.check_walkoff(self.scoreKeeper.get_score())):
+            self.gameday_manager.player_score += self.scoreKeeper.get_score()
+            self.gameday_manager._current_half_runs = self.scoreKeeper.get_score()
+            self.gameday_manager.player_inning_scores.append(
+                self.gameday_manager._current_half_runs
+            )
+            self.ui_manager.show_banner("WALK-OFF WIN!", typing_speed=0.05)
+            self.inning_ended = True
+            self.menu_state = 'inning_end'
+            self.state_manager.change_state('inning_end')
+
+    def open_abs_challenge_window(self, *, ball_xy, original_call, truth_strike,
+                                   trajectory, pitchtype, speed_mph, snapshot):
+        """Called by PitchSimulation right after the call commits. Stores the
+        pre-commit snapshot so the call can be fully reversed within the
+        challenge window (including terminal walks / strikeouts)."""
+        # Respect the user setting — if ABS is off, never open a window.
+        if not self.settings_manager.get_setting("abs_enabled"):
+            self.pending_challenge = None
+            return
+
+        if self.in_gameday_mode and self.gameday_manager is not None:
+            side = "away" if self.gameday_manager.is_top_inning else "home"
+        else:
+            side = "home"
+
+        # No window if the side has no challenges left.
+        if not self.challenge_manager.can_challenge(side):
+            self.pending_challenge = None
+            return
+
+        self.pending_challenge = {
+            'opened_at': pygame.time.get_ticks(),
+            'ball_xy': ball_xy,
+            'original_call': original_call,
+            'truth_strike': bool(truth_strike),
+            'trajectory': trajectory,
+            'pitchtype': pitchtype,
+            'speed_mph': speed_mph,
+            'side': side,
+            'snapshot': snapshot,
+        }
+
+    def _challenge_window_active(self):
+        from config import CHALLENGE_WINDOW_MS
+        if not self.pending_challenge:
+            return False
+        elapsed = pygame.time.get_ticks() - self.pending_challenge['opened_at']
+        return elapsed <= CHALLENGE_WINDOW_MS
+
+    def challenge_seconds_remaining(self):
+        from config import CHALLENGE_WINDOW_MS
+        if not self.pending_challenge:
+            return 0.0
+        elapsed = pygame.time.get_ticks() - self.pending_challenge['opened_at']
+        return max(0.0, (CHALLENGE_WINDOW_MS - elapsed) / 1000.0)
+
+    def clear_pending_challenge(self):
+        """Called when the next pitch starts (window closes)."""
+        self.pending_challenge = None
+
+    def request_abs_challenge(self):
+        """Triggered by the CHALLENGE key. Runs the overlay synchronously."""
+        if not self._challenge_window_active():
+            return
+        pc = self.pending_challenge
+        side = pc['side']
+        if not self.challenge_manager.can_challenge(side):
+            self.pending_challenge = None
+            return
+
+        # Project the post-call count for the banner.
+        snap_stats = pc['snapshot']['game_stats']
+        pre_b = snap_stats.currentballs
+        pre_s = snap_stats.currentstrikes
+        truth_call = "strike" if pc['truth_strike'] else "ball"
+        overturned = (truth_call != pc['original_call'])
+        if overturned:
+            new_balls = pre_b + (0 if pc['truth_strike'] else 1)
+            new_strikes = pre_s + (1 if pc['truth_strike'] else 0)
+            if new_strikes >= 3:
+                post_count = "K"  # strikeout
+            elif new_balls >= 4:
+                post_count = "BB"  # walk
+            else:
+                post_count = f"{new_balls}-{new_strikes}"
+        else:
+            post_count = f"{self.currentballs}-{self.currentstrikes}"
+
+        self._abs_overturned_pending = False
+        self.abs_overlay.trigger(
+            ball_xy=pc['ball_xy'],
+            original_call=pc['original_call'],
+            truth_strike=pc['truth_strike'],
+            trajectory=pc['trajectory'],
+            pre_balls=pre_b,
+            pre_strikes=pre_s,
+            pitch_label=f"{pc['pitchtype']}  {pc['speed_mph']:.0f} MPH",
+            post_count_label=post_count,
+            on_complete=self._on_abs_overlay_complete,
+        )
+        self._run_abs_overlay_loop()
+
+        # Consume challenge (retain on success).
+        self.challenge_manager.consume(side, successful=overturned)
+
+        if overturned:
+            self._reverse_last_call()
+
+        self.pending_challenge = None
+
+    def _on_abs_overlay_complete(self, overturned: bool):
+        self._abs_overturned_pending = bool(overturned)
+
+    def _run_abs_overlay_loop(self):
+        """Synchronous render loop for the overlay. Mirrors PitchSimulation.run.
+        Drains input during the animation; once the overlay enters its
+        wait-for-dismiss state, SPACE/ENTER (or mouse click) closes it."""
+        clock = self.clock
+        screen = self.screen
+        while self.abs_overlay.is_active():
+            time_delta = clock.tick_busy_loop(60) / 1000.0
+            screen.fill("black")
+            if self.state_manager.current_state is not None:
+                self.state_manager.current_state.render(screen)
+            if self.state_manager.current_state_name in ('gameplay', 'sandbox_gameplay', 'inning_end'):
+                self.scorebug.draw(screen)
+            self.abs_overlay.update(int(time_delta * 1000))
+            self.abs_overlay.render(screen)
+            self.ui_manager.draw()
+            self.flip_display()
+
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self.abs_overlay.dismiss()
+                elif (event.type == pygame.KEYDOWN
+                      and self.abs_overlay.is_waiting_for_dismiss()
+                      and event.key in (pygame.K_SPACE, pygame.K_RETURN,
+                                        pygame.K_KP_ENTER, pygame.K_ESCAPE)):
+                    self.abs_overlay.dismiss()
+                elif (event.type == pygame.MOUSEBUTTONDOWN
+                      and self.abs_overlay.is_waiting_for_dismiss()):
+                    self.abs_overlay.dismiss()
+
+    def _reverse_last_call(self):
+        """Reverse the umpire's call after a successful challenge.
+        Restores the pre-commit snapshot, then re-dispatches the opposite call
+        silently (no umpire SFX, per ABS UX)."""
+        pc = self.pending_challenge
+        if not pc or 'snapshot' not in pc:
+            return
+
+        new_call = "strike" if pc['truth_strike'] else "ball"
+        if new_call == pc['original_call']:
+            return
+
+        # Roll the world back to just before the umpire's call.
+        self.restore_for_abs(pc['snapshot'])
+
+        # Apply the geometric truth as the new call. Silent — the user wants
+        # no umpire voice line to play on overturn.
+        if new_call == "ball":
+            self.dispatch_ball_call(
+                pc['pitchtype'], pc['speed_mph'], pc['ball_xy'][1], with_sound=False
+            )
+        else:
+            self.dispatch_strike_call(
+                pc['pitchtype'], pc['speed_mph'], with_sound=False, was_swung=False
+            )
+
+        # Recolor the on-field trail dot to match the new call.
+        if self.last_pitch_information:
+            new_color = (227, 75, 80) if new_call == "strike" else (75, 227, 148)
+            last = self.last_pitch_information[-1]
+            for entry in self.last_pitch_information:
+                if entry[0] == last[0] and entry[1] == last[1]:
+                    entry[3] = new_color
 
     def check_inning_end(self):
         """Check if the inning should end."""

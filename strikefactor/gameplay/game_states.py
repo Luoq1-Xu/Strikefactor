@@ -328,6 +328,32 @@ class GameplayState(GameState):
                 "HOT STREAK", (550, 10), use_big_font=False
             )
 
+        # ABS challenge prompt while the window is open after a taken pitch
+        if self.game._challenge_window_active() and not self.game.abs_overlay.is_active():
+            self._draw_abs_challenge_prompt(screen)
+
+    def _draw_abs_challenge_prompt(self, screen):
+        from key_binding_manager import KeyAction
+        from config import ABS_PINK
+        if not hasattr(self, '_abs_prompt_font'):
+            self._abs_prompt_font = pygame.font.SysFont("arial", 18, bold=True)
+
+        seconds_left = self.game.challenge_seconds_remaining()
+        key_code = self.game.key_binding_manager.get_key_for_action(KeyAction.CHALLENGE)
+        key_name = self.game.key_binding_manager.get_key_name(key_code)
+        suffix = "∞" if self.game.challenge_manager.is_unlimited() else f"{seconds_left:.1f}s"
+        msg = f"[{key_name}] Challenge ({suffix})"
+        text = self._abs_prompt_font.render(msg, True, (255, 255, 255))
+        bg_w = text.get_width() + 28
+        bg_h = text.get_height() + 14
+        bg = pygame.Surface((bg_w, bg_h), pygame.SRCALPHA)
+        pygame.draw.rect(bg, (*ABS_PINK, 220), bg.get_rect(), border_radius=8)
+        pygame.draw.rect(bg, (255, 255, 255, 230), bg.get_rect(), width=2, border_radius=8)
+        bg.blit(text, (14, 7))
+        x = (self.game.internal_width - bg_w) // 2
+        y = self.game.internal_height - bg_h - 80
+        screen.blit(bg, (x, y))
+
 
 class SummaryState(GameState):
     """End of inning summary state."""
@@ -479,7 +505,7 @@ class VisualizationState(GameState):
         
     def update(self, time_delta: float):
         """Update visualization animation."""
-        if not self.game.last_pitch_information:
+        if not self.game.pitch_trajectories:
             return
 
         current_time = pygame.time.get_ticks()
@@ -489,7 +515,11 @@ class VisualizationState(GameState):
         display_fps = self.game.settings_manager.get_display_fps()
         frame_interval = 1500 / display_fps  # 25ms at 60 FPS, 12.5ms at 120 FPS
 
-        if time_elapsed > frame_interval and self.current_frame <= len(self.game.last_pitch_information) - 1:
+        # Cap by the longest trajectory in the inning so older pitches with
+        # more frames than the latest one still animate all the way to their
+        # plate endpoint instead of being cut off mid-flight.
+        max_len = max(len(p) for p in self.game.pitch_trajectories)
+        if time_elapsed > frame_interval and self.current_frame <= max_len - 1:
             self.current_frame += 1
             self.last_time = current_time
             
@@ -504,7 +534,7 @@ class VisualizationState(GameState):
         """Render the pitch visualization."""
         screen.fill("black")
 
-        if not self.game.last_pitch_information:
+        if not self.game.pitch_trajectories:
             return
 
         # Draw pitch trajectories up to current frame as thin connected lines
@@ -513,20 +543,22 @@ class VisualizationState(GameState):
             if len(pitch) < 2:
                 continue
 
-            # Find the last in-flight point (before outcome labels like "strike", "ball", etc.)
-            # This is where the ball arrives at the plate.
+            # plate_idx = index of the first labeled (post-arrival) entry, i.e.
+            # the moment the ball reached the plate. In-flight entries before
+            # that have an empty outcome label.
             plate_idx = len(pitch) - 1
             for idx in range(len(pitch)):
-                if pitch[idx][4]:  # has an outcome label → post-plate point
+                if pitch[idx][4]:
                     plate_idx = idx
                     break
 
             frame_limit = min(self.current_frame, plate_idx + 1)
 
-            # Determine trail color from the last point's color (outcome-coded)
+            # Trail color is taken from the last entry, which the finish-pitch
+            # / ABS-overturn paths recolor to reflect the *current* call. So a
+            # strike→ball overturn shows green here without extra plumbing.
             trail_color = pitch[-1][3] if pitch[-1][4] else (180, 180, 180)
-            # Dimmer version for the line
-            dim_color = tuple(max(0, c // 2) for c in trail_color)
+            dim_color = tuple(c // 2 for c in trail_color)
 
             # Draw thin anti-aliased lines between consecutive in-flight points
             for i in range(1, frame_limit):
@@ -838,6 +870,10 @@ class SandboxGameplayState(GameState):
                 screen, int(self.game.ball[0]), int(self.game.ball[1]),
                 self.game.fourseamballsize, (255, 255, 255)
             )
+
+        # Reuse the gameplay state's prompt drawer for the ABS challenge hint.
+        if self.game._challenge_window_active() and not self.game.abs_overlay.is_active():
+            GameplayState._draw_abs_challenge_prompt(self, screen)
 
 
 class GameDayState(GameState):

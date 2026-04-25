@@ -714,7 +714,37 @@
         0
       ],
       "opponent_starter": "degrom"
+    },
+    {
+      "date": "2026-04-25T18:00:49.162971",
+      "player_score": 7,
+      "opponent_score": 10,
+      "result": "LOSS",
+      "difficulty": "hall_of_fame",
+      "player_inning_scores": [
+        0,
+        0,
+        0,
+        4,
+        0,
+        0,
+        0,
+        1,
+        2
+      ],
+      "opponent_inning_scores": [
+        2,
+        1,
+        4,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3
+      ],
+      "opponent_starter": "yamamoto"
     }
   ],
-  "last_updated": "2026-04-21T19:25:13.280967"
+  "last_updated": "2026-04-25T18:00:49.163404"
 }
