@@ -8,7 +8,7 @@ from utils.pitch_physics import PitchTrajectory, UmpireCamera, DEFAULT_CAMERA
 
 # Load the model once, ideally passed in or as a singleton
 import pickle
-from config import get_path, ABS_ZONE, ABS_BALL_RADIUS
+from config import get_path, ABS_ZONE, ABS_BALL_RADIUS, CHALLENGE_WINDOW_MS
 model = pickle.load(open(get_path("ai/ai_umpire.pkl"), "rb"))
 
 class PitchSimulation:
@@ -538,7 +538,12 @@ class PitchSimulation:
             runs_scored = self.game.scoreKeeper.get_score() - score_before
 
             self.game._display_pitch_results("WALK", self.pitchtype, self.speed_mph)
-            self.game.ui_manager.schedule_banner("WALK", delay=450)
+            # Defer until the ABS challenge window closes so the banner can't
+            # type itself in halfway underneath the challenge overlay. With
+            # ABS turned off there's no window, so keep the original sync.
+            abs_enabled = self.game.settings_manager.get_setting("abs_enabled")
+            walk_delay = CHALLENGE_WINDOW_MS + 50 if abs_enabled else 450
+            self.game.ui_manager.schedule_banner("WALK", delay=walk_delay)
 
             # Record in gameday mode
             if self.game.in_gameday_mode:
@@ -582,7 +587,16 @@ class PitchSimulation:
                 self.new_entry['swinging_strike'] = True
                 self.game._display_pitch_results("SWINGING STRIKE", self.pitchtype, self.speed_mph)
 
-            self.game.ui_manager.schedule_banner("STRIKEOUT", delay=450)
+            # Taken third strikes are challengeable — wait for the window to
+            # close before showing the banner so it can't appear under the
+            # ABS overlay. Swinging strikeouts aren't challengeable, and if
+            # ABS is disabled in settings there's no window at all, so both
+            # cases keep the original sync-with-umpire-call delay.
+            is_taken = (self.game.swing_started == 0)
+            abs_enabled = self.game.settings_manager.get_setting("abs_enabled")
+            defer = is_taken and abs_enabled
+            banner_delay = CHALLENGE_WINDOW_MS + 50 if defer else 450
+            self.game.ui_manager.schedule_banner("STRIKEOUT", delay=banner_delay)
 
             # Record in gameday mode
             if self.game.in_gameday_mode:

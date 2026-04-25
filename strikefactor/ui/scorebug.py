@@ -211,6 +211,10 @@ class Scorebug:
         if cm is None:
             return
 
+        sm = getattr(self.game, "settings_manager", None)
+        if sm is not None and not sm.get_setting("abs_enabled"):
+            return
+
         if self.game.in_gameday_mode and self.game.gameday_manager is not None:
             side = "away" if self.game.gameday_manager.is_top_inning else "home"
         else:

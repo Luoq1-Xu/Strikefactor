@@ -25,7 +25,8 @@ class SettingsManager:
             "batter_handedness": "R",
             "display_mode": "windowed",  # "windowed" or "fullscreen"
             "display_fps": 60,           # Options: 60, 120
-            "engine_fps": 60             # Options: 60, 120, 240, 360 (60 = original physics)
+            "engine_fps": 60,            # Options: 60, 120, 240, 360 (60 = original physics)
+            "abs_enabled": True          # MLB-style ball/strike challenge system
         }
         self.current_settings = self.load_settings()
 

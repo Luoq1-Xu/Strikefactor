@@ -156,40 +156,55 @@ class UIManager:
             # Difficulty selection buttons
             'difficulty_rookie': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((360, 200), (160, 50)),
-                text='Rookie', manager=manager),
+                text='Rookie', manager=manager,
+                object_id=ObjectID(class_id='@settings_button')),
             'difficulty_amateur': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((540, 200), (160, 50)),
-                text='Amateur', manager=manager),
+                text='Amateur', manager=manager,
+                object_id=ObjectID(class_id='@settings_button')),
             'difficulty_professional': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((720, 200), (160, 50)),
-                text='Professional', manager=manager),
+                text='Professional', manager=manager,
+                object_id=ObjectID(class_id='@settings_button')),
             'difficulty_allstar': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((450, 270), (160, 50)),
-                text='All-Star', manager=manager),
+                text='All-Star', manager=manager,
+                object_id=ObjectID(class_id='@settings_button')),
             'difficulty_halloffame': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((630, 270), (160, 50)),
-                text='Hall of Fame', manager=manager),
+                text='Hall of Fame', manager=manager,
+                object_id=ObjectID(class_id='@settings_button')),
 
             # Other settings toggles
             'toggle_ump_sound_settings': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((390, 360), (220, 50)),
-                text='Umpire Sound: ON', manager=manager),
+                text='Umpire Sound: ON', manager=manager,
+                object_id=ObjectID(class_id='@settings_button')),
             'toggle_strikezone_settings': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((630, 360), (220, 50)),
-                text='Strikezone: ON', manager=manager),
+                text='Strikezone: ON', manager=manager,
+                object_id=ObjectID(class_id='@settings_button')),
+            'toggle_abs_settings': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((870, 360), (220, 50)),
+                text='ABS Challenge: ON', manager=manager,
+                object_id=ObjectID(class_id='@settings_button')),
             # FPS settings buttons (cycle-style)
             'display_fps_setting': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((390, 430), (220, 50)),
-                text='Display FPS: 60', manager=manager),
+                text='Display FPS: 60', manager=manager,
+                object_id=ObjectID(class_id='@settings_button')),
             'engine_fps_setting': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((630, 430), (220, 50)),
-                text='Engine FPS: 60', manager=manager),
+                text='Engine FPS: 60', manager=manager,
+                object_id=ObjectID(class_id='@settings_button')),
             'key_bindings': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((515, 500), (250, 50)),
-                text='Key Bindings', manager=manager),
+                text='Key Bindings', manager=manager,
+                object_id=ObjectID(class_id='@settings_button')),
             'reset_settings': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((515, 570), (250, 50)),
-                text='Reset to Defaults', manager=manager),
+                text='Reset to Defaults', manager=manager,
+                object_id=ObjectID(class_id='@settings_button')),
 
             # Key binding configuration buttons
             'back_from_keybinds': pygame_gui.elements.UIButton(
@@ -669,7 +684,6 @@ class UIManager:
             self.buttons['mcclanahan'].show()
             self.buttons['random_scenario'].show()
             self.buttons['gameday'].show()
-            self.buttons['settings'].show()
             self.buttons['back_to_mode_select'].show()
             self.banner.hide()
             self.scoreboard.hide()
@@ -719,6 +733,7 @@ class UIManager:
             self.buttons['difficulty_halloffame'].show()
             self.buttons['toggle_ump_sound_settings'].show()
             self.buttons['toggle_strikezone_settings'].show()
+            self.buttons['toggle_abs_settings'].show()
             self.buttons['display_fps_setting'].show()
             self.buttons['engine_fps_setting'].show()
             self.buttons['key_bindings'].show()
@@ -781,6 +796,7 @@ class UIManager:
             # Top-level mode selection (Arcade/Sandbox)
             self.buttons['arcade_mode'].show()
             self.buttons['sandbox_mode'].show()
+            self.buttons['settings'].show()
             self.banner.hide()
             self.scoreboard.hide()
             self.pitch_result.hide()
@@ -863,6 +879,10 @@ class UIManager:
         # Update strikezone button
         show_strikezone = settings_manager.get_setting("show_strikezone")
         self.buttons['toggle_strikezone_settings'].set_text(f"Strikezone: {'ON' if show_strikezone else 'OFF'}")
+
+        # Update ABS challenge button
+        abs_enabled = settings_manager.get_setting("abs_enabled")
+        self.buttons['toggle_abs_settings'].set_text(f"ABS Challenge: {'ON' if abs_enabled else 'OFF'}")
 
         # Update FPS buttons
         display_fps = settings_manager.get_display_fps()

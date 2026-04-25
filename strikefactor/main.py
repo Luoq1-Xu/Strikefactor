@@ -455,6 +455,7 @@ class Game:
         # Settings toggle callbacks
         self.ui_manager.register_button_callback('toggle_ump_sound_settings', lambda: self.toggle_umpire_sound_setting())
         self.ui_manager.register_button_callback('toggle_strikezone_settings', lambda: self.toggle_strikezone_setting())
+        self.ui_manager.register_button_callback('toggle_abs_settings', lambda: self.toggle_abs_setting())
         self.ui_manager.register_button_callback('reset_settings', lambda: self.reset_settings())
 
         # FPS settings callbacks
@@ -910,11 +911,10 @@ class Game:
         self.state_manager.change_state('menu')
 
     def exit_settings_menu(self):
-        """Exit settings menu and return to main menu."""
-        self.menu_state = 0
-        self.ui_manager.set_button_visibility('main_menu')
+        """Exit settings menu and return to the mode-select screen."""
+        self.menu_state = 'mode_select'
         self.ui_manager.hide_banner()
-        self.state_manager.change_state('menu')
+        self.state_manager.change_state('mode_select')
 
     def set_difficulty(self, difficulty_level):
         """Set the difficulty level."""
@@ -934,6 +934,16 @@ class Game:
         """Toggle strikezone display setting."""
         current = self.settings_manager.get_setting("show_strikezone")
         self.settings_manager.set_setting("show_strikezone", not current)
+        self.ui_manager.update_settings_button_states(self.settings_manager)
+
+    def toggle_abs_setting(self):
+        """Toggle MLB-style ABS ball/strike challenge system on or off."""
+        current = self.settings_manager.get_setting("abs_enabled")
+        self.settings_manager.set_setting("abs_enabled", not current)
+        # If disabling mid-state, drop any in-flight challenge prompt so the
+        # gameplay overlay stops drawing it immediately.
+        if not self.settings_manager.get_setting("abs_enabled"):
+            self.pending_challenge = None
         self.ui_manager.update_settings_button_states(self.settings_manager)
 
     def reset_settings(self):
@@ -1284,6 +1294,11 @@ class Game:
         """Called by PitchSimulation right after the call commits. Stores the
         pre-commit snapshot so the call can be fully reversed within the
         challenge window (including terminal walks / strikeouts)."""
+        # Respect the user setting — if ABS is off, never open a window.
+        if not self.settings_manager.get_setting("abs_enabled"):
+            self.pending_challenge = None
+            return
+
         if self.in_gameday_mode and self.gameday_manager is not None:
             side = "away" if self.gameday_manager.is_top_inning else "home"
         else:
