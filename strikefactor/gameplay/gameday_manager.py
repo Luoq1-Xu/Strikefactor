@@ -11,6 +11,11 @@ from typing import List, Dict, Tuple, Optional
 from helpers import ScoreKeeper
 
 
+# Single source of truth for the pitchers that can appear in GameDay mode
+# (as the opponent's pitching staff). Order matches the UI / carousel order.
+ALL_PITCHERS = ['sale', 'degrom', 'yamamoto', 'sasaki', 'mcclanahan']
+
+
 class GameEvent:
     """Represents a single game event (at-bat result)."""
 
@@ -25,6 +30,9 @@ class GameEvent:
 
     def __str__(self):
         half = "Top" if self.is_top else "Bot"
+        # Mound visits have no batter — show just the result
+        if self.result.startswith("MOUND VISIT"):
+            return f"[{half} {self.inning}] {self.result}"
         runs_str = f" ({self.runs_scored} run{'s' if self.runs_scored != 1 else ''})" if self.runs_scored > 0 else ""
         return f"[{half} {self.inning}] {self.batter_name} - {self.result}{runs_str} (vs {self.pitcher_name})"
 
@@ -40,6 +48,8 @@ class PitcherStats:
         self.runs_allowed = 0
         self.strikeouts = 0
         self.walks = 0
+        self.home_runs_allowed = 0
+        self.consecutive_hits = 0  # Tracks back-to-back hits for relief decisions
         self.is_active = False
 
     @property
@@ -89,21 +99,32 @@ class PitcherStats:
             self.outs_recorded += 1
             if outcome == 'STRIKEOUT':
                 self.strikeouts += 1
+            self.consecutive_hits = 0
         elif outcome in ['SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN']:
             self.hits_allowed += 1
+            self.consecutive_hits += 1
+            if outcome == 'HOME RUN':
+                self.home_runs_allowed += 1
         elif outcome == 'WALK':
             self.walks += 1
+            # Walk doesn't reset consecutive hits (still in trouble)
 
         self.runs_allowed += runs
 
     def get_innings_pitched(self) -> float:
-        """Calculate innings pitched."""
+        """Calculate innings pitched (true decimal, for internal logic)."""
         return self.outs_recorded / 3.0
+
+    def get_ip_display(self) -> str:
+        """Format innings pitched in baseball notation (e.g. 6.2 = 6 full + 2 outs)."""
+        full_innings = self.outs_recorded // 3
+        partial_outs = self.outs_recorded % 3
+        return f"{full_innings}.{partial_outs}"
 
     def get_summary(self) -> str:
         """Get a summary string of pitcher stats."""
-        ip = self.get_innings_pitched()
-        return (f"{self.name}: {ip:.1f} IP, {self.hits_allowed} H, "
+        ip = self.get_ip_display()
+        return (f"{self.name}: {ip} IP, {self.hits_allowed} H, "
                 f"{self.runs_allowed} R, {self.strikeouts} K, "
                 f"{self.walks} BB, {self.pitch_count} pitches")
 
@@ -135,7 +156,8 @@ class GameDayManager:
         'hall_of_fame': {'hit_mult': 1.5,  'walk_mult': 1.3, 'k_mult': 0.7},
     }
 
-    def __init__(self, player_name: str = "Player", difficulty: str = "amateur"):
+    def __init__(self, player_name: str = "Player", difficulty: str = "amateur",
+                 starter_name: str = "yamamoto"):
         self.player_name = player_name
         self.opponent_name = "Opponent"
         self.difficulty = difficulty
@@ -146,6 +168,8 @@ class GameDayManager:
         self.player_score = 0
         self.opponent_score = 0
         self.game_over = False
+        self.is_walkoff = False
+        self._result_saved = False
 
         # Inning-by-inning score tracking
         self.player_inning_scores = []
@@ -162,10 +186,14 @@ class GameDayManager:
         self.player_scorekeeper = ScoreKeeper()  # For player's at-bats
         self.opponent_scorekeeper = ScoreKeeper()  # For opponent's at-bats
 
-        # Opponent pitchers (player bats against these - actual game pitchers)
+        # Opponent pitchers (player bats against these - actual game pitchers).
+        # Relievers are derived from ALL_PITCHERS minus the chosen starter so
+        # the pool always mirrors the currently installed roster.
+        if starter_name not in ALL_PITCHERS:
+            starter_name = 'yamamoto'
         self.opponent_pitcher_preset = {
-            'starter': 'yamamoto',
-            'relievers': ['sasaki', 'degrom', 'mcclanahan'],
+            'starter': starter_name,
+            'relievers': [p for p in ALL_PITCHERS if p != starter_name],
             'pitch_count_thresholds': [90, 100, 110]  # More aggressive relief thresholds
         }
         self.current_pitcher_name = self.opponent_pitcher_preset['starter']
@@ -314,21 +342,21 @@ class GameDayManager:
         if not self.available_opponent_relievers:
             return None
 
-        # Log mound visit event
-        old_pitcher = self.current_pitcher_name
-        mound_event = GameEvent(
-            self.current_inning, self.is_top_inning,
-            "", old_pitcher,
-            f"MOUND VISIT - {old_pitcher.upper()} being relieved"
-        )
-        self.event_log.append(mound_event)
-
         # Set current pitcher as inactive
-        self.opponent_pitcher_stats[self.current_pitcher_name].is_active = False
+        old_pitcher = self.current_pitcher_name
+        self.opponent_pitcher_stats[old_pitcher].is_active = False
 
         # Choose a random reliever
         new_pitcher = random.choice(self.available_opponent_relievers)
         self.available_opponent_relievers.remove(new_pitcher)
+
+        # Log mound visit event with both old and new pitcher names
+        mound_event = GameEvent(
+            self.current_inning, self.is_top_inning,
+            "", old_pitcher,
+            f"MOUND VISIT - {old_pitcher.upper()} relieved by {new_pitcher.upper()}"
+        )
+        self.event_log.append(mound_event)
 
         # Initialize stats for new pitcher
         self.current_pitcher_name = new_pitcher
@@ -337,28 +365,101 @@ class GameDayManager:
 
         return new_pitcher
 
-    def should_consider_player_relief_pitcher(self) -> bool:
-        """Check if we should bring in a relief pitcher for player's team."""
-        # Don't relieve if no relievers available
+    def _get_pull_score(self, between_innings: bool = False) -> float:
+        """Compute a 0-1 'pull score' for the active player pitcher.
+
+        Factors mirror what a real pitching coach weighs batter-to-batter:
+        pitch count / fatigue, recent trouble (consecutive hits, inning
+        runs), and total workload.  A higher score means the pitcher is
+        more likely to be pulled.  Between innings the threshold is lower
+        (easier to make the change).
+
+        Returns a value roughly in [0, 1]; values >= 1 are an automatic pull.
+        """
+        stats = self.get_active_player_pitcher_stats()
+        is_reliever = self.current_player_pitcher_name in self.player_pitcher_preset['relievers']
+        pc = stats.pitch_count
+        ip = stats.get_innings_pitched()
+        score = 0.0
+
+        # --- Pitch count fatigue (gradual ramp) ---
+        if is_reliever:
+            # Relievers: ramp starts at 15, strong by 25
+            if pc >= 15:
+                score += min(0.5, (pc - 15) * 0.03)  # 0.3 at 25, 0.45 at 30
+        else:
+            # Starters: ramp starts at 70, strong by 95
+            if pc >= 70:
+                score += min(0.6, (pc - 70) * 0.02)  # 0.2 at 80, 0.4 at 90, 0.5 at 95
+
+        # --- Hard pitch count ceiling ---
+        if pc >= 105:
+            return 1.0  # Automatic pull, no pitcher goes past 105
+
+        # --- Workload (innings pitched) ---
+        if is_reliever:
+            if ip >= 2.0:
+                score += 0.4
+            elif ip >= 1.0:
+                score += 0.15
+        else:
+            if ip >= 7.0:
+                score += 0.5
+            elif ip >= 6.0:
+                score += 0.25
+            elif ip >= 5.0:
+                score += 0.1
+
+        # --- Recent trouble (consecutive hits) ---
+        consec = stats.consecutive_hits
+        if consec >= 3:
+            score += 0.5   # Three hits in a row — big trouble
+        elif consec >= 2:
+            score += 0.25  # Back-to-back hits — concerning
+
+        # --- Inning damage ---
+        if self._current_half_runs >= 3:
+            score += 0.45
+        elif self._current_half_runs >= 2:
+            score += 0.2
+        elif self._current_half_runs >= 1:
+            score += 0.05
+
+        # --- Runs with no outs (meltdown) ---
+        if self._current_half_runs >= 2 and self.current_outs == 0:
+            score += 0.2
+
+        # --- Between innings: lower threshold (clean break) ---
+        if between_innings:
+            score += 0.15
+
+        return score
+
+    def should_consider_player_relief_pitcher(self, between_innings: bool = False) -> bool:
+        """Decide whether to pull the active player pitcher.
+
+        Called after every batter (mid-inning) and between innings.
+        Uses a composite pull score with a probabilistic threshold so
+        decisions feel natural rather than mechanical.
+        """
         if not self.available_player_relievers:
             return False
 
-        stats = self.get_active_player_pitcher_stats()
+        score = self._get_pull_score(between_innings)
 
-        # For starters, consider relief after 5-6 innings
-        # For relievers, consider relief after 1-2 innings
-        is_reliever = self.current_player_pitcher_name in self.player_pitcher_preset['relievers']
+        # Automatic pull
+        if score >= 1.0:
+            return True
 
-        if is_reliever:
-            # Relievers: 1-2 innings max
-            if stats.get_innings_pitched() >= random.choice([1.0, 2.0]):
-                return random.random() < 0.7  # 70% chance to change
-        else:
-            # Starters: 5-6 innings
-            if stats.get_innings_pitched() >= random.choice([5.0, 6.0]):
-                return random.random() < 0.6  # 60% chance to change
+        # Below a minimum score, never pull
+        if score < 0.35:
+            return False
 
-        return False
+        # Probabilistic zone: higher score → higher chance
+        # At 0.35 → ~10%, at 0.7 → ~70%, at 0.9 → ~95%
+        pull_prob = (score - 0.25) / 0.75  # linear map 0.25→0, 1.0→1.0
+        pull_prob = max(0.0, min(1.0, pull_prob))
+        return random.random() < pull_prob
 
     def substitute_player_relief_pitcher(self) -> Optional[str]:
         """Substitute in a relief pitcher for player's team. Returns new pitcher name or None."""
@@ -398,8 +499,14 @@ class GameDayManager:
 
         # Track PLAYER'S pitcher stats (opponent is batting against player's pitcher)
         pitcher_stats = self.get_active_player_pitcher_stats()
-        # Simulate some pitches (3-6 per at-bat)
-        pitches_thrown = random.randint(3, 6)
+        # Simulate pitches per at-bat (weighted toward realistic counts)
+        # Strikeouts/walks tend to have more pitches; outs in play fewer
+        if outcome == 'STRIKEOUT':
+            pitches_thrown = random.choices([3, 4, 5, 6], weights=[15, 30, 35, 20], k=1)[0]
+        elif outcome == 'WALK':
+            pitches_thrown = random.choices([4, 5, 6, 7], weights=[10, 30, 40, 20], k=1)[0]
+        else:
+            pitches_thrown = random.choices([1, 2, 3, 4, 5], weights=[5, 15, 35, 30, 15], k=1)[0]
         for _ in range(pitches_thrown):
             pitcher_stats.record_pitch()
 
@@ -484,6 +591,25 @@ class GameDayManager:
         if outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT']:
             self.current_outs += 1
 
+    def check_walkoff(self, pending_inning_runs: int) -> bool:
+        """Check if a walk-off condition is met.
+
+        Args:
+            pending_inning_runs: Runs scored in the current half-inning
+                                 (from scoreKeeper.get_score()).
+
+        Returns:
+            True if the player has taken the lead in the bottom of the 9th+.
+        """
+        if (self.current_inning >= 9
+                and not self.is_top_inning
+                and not self.game_over
+                and self.player_score + pending_inning_runs > self.opponent_score):
+            self.game_over = True
+            self.is_walkoff = True
+            return True
+        return False
+
     def end_half_inning(self):
         """End the current half inning and switch sides."""
         self.current_outs = 0
@@ -532,12 +658,29 @@ class GameDayManager:
     # --- Display / summary methods ---
 
     def get_box_score_lines(self) -> dict:
-        """Get inning-by-inning score arrays for box score display."""
-        opp = self.opponent_inning_scores + [0] * (9 - len(self.opponent_inning_scores))
-        plr = self.player_inning_scores + [0] * (9 - len(self.player_inning_scores))
+        """Get inning-by-inning score arrays for box score display.
+
+        Includes the current half-inning's runs even before
+        end_half_inning() has been called, so the box score stays in sync.
+        """
+        opp = list(self.opponent_inning_scores)
+        plr = list(self.player_inning_scores)
+
+        # Append the in-progress half-inning runs if not yet committed
+        if self._current_half_runs > 0 or (self.current_inning > len(opp) if self.is_top_inning else self.current_inning > len(plr)):
+            if self.is_top_inning:
+                if len(opp) < self.current_inning:
+                    opp.append(self._current_half_runs)
+            else:
+                if len(plr) < self.current_inning:
+                    plr.append(self._current_half_runs)
+
+        # Pad to 9 innings
+        opp = (opp + [0] * 9)[:9]
+        plr = (plr + [0] * 9)[:9]
         return {
-            'opponent': opp[:9],
-            'player': plr[:9],
+            'opponent': opp,
+            'player': plr,
             'opponent_total': self.opponent_score,
             'player_total': self.player_score,
         }
@@ -588,6 +731,10 @@ class GameDayManager:
 
     def save_game_result(self):
         """Save the completed game result to gameday_history.json."""
+        if self._result_saved:
+            return
+        self._result_saved = True
+
         result_str = "WIN" if self.player_score > self.opponent_score else \
                      "LOSS" if self.opponent_score > self.player_score else "TIE"
         result = {
@@ -632,3 +779,21 @@ class GameDayManager:
         losses = sum(1 for g in history['games'] if g.get('result') == 'LOSS')
         ties = sum(1 for g in history['games'] if g.get('result') == 'TIE')
         return {'wins': wins, 'losses': losses, 'ties': ties, 'total': len(history['games'])}
+
+    @classmethod
+    def load_history_record_vs(cls, pitcher_name: str) -> dict:
+        """Get win/loss/tie record from saved history, filtered to games where
+        the given pitcher was the opponent starter. Callable without an instance
+        because the pitcher carousel renders before a GameDayManager exists."""
+        target = (pitcher_name or '').lower()
+        history = cls._load_history()
+        games = [g for g in history['games']
+                 if (g.get('opponent_starter') or '').lower() == target]
+        wins = sum(1 for g in games if g.get('result') == 'WIN')
+        losses = sum(1 for g in games if g.get('result') == 'LOSS')
+        ties = sum(1 for g in games if g.get('result') == 'TIE')
+        return {'wins': wins, 'losses': losses, 'ties': ties, 'total': len(games)}
+
+    def get_career_record_vs(self, pitcher_name: str) -> dict:
+        """Instance convenience wrapper around load_history_record_vs."""
+        return self.load_history_record_vs(pitcher_name)

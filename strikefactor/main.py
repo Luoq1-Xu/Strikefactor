@@ -417,6 +417,7 @@ class Game:
         # Navigation callbacks
         self.ui_manager.register_button_callback('main_menu', lambda: self.set_menu_state(0))
         self.ui_manager.register_button_callback('back_to_main_menu', lambda: self.set_menu_state(0))
+        self.ui_manager.register_button_callback('gameday_main_menu', lambda: self.set_menu_state(0))
         self.ui_manager.register_button_callback('visualise', self.toggle_track)
         self.ui_manager.register_button_callback('return_to_game', lambda: self.exit_view_pitches())
         self.ui_manager.register_button_callback('view_pitches', self.toggle_view_pitches)
@@ -689,31 +690,43 @@ class Game:
         self.ui_manager.update_scouting_panel(self.current_pitcher)
 
     def enter_gameday_mode(self):
-        """Enter GameDay mode - a full 9-inning simulated game."""
+        """Enter GameDay mode - show the pitcher selection screen.
+
+        The actual GameDayManager is constructed in start_gameday_with_starter
+        once the user confirms their starter from the carousel.
+        """
+        self.in_gameday_mode = True
+        self.gameday_manager = None
+        self.menu_state = 'gameday'
+        self.state_manager.change_state('gameday')
+
+    def start_gameday_with_starter(self, starter_name: str):
+        """Build the GameDayManager with the chosen starter and begin play."""
         from gameplay.gameday_manager import GameDayManager
 
-        # Initialize gameday manager and set flag
         difficulty = self.settings_manager.get_difficulty().value
-        self.gameday_manager = GameDayManager(player_name="Player", difficulty=difficulty)
+        self.gameday_manager = GameDayManager(
+            player_name="Player",
+            difficulty=difficulty,
+            starter_name=starter_name,
+        )
         self.in_gameday_mode = True
 
-        # Set starting pitcher (Yamamoto)
-        self.pitcher_manager.set_current_pitcher('yamamoto')
+        # Install the chosen pitcher as current and attach fatigue tracking.
+        self.pitcher_manager.set_current_pitcher(starter_name)
         self.current_pitcher = self.pitcher_manager.get_current_pitcher()
-
-        # Attach fatigue stats so pitch simulation applies fatigue modifiers
         self.current_pitcher.set_fatigue_stats(
             self.gameday_manager.get_active_pitcher_stats()
         )
 
-        # Reset game stats for fresh start
+        # Fresh per-game state.
         self.game_stats.reset_game_stats()
         self.batter_profile.reset()
         self.scoreKeeper.reset()
+        self.inning_ended = False
 
         self.menu_state = 'gameday'
-        self.state_manager.change_state('gameday')
-        # Update scouting panel with new pitcher
+        self.state_manager.change_state('gameday_transition')
         self.ui_manager.update_scouting_panel(self.current_pitcher)
 
     def enter_arcade_mode(self):
@@ -809,14 +822,9 @@ class Game:
 
         # Return to the appropriate state based on inning status and mode
         if self.currentouts == 3 and self.inning_ended:
-            if self.in_gameday_mode:
-                self.ui_manager.set_button_visibility('gameday_transition')
-                self.menu_state = 'gameday_transition'
-                self.state_manager.change_state('gameday_transition')
-            else:
-                self.ui_manager.set_button_visibility('inning_end')
-                self.menu_state = 'inning_end'
-                self.state_manager.change_state('inning_end')
+            self.ui_manager.set_button_visibility('inning_end')
+            self.menu_state = 'inning_end'
+            self.state_manager.change_state('inning_end')
         elif previous_mode == 'sandbox_gameplay' or self.current_gamemode == 'sandbox_gameplay':
             # Return to sandbox gameplay mode
             self.ui_manager.set_button_visibility('sandbox_gameplay')
@@ -1086,18 +1094,18 @@ class Game:
                 # DON'T call end_half_inning() here - let the transition state handle it
                 # This ensures the state machine sees the correct inning state
 
-                # Transition to gameday transition state
-                self.menu_state = 'gameday_transition'
-                self.state_manager.change_state('gameday_transition')
-            else:
-                # Normal mode - go to inning end
-                self.menu_state = 'inning_end'
-                self.state_manager.change_state('inning_end')
+            # Show inning end screen with continue button (both modes)
+            self.menu_state = 'inning_end'
+            self.state_manager.change_state('inning_end')
             
     def continue_to_summary(self):
-        """Continue from inning end to summary state."""
-        self.menu_state = 100
-        self.state_manager.change_state('summary')
+        """Continue from inning end to summary or gameday transition."""
+        if self.in_gameday_mode:
+            self.menu_state = 'gameday_transition'
+            self.state_manager.change_state('gameday_transition')
+        else:
+            self.menu_state = 100
+            self.state_manager.change_state('summary')
             
     def run(self):
         """Main game loop."""

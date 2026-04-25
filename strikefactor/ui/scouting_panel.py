@@ -40,6 +40,44 @@ COLOR_WHITE = (255, 255, 255)
 COLOR_GRAY = (150, 150, 150)
 
 
+def get_stat_color(stat_name: str, value: float):
+    """Return the quality color for a given pitcher stat value.
+
+    Shared by ScoutingReportPanel and the gameday pitcher carousel so the two
+    views never drift in their green/yellow/red thresholds. Unknown stat names
+    fall back to white.
+    """
+    if value is None:
+        return COLOR_GRAY
+
+    name = stat_name.upper()
+    if name in ('K/9', 'K9'):
+        if value >= 9.0:
+            return COLOR_GREEN
+        if value >= 6.0:
+            return COLOR_YELLOW
+        return COLOR_RED
+    if name in ('BB/9', 'BB9'):
+        if value <= 2.5:
+            return COLOR_GREEN
+        if value <= 4.0:
+            return COLOR_YELLOW
+        return COLOR_RED
+    if name in ('STRIKE%', 'STR%', 'STRIKE_PCT'):
+        if value >= 65:
+            return COLOR_GREEN
+        if value >= 55:
+            return COLOR_YELLOW
+        return COLOR_RED
+    if name == 'WHIP':
+        if value <= 1.10:
+            return COLOR_GREEN
+        if value <= 1.35:
+            return COLOR_YELLOW
+        return COLOR_RED
+    return COLOR_WHITE
+
+
 class ScoutingReportPanel(UIPanel):
     """Persistent overlay panel showing pitcher scouting information."""
 
@@ -192,11 +230,11 @@ class ScoutingReportPanel(UIPanel):
         strike_pct = pitcher._calculate_strike_pct()
         whip = pitcher._calculate_whip()
 
-        # Update stat labels with color-coded values
-        self._update_stat_label('K/9', k9, self._get_k9_color(k9))
-        self._update_stat_label('BB/9', bb9, self._get_bb9_color(bb9))
-        self._update_stat_label('Strike%', strike_pct, self._get_strike_pct_color(strike_pct), suffix='%')
-        self._update_stat_label('WHIP', whip, self._get_whip_color(whip))
+        # Update stat labels with color-coded values (shared helper with carousel)
+        self._update_stat_label('K/9', k9, get_stat_color('K/9', k9))
+        self._update_stat_label('BB/9', bb9, get_stat_color('BB/9', bb9))
+        self._update_stat_label('Strike%', strike_pct, get_stat_color('Strike%', strike_pct), suffix='%')
+        self._update_stat_label('WHIP', whip, get_stat_color('WHIP', whip))
 
         # Update arsenal (compact format)
         pitch_names = pitcher.get_pitch_names()
@@ -227,42 +265,6 @@ class ScoutingReportPanel(UIPanel):
                     color_indicator = ' [-]'
 
             self.stat_labels[stat_name].set_text(f'{formatted}{color_indicator}')
-
-    def _get_k9_color(self, k9):
-        """Get color for K/9 based on thresholds."""
-        if k9 >= 9.0:
-            return COLOR_GREEN
-        elif k9 >= 6.0:
-            return COLOR_YELLOW
-        else:
-            return COLOR_RED
-
-    def _get_bb9_color(self, bb9):
-        """Get color for BB/9 based on thresholds (lower is better)."""
-        if bb9 <= 2.5:
-            return COLOR_GREEN
-        elif bb9 <= 4.0:
-            return COLOR_YELLOW
-        else:
-            return COLOR_RED
-
-    def _get_strike_pct_color(self, pct):
-        """Get color for strike percentage."""
-        if pct >= 65:
-            return COLOR_GREEN
-        elif pct >= 55:
-            return COLOR_YELLOW
-        else:
-            return COLOR_RED
-
-    def _get_whip_color(self, whip):
-        """Get color for WHIP (lower is better)."""
-        if whip <= 1.10:
-            return COLOR_GREEN
-        elif whip <= 1.35:
-            return COLOR_YELLOW
-        else:
-            return COLOR_RED
 
     def toggle(self):
         """Toggle panel visibility."""

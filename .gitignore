@@ -60,6 +60,9 @@ docs/_build/
 
 # StrikeFactor runtime data
 strikefactor/data/strikefactor.db
+strikefactor/data/strikefactor.db-wal
+strikefactor/data/strikefactor.db-shm
+strikefactor/data/backups/
 
 # Generated analysis output
 analysis_output/
