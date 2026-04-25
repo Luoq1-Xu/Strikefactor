@@ -227,8 +227,19 @@ class UIManager:
 
             # GameDay mode buttons
             'start_gameday': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((490, 650), (300, 60)),
+                relative_rect=pygame.Rect((490, 560), (300, 55)),
                 text='Start Game', manager=manager),
+            'gameday_prev_pitcher': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((255, 330), (50, 50)),
+                text='<', manager=manager),
+            'gameday_next_pitcher': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((975, 330), (50, 50)),
+                text='>', manager=manager),
+            # Dedicated menu-screen sized "main menu" for gameday menu states,
+            # so the tiny (6, 428) sidebar button isn't shown on full menu screens.
+            'gameday_main_menu': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((50, 660), (150, 45)),
+                text='Main Menu', manager=manager),
             'next_inning': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((490, 550), (300, 50)),
                 text='Next Inning', manager=manager),
@@ -730,9 +741,11 @@ class UIManager:
             self.scoreboard.hide()
             self.pitch_result.hide()
         elif state == 'gameday_start':
-            # Initial gameday screen with start button
+            # Initial gameday screen with pitcher carousel
             self.buttons['start_gameday'].show()
-            self.buttons['main_menu'].show()
+            self.buttons['gameday_prev_pitcher'].show()
+            self.buttons['gameday_next_pitcher'].show()
+            self.buttons['gameday_main_menu'].show()
             self.scoreboard.hide()
             self.pitch_result.hide()
             self.scouting_panel.hide()
@@ -742,7 +755,7 @@ class UIManager:
             # After player's inning ends, before opponent bats
             self.buttons['next_inning'].show()
             self.buttons['view_game_log'].show()
-            self.buttons['main_menu'].show()
+            self.buttons['gameday_main_menu'].show()
             self.scoreboard.hide()
             self.pitch_result.hide()
             self.scouting_panel.hide()
@@ -751,7 +764,7 @@ class UIManager:
             # After opponent simulation, ready to start player batting
             self.buttons['start_batting'].show()
             self.buttons['view_game_log'].show()
-            self.buttons['main_menu'].show()
+            self.buttons['gameday_main_menu'].show()
             self.scoreboard.hide()
             self.pitch_result.hide()
             self.scouting_panel.hide()

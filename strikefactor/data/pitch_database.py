@@ -9,7 +9,8 @@ import sqlite3
 import uuid
 import math
 import os
-from datetime import datetime
+import glob
+from datetime import datetime, timedelta
 
 
 class PitchDB:
@@ -83,14 +84,69 @@ class PitchDB:
     );
     """
 
+    # Backup policy
+    BACKUP_DIR_NAME = "backups"
+    BACKUP_MIN_INTERVAL = timedelta(hours=1)  # don't backup more than once per hour
+    BACKUP_KEEP = 30  # keep last N auto-backups
+
     def __init__(self, db_path):
         self.db_path = db_path
+        self._auto_backup(db_path)
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.executescript(self.SCHEMA)
         self.conn.commit()
+
+    @classmethod
+    def _auto_backup(cls, db_path):
+        """Create a timestamped snapshot of the db before opening it.
+
+        Protects against accidental data loss (schema drops, file corruption,
+        mistaken overwrites). Uses SQLite's online backup API so it is safe
+        even if another process briefly held the db. Silently no-ops if the
+        source db doesn't exist yet (first run) or anything goes wrong —
+        backups must never prevent the game from starting.
+        """
+        try:
+            if not os.path.exists(db_path) or os.path.getsize(db_path) == 0:
+                return
+
+            backup_dir = os.path.join(os.path.dirname(db_path), cls.BACKUP_DIR_NAME)
+            os.makedirs(backup_dir, exist_ok=True)
+
+            # Throttle: skip if a recent auto-backup already exists
+            pattern = os.path.join(backup_dir, "strikefactor_auto_*.db")
+            existing = sorted(glob.glob(pattern))
+            if existing:
+                newest_mtime = datetime.fromtimestamp(os.path.getmtime(existing[-1]))
+                if datetime.now() - newest_mtime < cls.BACKUP_MIN_INTERVAL:
+                    return
+
+            # Online backup — works even with WAL / concurrent readers
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            dest_path = os.path.join(backup_dir, f"strikefactor_auto_{timestamp}.db")
+            src = sqlite3.connect(db_path)
+            try:
+                dst = sqlite3.connect(dest_path)
+                try:
+                    src.backup(dst)
+                finally:
+                    dst.close()
+            finally:
+                src.close()
+
+            # Prune old backups, keeping the most recent BACKUP_KEEP
+            all_auto = sorted(glob.glob(pattern))
+            for old in all_auto[:-cls.BACKUP_KEEP]:
+                try:
+                    os.remove(old)
+                except OSError:
+                    pass
+        except Exception:
+            # Never let backup failure stop the game from starting
+            pass
 
     def insert_pitch(self, pitch_dict, trajectory_rows):
         """Insert a pitch and its trajectory samples in one transaction."""

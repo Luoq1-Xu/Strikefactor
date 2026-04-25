@@ -843,12 +843,21 @@ class SandboxGameplayState(GameState):
 class GameDayState(GameState):
     """Entry screen for GameDay mode - a full 9-inning simulated game."""
 
+    CARD_RECT = pygame.Rect(310, 210, 660, 285)
+
     def __init__(self, game):
         super().__init__(game)
+        from ui.pitcher_carousel import PitcherCarousel
+        self.carousel = PitcherCarousel(
+            self.game.pitcher_manager,
+            self.game.ui_manager,
+            default='yamamoto',
+        )
 
     def enter(self):
         """Show the gameday entry screen."""
-        # The gameday_manager should already be initialized in Game.enter_gameday_mode()
+        # Reset carousel to the default starter each time the screen opens.
+        self.carousel.reset('yamamoto')
         self.game.ui_manager.set_visibility_state('gameday_start')
 
     def exit(self):
@@ -860,50 +869,61 @@ class GameDayState(GameState):
         pass
 
     def handle_event(self, event):
-        """Handle events - primarily the start button."""
+        """Handle events - carousel navigation, start, keyboard shortcuts."""
         self.game.ui_manager.process_events(event)
 
         if event.type == pygame.QUIT:
             return False
 
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_LEFT:
+                self.carousel.prev()
+            elif event.key == pygame.K_RIGHT:
+                self.carousel.next()
+            elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                self._confirm_selection()
+
         if event.type == pygame_gui.UI_BUTTON_PRESSED:
-            if event.ui_element == self.game.ui_manager.buttons.get('start_gameday'):
-                # Start the first inning - opponent bats first (top of 1st)
-                self.game.inning_ended = False
-                # Transition to gameday_transition to simulate opponent's half
-                self.game.state_manager.change_state('gameday_transition')
+            buttons = self.game.ui_manager.buttons
+            if event.ui_element == buttons.get('start_gameday'):
+                self._confirm_selection()
+            elif event.ui_element == buttons.get('gameday_prev_pitcher'):
+                self.carousel.prev()
+            elif event.ui_element == buttons.get('gameday_next_pitcher'):
+                self.carousel.next()
         return True
+
+    def _confirm_selection(self):
+        """Commit the chosen starter and advance into the game."""
+        starter = self.carousel.get_selected()
+        self.game.inning_ended = False
+        self.game.start_gameday_with_starter(starter)
 
     def render(self, screen):
         """Render the gameday entry screen."""
         screen.fill((30, 40, 50))  # Dark background
 
         # Title (regular 48px font)
-        self.game.ui_manager.draw_completed_message("GameDay Mode", (500, 150))
+        self.game.ui_manager.draw_completed_message("GameDay Mode", (500, 120))
 
-        # Description (small 28px font)
-        desc_lines = [
-            "Full 9-Inning Baseball Simulation",
-            "",
-            "Starting Pitcher: YAMAMOTO",
-            "Relief Pitchers: SASAKI, DEGROM, MCCLANAHAN",
-            "",
-            "Press 'Start Game' to begin!"
-        ]
+        # Subtitle (small 28px font)
+        self.game.ui_manager.draw_completed_message(
+            "Full 9-Inning Baseball Simulation - Choose Your Opponent",
+            (285, 175), use_small_font=True)
 
-        y_offset = 260
-        for line in desc_lines:
-            if line:
-                self.game.ui_manager.draw_completed_message(line, (300, y_offset), use_small_font=True)
-            y_offset += 40
+        # Pitcher carousel card
+        self.carousel.render(screen, self.CARD_RECT)
 
-        # Career record
+        # Overall career record (all gameday games, not just selected pitcher)
         from gameplay.gameday_manager import GameDayManager
         record = GameDayManager.get_career_record()
         if record['total'] > 0:
-            record_text = f"Career Record: {record['wins']}W - {record['losses']}L - {record['ties']}T"
+            record_text = (
+                f"Overall GameDay Record: {record['wins']}W - "
+                f"{record['losses']}L - {record['ties']}T"
+            )
             self.game.ui_manager.draw_completed_message(
-                record_text, (300, y_offset + 10), use_small_font=True, color=(255, 255, 100))
+                record_text, (340, 520), use_small_font=True, color=(255, 255, 100))
 
 
 class GameDayTransitionState(GameState):
@@ -920,7 +940,6 @@ class GameDayTransitionState(GameState):
         self.simulation_complete = False
         self.opponent_events = []
         self._game_log_window = None
-        self._result_saved = False
         self._labels = []  # Track UILabels for cleanup
 
     def _setup_phase_ui(self):
@@ -929,9 +948,9 @@ class GameDayTransitionState(GameState):
         if self.phase == "FINAL":
             self.game.ui_manager.set_visibility_state('gameday_final')
             self.game.ui_manager.buttons['final_menu'].set_relative_position(
-                (self._BUTTON_X, self._BUTTON_Y_START))
+                (self._BUTTON_X, 620))
             self.game.ui_manager.buttons['view_game_log'].set_relative_position(
-                (self._BUTTON_X, self._BUTTON_Y_START + self._BUTTON_Y_GAP))
+                (self._BUTTON_X, 670))
         elif self.phase == "SIMULATING":
             self.game.ui_manager.set_visibility_state('gameday_simulation')
             self.game.ui_manager.buttons['start_batting'].set_relative_position(
@@ -968,7 +987,11 @@ class GameDayTransitionState(GameState):
         self._clear_labels()
 
         # Determine what phase we're in
-        if self.game.gameday_manager.current_inning > 9:
+        if self.game.gameday_manager.is_walkoff:
+            # Walk-off win: game already ended mid-inning
+            self.phase = "FINAL"
+            self._save_result_once()
+        elif self.game.gameday_manager.current_inning > 9:
             self.phase = "FINAL"
             self._save_result_once()
         elif self.game.gameday_manager.is_top_inning:
@@ -1016,9 +1039,7 @@ class GameDayTransitionState(GameState):
 
     def _save_result_once(self):
         """Save game result exactly once when entering FINAL phase."""
-        if not self._result_saved:
-            self._result_saved = True
-            self.game.gameday_manager.save_game_result()
+        self.game.gameday_manager.save_game_result()
 
     def handle_event(self, event):
         """Handle events - button clicks for continuing."""
@@ -1043,30 +1064,35 @@ class GameDayTransitionState(GameState):
         self.opponent_events = []
         gameday_mgr = self.game.gameday_manager
 
-        # Simulate until 3 outs
+        # Simulate until 3 outs, checking relief after every batter
         while gameday_mgr.current_outs < 3:
             outcome, runs_scored = gameday_mgr.simulate_opponent_at_bat()
             self.opponent_events.append(f"{gameday_mgr.get_current_batter_name()}: {outcome}" +
                                        (f" ({runs_scored} run{'s' if runs_scored != 1 else ''})" if runs_scored > 0 else ""))
 
-        # Opponent score is already tracked in simulate_opponent_at_bat()
-        # No need to update it here
+            # Relief check after each batter
+            if (gameday_mgr.current_outs < 3
+                    and gameday_mgr.should_consider_player_relief_pitcher()):
+                new_pitcher = gameday_mgr.substitute_player_relief_pitcher()
+                if new_pitcher:
+                    self.opponent_events.append(
+                        f"Pitching change (Your Team): {new_pitcher.upper()} coming in to pitch")
 
         # End the opponent's half inning
         gameday_mgr.end_half_inning()
 
-        # Check for PLAYER'S pitcher substitution (opponent was batting against player's pitcher)
-        if gameday_mgr.should_consider_player_relief_pitcher():
-            new_pitcher = gameday_mgr.substitute_player_relief_pitcher()
-            if new_pitcher:
-                message = f"Pitching change (Your Team): {new_pitcher.upper()} coming in to pitch"
-                self.opponent_events.append(message)
-
-        # Check if game is over
+        # Check if game is over before considering between-inning relief
         if gameday_mgr.game_over:
             self.phase = "FINAL"
             self._save_result_once()
             self.game.ui_manager.set_visibility_state('gameday_final')
+        else:
+            # Between-inning relief check (lower threshold — clean break)
+            if gameday_mgr.should_consider_player_relief_pitcher(between_innings=True):
+                new_pitcher = gameday_mgr.substitute_player_relief_pitcher()
+                if new_pitcher:
+                    self.opponent_events.append(
+                        f"Pitching change (Your Team): {new_pitcher.upper()} coming in to pitch")
 
         self.simulation_complete = True
 
@@ -1241,18 +1267,152 @@ class GameDayTransitionState(GameState):
         self.game.gameday_manager = None
         self.game.set_menu_state(0)
 
+    # -- MLB-style pitcher box score layout constants --
+    _TABLE_COL_OFFSETS = {
+        'name': 0, 'ip': 255, 'h': 300, 'r': 340, 'hr': 380,
+        'k': 420, 'bb': 460, 'pc': 500,
+    }
+    _TABLE_COL_HEADERS = [
+        ('IP', 'ip'), ('H', 'h'), ('R', 'r'), ('HR', 'hr'),
+        ('K', 'k'), ('BB', 'bb'), ('PC', 'pc'),
+    ]
+    _TABLE_WIDTH = 540
+    _STAT_COL_W = 35  # default width for right-aligned stat cells
+    _HEADER_COLOR = (140, 140, 160)
+    _DATA_COLOR = (220, 220, 220)
+    _SEPARATOR_COLOR = (60, 75, 95)
+    _ROW_H = 24
+
+    def _draw_stat_cell(self, screen, text, x, y, width=35, color=(220, 220, 220)):
+        """Draw right-aligned text within a fixed-width column cell."""
+        font = self.game.ui_manager.small_font
+        surf = font.render(str(text), True, color)
+        screen.blit(surf, (x + width - surf.get_width(), y))
+
+    def _draw_pitcher_box_score(self, screen, pitchers, x, y, team_label, label_color):
+        """Draw an MLB-style pitcher stats table. Returns y after the table."""
+        font = self.game.ui_manager.small_font
+        cols = self._TABLE_COL_OFFSETS
+
+        # Section header: "Pitchers - OPP"
+        header_surf = font.render(f"Pitchers - {team_label}", True, label_color)
+        screen.blit(header_surf, (x, y))
+
+        # Column headers
+        y += 26
+        for label, key in self._TABLE_COL_HEADERS:
+            self._draw_stat_cell(screen, label, x + cols[key], y,
+                                 self._STAT_COL_W, self._HEADER_COLOR)
+        # Top separator
+        y += 22
+        pygame.draw.line(screen, self._SEPARATOR_COLOR,
+                         (x, y), (x + self._TABLE_WIDTH, y), 1)
+        y += 6
+
+        # Data rows
+        total_outs = 0
+        totals = {'h': 0, 'r': 0, 'hr': 0, 'k': 0, 'bb': 0, 'pc': 0}
+        for ps in pitchers[:6]:
+            # Skip pitchers who never recorded an out or threw a pitch
+            if ps.outs_recorded == 0 and ps.pitch_count == 0:
+                continue
+            # Name (left-aligned, truncate to ~16 chars)
+            name = ps.name[:16]
+            name_surf = font.render(name, True, self._DATA_COLOR)
+            screen.blit(name_surf, (x + cols['name'], y))
+            # Stats (right-aligned, IP in baseball notation)
+            self._draw_stat_cell(screen, ps.get_ip_display(), x + cols['ip'], y)
+            self._draw_stat_cell(screen, str(ps.hits_allowed), x + cols['h'], y)
+            self._draw_stat_cell(screen, str(ps.runs_allowed), x + cols['r'], y)
+            self._draw_stat_cell(screen, str(ps.home_runs_allowed), x + cols['hr'], y)
+            self._draw_stat_cell(screen, str(ps.strikeouts), x + cols['k'], y)
+            self._draw_stat_cell(screen, str(ps.walks), x + cols['bb'], y)
+            self._draw_stat_cell(screen, str(ps.pitch_count), x + cols['pc'], y, 40)
+            # Accumulate totals
+            total_outs += ps.outs_recorded
+            totals['h'] += ps.hits_allowed
+            totals['r'] += ps.runs_allowed
+            totals['hr'] += ps.home_runs_allowed
+            totals['k'] += ps.strikeouts
+            totals['bb'] += ps.walks
+            totals['pc'] += ps.pitch_count
+            y += self._ROW_H
+
+        # Bottom separator
+        y += 4
+        pygame.draw.line(screen, self._SEPARATOR_COLOR,
+                         (x, y), (x + self._TABLE_WIDTH, y), 1)
+        y += 6
+
+        # Totals row (IP in baseball notation)
+        total_ip = f"{total_outs // 3}.{total_outs % 3}"
+        totals_surf = font.render("Totals", True, self._DATA_COLOR)
+        screen.blit(totals_surf, (x + cols['name'], y))
+        self._draw_stat_cell(screen, total_ip, x + cols['ip'], y)
+        self._draw_stat_cell(screen, str(totals['h']), x + cols['h'], y)
+        self._draw_stat_cell(screen, str(totals['r']), x + cols['r'], y)
+        self._draw_stat_cell(screen, str(totals['hr']), x + cols['hr'], y)
+        self._draw_stat_cell(screen, str(totals['k']), x + cols['k'], y)
+        self._draw_stat_cell(screen, str(totals['bb']), x + cols['bb'], y)
+        self._draw_stat_cell(screen, str(totals['pc']), x + cols['pc'], y, 40)
+        y += self._ROW_H
+        return y
+
+    def _render_final(self, screen):
+        """Render the FINAL phase with MLB-style pitcher box scores."""
+        screen.fill((20, 30, 40))
+        ui = self.game.ui_manager
+        gm = self.game.gameday_manager
+
+        # --- Result headline (48px, centered) ---
+        winner = gm.get_winner()
+        if gm.is_walkoff:
+            result_text, result_color = "WALK-OFF WIN!", (255, 215, 0)
+        elif winner == "Player":
+            result_text, result_color = "FINAL - YOU WIN!", (255, 220, 50)
+        elif winner == "Opponent":
+            result_text, result_color = "FINAL - YOU LOSE", (227, 75, 80)
+        else:
+            result_text, result_color = "FINAL - TIE GAME", (220, 220, 220)
+
+        result_surf = ui.font.render(result_text, True, result_color)
+        screen.blit(result_surf, ((1280 - result_surf.get_width()) // 2, 25))
+
+        # Horizontal rule
+        pygame.draw.line(screen, self._SEPARATOR_COLOR, (100, 75), (1180, 75), 1)
+
+        # --- Score summary (28px, centered) ---
+        score_text = gm.get_score_summary()
+        score_surf = ui.small_font.render(score_text, True, (255, 255, 100))
+        screen.blit(score_surf, ((1280 - score_surf.get_width()) // 2, 88))
+
+        # --- Box score panel (centered) ---
+        box_data = gm.get_box_score_lines()
+        panel_w = ui.box_score_panel.get_relative_rect().width
+        ui.show_box_score(box_data, position=((1280 - panel_w) // 2, 120))
+
+        # --- Pitcher box scores (two columns, MLB style) ---
+        opp_pitchers = gm.get_opponent_pitcher_stats()
+        plr_pitchers = gm.get_player_pitcher_stats()
+        self._draw_pitcher_box_score(
+            screen, opp_pitchers, 50, 260, "OPP", (255, 200, 100))
+        self._draw_pitcher_box_score(
+            screen, plr_pitchers, 680, 260, "YOU", (150, 255, 150))
+
     def render(self, screen):
         """Render the transition screen."""
+        # FINAL phase has its own dedicated layout
+        if self.phase == "FINAL":
+            self._render_final(screen)
+            return
+
         screen.fill((20, 30, 40))  # Dark blue background
 
         # Title (regular 48px font)
         self.game.ui_manager.draw_completed_message("GameDay Mode", (100, 50))
 
         # Current inning and score (small 28px font)
-        if self.phase == "FINAL":
-            inning_text = "After 9 Innings"
-        else:
-            inning_text = self.game.gameday_manager.get_inning_summary()
+        inning_text = self.game.gameday_manager.get_inning_summary()
         score_text = self.game.gameday_manager.get_score_summary()
 
         self.game.ui_manager.draw_completed_message(inning_text, (100, 130), use_small_font=True)
@@ -1266,11 +1426,10 @@ class GameDayTransitionState(GameState):
         pitcher_text = f"Pitching: {pitcher_stats.name.upper()} ({pitcher_stats.pitch_count} pitches{fatigue_text})"
         self.game.ui_manager.draw_completed_message(pitcher_text, (100, 210), use_small_font=True, color=(150, 255, 150))
 
-        # Inning score box (non-FINAL phases)
-        if self.phase != "FINAL":
-            box_data = self.game.gameday_manager.get_box_score_lines()
-            current_inning = self.game.gameday_manager.current_inning
-            self.game.ui_manager.show_box_score(box_data, current_inning, position=(700, 150))
+        # Inning score box
+        box_data = self.game.gameday_manager.get_box_score_lines()
+        current_inning = self.game.gameday_manager.current_inning
+        self.game.ui_manager.show_box_score(box_data, current_inning, position=(700, 150))
 
         # Show recent events if simulating or just simulated
         if self.phase == "SIMULATING" and self.simulation_complete:
@@ -1278,7 +1437,7 @@ class GameDayTransitionState(GameState):
                 "Opponent's At-Bats:", (100, 350), use_small_font=True, color=(255, 200, 100))
 
             y_offset = 390
-            for event_str in self.opponent_events[-10:]:
+            for event_str in self.opponent_events[-8:]:
                 self.game.ui_manager.draw_completed_message(
                     event_str, (100, y_offset), use_small_font=True)
                 y_offset += 30
@@ -1301,45 +1460,6 @@ class GameDayTransitionState(GameState):
                 if batting_line:
                     self.game.ui_manager.draw_completed_message(
                         batting_line, (100, y_offset + 15), use_small_font=True, color=(150, 255, 150))
-
-        elif self.phase == "FINAL":
-            # Show final game summary
-            winner = self.game.gameday_manager.get_winner()
-            if winner == "Player":
-                result_text = "YOU WIN!"
-            elif winner == "Opponent":
-                result_text = "YOU LOSE"
-            else:
-                result_text = "TIE GAME"
-
-            self.game.ui_manager.draw_completed_message(result_text, (450, 300), use_big_font=True)
-
-            # Box score
-            box_data = self.game.gameday_manager.get_box_score_lines()
-            self.game.ui_manager.show_box_score(box_data, position=(700, 150))
-
-            # Pitcher stats below box score
-            panel_h = self.game.ui_manager.box_score_panel.get_relative_rect().height
-            y_offset = 350 + panel_h + 20
-
-            self.game.ui_manager.draw_completed_message(
-                "Opponent Pitchers:", (80, y_offset), use_small_font=True, color=(255, 200, 100))
-            y_offset += 28
-
-            for pitcher_stat in self.game.gameday_manager.get_opponent_pitcher_stats():
-                self.game.ui_manager.draw_completed_message(
-                    pitcher_stat.get_summary(), (80, y_offset), use_small_font=True)
-                y_offset += 26
-
-            y_offset += 8
-            self.game.ui_manager.draw_completed_message(
-                "Your Team's Pitchers:", (80, y_offset), use_small_font=True, color=(150, 255, 150))
-            y_offset += 28
-
-            for pitcher_stat in self.game.gameday_manager.get_player_pitcher_stats():
-                self.game.ui_manager.draw_completed_message(
-                    pitcher_stat.get_summary(), (80, y_offset), use_small_font=True)
-                y_offset += 26
 
     def _get_player_batting_line(self):
         """Get player's batting line for between-inning display."""

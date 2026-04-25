@@ -411,11 +411,38 @@ class PitchSimulation:
         if self.game.in_gameday_mode:
             runs_scored = self.game.scoreKeeper.get_score() - score_before
             self.game.gameday_manager.record_player_at_bat(hit_string, runs_scored=runs_scored, pitches_thrown=self.game.pitchnumber)
+            self._check_walkoff()
 
         # Reset counts after hit
         self.game.pitchnumber = 0
         self.game.currentstrikes = 0
         self.game.currentballs = 0
+
+    def _check_walkoff(self):
+        """Check for walk-off win and trigger immediate game end if detected."""
+        if (self.game.in_gameday_mode
+                and self.game.gameday_manager.check_walkoff(self.game.scoreKeeper.get_score())):
+            # Update cumulative score before transitioning
+            self.game.gameday_manager.player_score += self.game.scoreKeeper.get_score()
+            self.game.gameday_manager._current_half_runs = self.game.scoreKeeper.get_score()
+
+            # Record the partial inning in the box score
+            self.game.gameday_manager.player_inning_scores.append(
+                self.game.gameday_manager._current_half_runs
+            )
+
+            # Show walkoff banner
+            self.game.ui_manager.show_banner("WALK-OFF WIN!", typing_speed=0.05)
+
+            # Mark inning as ended so check_inning_end() doesn't double-process
+            self.game.inning_ended = True
+
+            # Transition to inning end screen with continue button (not directly to final screen)
+            self.game.menu_state = 'inning_end'
+            self.game.state_manager.change_state('inning_end')
+
+            # Stop the pitch simulation
+            self.running = False
 
     def _is_follow_through_time(self, current_time):
         """Check if it's follow through time."""
@@ -481,6 +508,7 @@ class PitchSimulation:
             # Record in gameday mode
             if self.game.in_gameday_mode:
                 self.game.gameday_manager.record_player_at_bat('WALK', runs_scored=runs_scored, pitches_thrown=self.game.pitchnumber)
+                self._check_walkoff()
 
             self.game.currentstrikes = 0
             self.game.currentballs = 0
