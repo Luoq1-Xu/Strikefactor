@@ -577,8 +577,10 @@ class GameDayManager:
         )
         self.event_log.append(event)
 
-        # Update player score (runs_scored is already added in check_inning_end)
-        # DON'T add it again here
+        # Fold this at-bat's runs into the cumulative + half-inning totals so
+        # the box score and check_walkoff stay in sync with each batter.
+        self.player_score += runs_scored
+        self._current_half_runs += runs_scored
 
         # Track player momentum
         if outcome in ['SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN']:
@@ -591,12 +593,8 @@ class GameDayManager:
         if outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT']:
             self.current_outs += 1
 
-    def check_walkoff(self, pending_inning_runs: int) -> bool:
+    def check_walkoff(self) -> bool:
         """Check if a walk-off condition is met.
-
-        Args:
-            pending_inning_runs: Runs scored in the current half-inning
-                                 (from scoreKeeper.get_score()).
 
         Returns:
             True if the player has taken the lead in the bottom of the 9th+.
@@ -604,7 +602,7 @@ class GameDayManager:
         if (self.current_inning >= 9
                 and not self.is_top_inning
                 and not self.game_over
-                and self.player_score + pending_inning_runs > self.opponent_score):
+                and self.player_score > self.opponent_score):
             self.game_over = True
             self.is_walkoff = True
             return True
@@ -651,10 +649,6 @@ class GameDayManager:
         """Check if player is on a hot streak (2+ consecutive hits)."""
         return self.player_consecutive_hits >= 2
 
-    def is_inning_over(self) -> bool:
-        """Check if the current half-inning is over."""
-        return self.current_outs >= 3
-
     # --- Display / summary methods ---
 
     def get_box_score_lines(self) -> dict:
@@ -693,18 +687,6 @@ class GameDayManager:
         """Get current inning info."""
         half = "Top" if self.is_top_inning else "Bottom"
         return f"{half} of Inning {self.current_inning} - {self.current_outs} out{'s' if self.current_outs != 1 else ''}"
-
-    def get_pitcher_summary(self) -> str:
-        """Get current pitcher info."""
-        stats = self.get_active_pitcher_stats()
-        return f"Pitching: {stats.name.upper()} ({stats.pitch_count} pitches)"
-
-    def get_all_pitcher_stats(self) -> List[PitcherStats]:
-        """Get stats for all pitchers who appeared in the game (both teams)."""
-        all_stats = []
-        all_stats.extend(self.opponent_pitcher_stats.values())
-        all_stats.extend(self.player_pitcher_stats.values())
-        return all_stats
 
     def get_opponent_pitcher_stats(self) -> List[PitcherStats]:
         """Get stats for opponent pitchers (player bats against)."""
@@ -793,7 +775,3 @@ class GameDayManager:
         losses = sum(1 for g in games if g.get('result') == 'LOSS')
         ties = sum(1 for g in games if g.get('result') == 'TIE')
         return {'wins': wins, 'losses': losses, 'ties': ties, 'total': len(games)}
-
-    def get_career_record_vs(self, pitcher_name: str) -> dict:
-        """Instance convenience wrapper around load_history_record_vs."""
-        return self.load_history_record_vs(pitcher_name)

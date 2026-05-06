@@ -1218,7 +1218,6 @@ class GameDayTransitionState(GameState):
         # Clear pitch data from previous inning
         self.game.pitch_trajectories = []
         self.game.enhanced_pitch_records = []
-        self.game.pitchDataManager.records = []
         self.game.pitches_display = []
 
         # Transition to gameplay

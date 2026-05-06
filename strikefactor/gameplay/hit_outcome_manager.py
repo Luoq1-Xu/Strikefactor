@@ -12,9 +12,8 @@ class HitOutcomeManager:
         self.momentum_bonus = 0.0  # Set by gameday mode for hot streak
 
         # Right-handed batter's hand position
-        # These positions are used to determine the contact zone for the bat
+        # Used to determine the contact zone for the bat
         self.rhpos = (490, 453)
-        self.rhpos_high = (497, 405)
 
     def _compute_contact_quality(self, swing_location_y, ball_location_y, timing_diff):
         """Compute a continuous contact quality score from 0.0 (terrible) to 1.0 (perfect).
@@ -207,12 +206,6 @@ class HitOutcomeManager:
                 self.ishomerun = 'THREE-RUN HOME RUN'
             else:
                 self.ishomerun = 'GRAND SLAM'
-    
-    def handle_out_event(self, out_type):
-        """Handle flyout or groundout events."""
-        # Add an out to the game
-        # This will be called from the pitch simulation when an out occurs
-        return out_type
     
     def play_hit_sound(self, outcome=None):
         if outcome == "FLYOUT":

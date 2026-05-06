@@ -743,14 +743,3 @@ class FieldRenderer:
         """
         history = self.load_lap_history()
         return history.get('laps', [])
-
-    def clear_lap_history(self):
-        """Clear all lap history."""
-        empty_history = {
-            'version': '1.0',
-            'created_date': datetime.now().isoformat(),
-            'last_updated': datetime.now().isoformat(),
-            'laps': []
-        }
-        self.save_lap_history(empty_history)
-        print("✓ Lap history cleared")

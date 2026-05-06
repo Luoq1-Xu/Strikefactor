@@ -315,17 +315,8 @@ class Pitcher:
         print("╚" + "═" * BOX_WIDTH + "╝")
         print()
 
-    def get_pitch_arsenal(self):
-        return self.pitch_arsenal
-
     def get_pitch_names(self):
         return [key for key in self.pitch_arsenal]
-
-    def add_action(self, action):
-        self.actions.append(action)
-
-    def random_pitch_name(self):
-        return random.choice(self.get_pitch_names())
 
     def attach_ai(self, ai):
         self.ai = ai

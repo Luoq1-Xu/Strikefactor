@@ -239,6 +239,9 @@ class UIManager:
             'bind_toggle_track': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((300, 620), (680, 50)),
                 text='Toggle Track: T', manager=manager),
+            'bind_challenge': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((300, 680), (680, 50)),
+                text='ABS Challenge: C', manager=manager),
 
             # GameDay mode buttons
             'start_gameday': pygame_gui.elements.UIButton(
@@ -427,27 +430,6 @@ class UIManager:
                     self.button_callbacks[key]()
                     break
 
-    def update_scoreboard(self, text, typing_speed=0.0075):
-        """Updates the scoreboard with new text and a typing effect."""
-        # Only show if UI is visible
-        if not self.key_binding_manager or self.key_binding_manager.is_ui_visible():
-            self.scoreboard.show()
-        self.scoreboard.set_text(text)
-        self.scoreboard.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': typing_speed})
-
-    def update_pitch_result(self, text, typing_speed=0.0085):
-        """Updates the pitch result box with new text and a typing effect."""
-        # Only show if UI is visible
-        if not self.key_binding_manager or self.key_binding_manager.is_ui_visible():
-            self.pitch_result.show()
-        self.pitch_result.set_text(text)
-        self.pitch_result.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': typing_speed})
-
-    def clear_pitch_result(self):
-        """Clears the pitch result and scoreboard."""
-        self.pitch_result.set_text("")
-        self.scoreboard.set_text("")
-
     def show_banner(self, text, typing_speed=0.1):
         """Shows the banner with the given text and a typing effect."""
         self.banner.set_text(text)
@@ -474,20 +456,6 @@ class UIManager:
     def draw(self):
         """Draws the UI manager and all UI elements to the screen."""
         self.manager.draw_ui(self.screen)
-
-    def create_scoreboard(self, results):
-        """Creates and returns a new scoreboard text box."""
-        return pygame_gui.elements.UITextBox(
-            html_text=results,
-            relative_rect=pygame.Rect((950, 30), (310, 260)),  # Match updated dimensions
-            manager=self.manager
-        )
-
-    def update_container(self, textbox, scoreboard):
-        """Updates the container with new textbox and scoreboard."""
-        self.container.clear()
-        self.container.add_element(textbox)
-        self.container.add_element(scoreboard)
 
     def update_pitch_info(self, pitch_trajectories, last_pitch_info):
         """Updates pitch information in the view window (legacy method)."""
@@ -752,6 +720,7 @@ class UIManager:
             self.buttons['bind_view_pitches'].show()
             self.buttons['bind_main_menu'].show()
             self.buttons['bind_toggle_track'].show()
+            self.buttons['bind_challenge'].show()
             self.banner.hide()
             self.scoreboard.hide()
             self.pitch_result.hide()
@@ -923,7 +892,8 @@ class UIManager:
             KeyAction.QUICK_PITCH: 'bind_quick_pitch',
             KeyAction.VIEW_PITCHES: 'bind_view_pitches',
             KeyAction.MAIN_MENU: 'bind_main_menu',
-            KeyAction.TOGGLE_TRACK: 'bind_toggle_track'
+            KeyAction.TOGGLE_TRACK: 'bind_toggle_track',
+            KeyAction.CHALLENGE: 'bind_challenge',
         }
 
         for action, button_key in bindings.items():

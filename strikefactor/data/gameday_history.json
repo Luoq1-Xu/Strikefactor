@@ -744,7 +744,66 @@
         3
       ],
       "opponent_starter": "yamamoto"
+    },
+    {
+      "date": "2026-04-28T18:37:02.214255",
+      "player_score": 2,
+      "opponent_score": 9,
+      "result": "LOSS",
+      "difficulty": "hall_of_fame",
+      "player_inning_scores": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0
+      ],
+      "opponent_inning_scores": [
+        2,
+        3,
+        0,
+        0,
+        3,
+        0,
+        0,
+        1,
+        0
+      ],
+      "opponent_starter": "degrom"
+    },
+    {
+      "date": "2026-05-01T14:51:44.443582",
+      "player_score": 7,
+      "opponent_score": 4,
+      "result": "WIN",
+      "difficulty": "hall_of_fame",
+      "player_inning_scores": [
+        4,
+        0,
+        0,
+        0,
+        0,
+        0,
+        3,
+        0
+      ],
+      "opponent_inning_scores": [
+        0,
+        0,
+        1,
+        1,
+        0,
+        0,
+        0,
+        0,
+        2
+      ],
+      "opponent_starter": "degrom"
     }
   ],
-  "last_updated": "2026-04-25T18:00:49.163404"
+  "last_updated": "2026-05-01T14:51:44.443811"
 }

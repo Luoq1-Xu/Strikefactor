@@ -138,13 +138,6 @@ class BatterProfile:
             return 0.3  # Default assumption, not enough data
         return self.chase_swings / self.chase_pitches
 
-    def get_zone_swing_rate(self, quadrant):
-        """Get swing rate for a specific zone quadrant."""
-        swings, seen = self.zone_swings[quadrant]
-        if seen < 2:
-            return 0.5
-        return swings / seen
-
     def get_first_pitch_swing_rate(self):
         """Get first pitch swing rate."""
         if self.first_pitch_count < 2:
@@ -192,14 +185,3 @@ class BatterProfile:
             bonuses[pitch] = bonus
 
         return bonuses
-
-    def get_location_bias(self, handedness='R'):
-        """Get location bias suggestions based on batter weaknesses.
-
-        Returns a dict with quadrant swing rates so the pitcher's targeting
-        can exploit weak zones.
-        """
-        rates = {}
-        for quadrant in self.zone_swings:
-            rates[quadrant] = self.get_zone_swing_rate(quadrant)
-        return rates

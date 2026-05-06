@@ -7,7 +7,6 @@ at-bat context, and outcome data for analytics and pitch similarity analysis.
 
 import sqlite3
 import uuid
-import math
 import os
 import glob
 from datetime import datetime, timedelta
@@ -183,11 +182,9 @@ class PitchDB:
 class PitchDataExtractor:
     """Extract pitch records from a PitchSimulation instance."""
 
+    # Compared against outcome.upper().replace(" ", "_") — keep keys in that form.
     TERMINAL_OUTCOMES = frozenset({
-        "strikeout", "walk", "single", "double", "triple", "home_run",
-        "flyout", "groundout", "lineout",
-        # Also match capitalized/display variants
-        "STRIKEOUT", "WALK", "SINGLE", "DOUBLE", "TRIPLE", "HOME RUN",
+        "STRIKEOUT", "WALK", "SINGLE", "DOUBLE", "TRIPLE", "HOME_RUN",
         "FLYOUT", "GROUNDOUT", "LINEOUT",
     })
 
@@ -303,14 +300,12 @@ class PitchDatabaseService:
 
             # Check for terminal outcome
             outcome = getattr(sim, "outcome", "")
-            if outcome and outcome.upper().replace(" ", "_") in {
-                "STRIKEOUT", "WALK", "SINGLE", "DOUBLE", "TRIPLE",
-                "HOME_RUN", "FLYOUT", "GROUNDOUT", "LINEOUT",
-            }:
+            if outcome and outcome.upper().replace(" ", "_") in PitchDataExtractor.TERMINAL_OUTCOMES:
                 self._record_at_bat(outcome)
-        except Exception:
-            # Never let DB errors crash the game
-            pass
+        except Exception as e:
+            # Never let DB errors crash the game, but surface them so silent
+            # data loss doesn't go unnoticed.
+            print(f"[pitch_db] record_pitch failed: {e}")
 
     def _record_at_bat(self, final_outcome):
         ab = {
@@ -324,59 +319,3 @@ class PitchDatabaseService:
         }
         self.db.insert_at_bat(ab)
         self._ab_pitch_count = 0
-
-
-class TrajectoryQuery:
-    """Read-only analysis helpers."""
-
-    def __init__(self, db: PitchDB):
-        self.db = db
-
-    def get_trajectory_vector(self, pitch_id):
-        """Return list of (x, y, z) for a pitch's sampled trajectory."""
-        rows = self.db.query(
-            "SELECT x_ft, y_ft, z_ft FROM pitch_trajectories "
-            "WHERE pitch_id = ? ORDER BY sample_idx",
-            (pitch_id,),
-        )
-        return [(r["x_ft"], r["y_ft"], r["z_ft"]) for r in rows]
-
-    def find_similar_pitches(self, pitch_id, top_n=5):
-        """Find most similar pitches by L2 distance on 20x3 trajectory vectors."""
-        ref = self.get_trajectory_vector(pitch_id)
-        if len(ref) != 20:
-            return []
-
-        all_ids = [r["pitch_id"] for r in self.db.query(
-            "SELECT DISTINCT pitch_id FROM pitch_trajectories WHERE pitch_id != ?",
-            (pitch_id,),
-        )]
-
-        results = []
-        for pid in all_ids:
-            vec = self.get_trajectory_vector(pid)
-            if len(vec) != 20:
-                continue
-            dist = math.sqrt(sum(
-                (a[0]-b[0])**2 + (a[1]-b[1])**2 + (a[2]-b[2])**2
-                for a, b in zip(ref, vec)
-            ))
-            results.append((pid, dist))
-
-        results.sort(key=lambda x: x[1])
-        return results[:top_n]
-
-    def get_pitch_type_profiles(self, pitcher_name):
-        """Average kinematics per pitch type for a pitcher."""
-        rows = self.db.query(
-            "SELECT pitch_type, "
-            "AVG(speed_mph) as avg_speed, "
-            "AVG(pfx_x_inches) as avg_pfx_x, "
-            "AVG(pfx_z_inches) as avg_pfx_z, "
-            "AVG(travel_time_s) as avg_travel_time, "
-            "COUNT(*) as count "
-            "FROM pitches WHERE pitcher_name = ? "
-            "GROUP BY pitch_type",
-            (pitcher_name,),
-        )
-        return [dict(r) for r in rows]

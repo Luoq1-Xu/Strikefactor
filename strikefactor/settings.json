@@ -6,5 +6,6 @@
   "batter_handedness": "R",
   "display_mode": "windowed",
   "display_fps": 120,
-  "engine_fps": 120
+  "engine_fps": 120,
+  "abs_enabled": false
 }

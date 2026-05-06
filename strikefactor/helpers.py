@@ -1,9 +1,8 @@
 import pygame
 import pygame_gui
 import random
-import math
 from dataclasses import dataclass
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 from pygame_gui.elements.ui_window import UIWindow
 from pygame_gui.elements.ui_image import UIImage
 from pygame_gui.elements.ui_button import UIButton
@@ -11,7 +10,6 @@ from pygame_gui.elements.ui_label import UILabel
 from pygame_gui.elements.ui_scrolling_container import UIScrollingContainer
 from pygame_gui.core import ObjectID
 from pygame_gui.elements.ui_horizontal_slider import UIHorizontalSlider
-import pandas as pd
 
 
 # Pitch type display name mapping
@@ -92,12 +90,6 @@ class Runner:
             self.scored = True
             self.onBase = False
 
-    def extraBases(self, hit):
-        self.base += hit + 1
-        if self.base > 3:
-            self.scored = True
-            self.onBase = False
-
 # Scorekeeper class
 class ScoreKeeper:
 
@@ -139,15 +131,18 @@ class ScoreKeeper:
         self.runners.append(batter)
         prevrunner = batter
         base = 1
-        while base < 4 and self.basesfilled[base] != 0 :
+        while base < 4 and self.basesfilled[base] != 0:
             currRunner = self.basesfilled[base]
             self.basesfilled[base].walk()
             self.basesfilled[base] = prevrunner
             prevrunner = currRunner
             base += 1
-        self.basesfilled[base] = prevrunner
-        self.bases = ['white' if base == 0
-                            else 'yellow' for base in self.basesfilled.values()]
+        if base < 4:
+            self.basesfilled[base] = prevrunner
+        # Otherwise: bases were loaded; the runner from third has scored and
+        # update_scored() will remove them from self.runners.
+        self.bases = ['white' if self.basesfilled[b] == 0 else 'yellow'
+                      for b in (1, 2, 3)]
         self.updateScored()
 
     def get_bases(self):
@@ -645,16 +640,3 @@ class StatSwing(UIWindow):
             self.x = self.animation_frame % len(self.last_pitch_information)
 
         super().update(time_delta)
-
-class PitchDataManager:
-
-    def __init__(self):
-        self.records = []
-
-    def insert_row(self, row):
-        self.records.append(row)
-
-    def append_to_file(self, file):
-        pd.DataFrame(self.records).to_csv(file, mode='a', header=False, index=False)
-        print("Data appended to file")
-

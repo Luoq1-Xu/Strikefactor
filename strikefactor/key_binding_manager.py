@@ -139,10 +139,6 @@ class KeyBindingManager:
             current = self.settings_manager.get_setting("umpire_sound")
             self.settings_manager.set_setting("umpire_sound", not current)
 
-    def is_key_pressed(self, key_code: int) -> bool:
-        """Check if a key is currently pressed."""
-        return key_code in self.pressed_keys
-
     def is_ui_visible(self) -> bool:
         """Check if UI should be visible."""
         return self.ui_visible
@@ -150,22 +146,6 @@ class KeyBindingManager:
     def set_ui_visibility(self, visible: bool):
         """Set UI visibility state."""
         self.ui_visible = visible
-
-    def get_all_bindings(self) -> Dict[str, tuple]:
-        """Get all current bindings as (action_name, key_name) tuples."""
-        bindings = {}
-        for action in KeyAction:
-            key_code = self.get_key_for_action(action)
-            action_name = self.get_action_name(action)
-            key_name = self.get_key_name(key_code)
-            bindings[action.value] = (action_name, key_name)
-        return bindings
-
-    def unbind_key(self, action: KeyAction):
-        """Remove binding for an action."""
-        if action.value in self.current_bindings:
-            del self.current_bindings[action.value]
-            self.save_bindings()
 
     def reset_to_defaults(self):
         """Reset all key bindings to default values."""

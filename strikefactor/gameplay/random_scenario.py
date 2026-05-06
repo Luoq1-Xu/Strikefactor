@@ -75,19 +75,19 @@ class RandomScenarioGenerator:
         """Generate a two-strike battle scenario."""
         return {
             'pitcher': pitcher,
-            'balls': 0,
-            'strikes': 0,
+            'balls': random.randint(0, 2),
+            'strikes': 2,
             'outs': random.randint(0, 2),
             'runners': self._get_random_runners(),
             'description': f"Two-strike battle! Protect the plate vs {pitcher.title()}"
         }
-        
+
     def _generate_full_count_scenario(self, pitcher: str) -> Dict:
         """Generate a full count scenario."""
         return {
             'pitcher': pitcher,
-            'balls': 0,
-            'strikes': 0,
+            'balls': 3,
+            'strikes': 2,
             'outs': random.randint(0, 2),
             'runners': self._get_random_runners(),
             'description': f"Full count showdown against {pitcher.title()}!"
@@ -157,34 +157,3 @@ class RandomScenarioGenerator:
             
         return sorted(runners)
         
-    def get_scenario_description(self, scenario: Dict) -> str:
-        """Get a formatted description of the scenario."""
-        balls = scenario['balls']
-        strikes = scenario['strikes']
-        outs = scenario['outs']
-        runners = scenario['runners']
-        pitcher = scenario['pitcher'].title()
-        
-        base_desc = f"Count: {balls}-{strikes}, {outs} out{'s' if outs != 1 else ''}"
-        
-        if not runners:
-            runner_desc = "Bases empty"
-        elif len(runners) == 3:
-            runner_desc = "Bases loaded"
-        elif set(runners) == {2, 3}:
-            runner_desc = "Runners on 2nd and 3rd"
-        elif set(runners) == {1, 3}:
-            runner_desc = "Runners on 1st and 3rd"
-        elif set(runners) == {1, 2}:
-            runner_desc = "Runners on 1st and 2nd"
-        elif runners == [1]:
-            runner_desc = "Runner on 1st"
-        elif runners == [2]:
-            runner_desc = "Runner on 2nd"
-        elif runners == [3]:
-            runner_desc = "Runner on 3rd"
-        else:
-            bases = [f"{base}{'st' if base == 1 else 'nd' if base == 2 else 'rd'}" for base in runners]
-            runner_desc = f"Runners on {' and '.join(bases)}"
-            
-        return f"Facing {pitcher}: {base_desc}, {runner_desc}"

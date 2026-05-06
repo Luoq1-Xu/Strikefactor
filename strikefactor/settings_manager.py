@@ -25,7 +25,7 @@ class SettingsManager:
             "batter_handedness": "R",
             "display_mode": "windowed",  # "windowed" or "fullscreen"
             "display_fps": 60,           # Options: 60, 120
-            "engine_fps": 60,            # Options: 60, 120, 240, 360 (60 = original physics)
+            "engine_fps": 60,            # Options: 60, 120 (60 = original physics)
             "abs_enabled": True          # MLB-style ball/strike challenge system
         }
         self.current_settings = self.load_settings()
@@ -157,7 +157,7 @@ class SettingsManager:
     def get_engine_fps(self):
         """Get engine/physics FPS setting."""
         fps = self.get_setting("engine_fps")
-        return fps if fps in self.ENGINE_FPS_OPTIONS else 120
+        return fps if fps in self.ENGINE_FPS_OPTIONS else 60
 
     def cycle_display_fps(self):
         """Cycle to next display FPS option."""
@@ -179,7 +179,3 @@ class SettingsManager:
         """Reset all settings to default values."""
         self.current_settings = self.default_settings.copy()
         self.save_settings()
-
-    def get_all_settings(self):
-        """Get all current settings."""
-        return self.current_settings.copy()

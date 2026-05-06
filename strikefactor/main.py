@@ -2,7 +2,6 @@
 import pygame
 import sys
 import os
-import pandas as pd
 import pickle
 
 # Import pitcher classes
@@ -24,7 +23,7 @@ from gameplay.field_renderer import FieldRenderer
 from gameplay.hit_outcome_manager import HitOutcomeManager
 from ui.ui_manager import UIManager
 from ui.scorebug import Scorebug
-from helpers import ScoreKeeper, PitchDataManager
+from helpers import ScoreKeeper
 from gameplay.game_state_manager import GameStateManager
 from gameplay.random_scenario import RandomScenarioGenerator
 from gameplay.challenge_manager import ChallengeManager
@@ -315,7 +314,6 @@ class Game:
         self.sound_manager = SoundManager(sound_dir="assets/sounds")
         self.field_renderer = FieldRenderer(self.screen)
         self.scoreKeeper = ScoreKeeper()
-        self.pitchDataManager = PitchDataManager()
         self.batter_profile = BatterProfile()
 
         # GameDay mode management
@@ -326,7 +324,6 @@ class Game:
         self.challenge_manager = ChallengeManager()
         self.abs_overlay = ABSChallengeOverlay(self)
         self.pending_challenge = None
-        self._abs_overturned_pending = False
 
         # Settings management (initialize early so other components can use it)
         self.settings_manager = SettingsManager()
@@ -357,7 +354,6 @@ class Game:
         # Legacy compatibility and initial state variables (needed before state manager)
         self.ball = [0, 0, 4600]
         self.blitfunc = self.asset_manager.create_ball_renderer()
-        self.records = pd.DataFrame()
         self.fourseamballsize = 11
 
         # Load settings and initialize state variables
@@ -377,9 +373,6 @@ class Game:
         self.last_pitch_information = []
         self.previous_mode_before_pitchviz = None  # Track mode before entering PitchViz
 
-        # Load AI model
-        self.ai_model = pickle.load(open(get_path("ai/ai_umpire.pkl"), "rb"))
-        
     def _setup_ui_callbacks(self):
         """Setup UI button callbacks."""
         # Pitcher selection callbacks
@@ -477,6 +470,7 @@ class Game:
         self.ui_manager.register_button_callback('bind_view_pitches', lambda: self.start_key_rebind(KeyAction.VIEW_PITCHES))
         self.ui_manager.register_button_callback('bind_main_menu', lambda: self.start_key_rebind(KeyAction.MAIN_MENU))
         self.ui_manager.register_button_callback('bind_toggle_track', lambda: self.start_key_rebind(KeyAction.TOGGLE_TRACK))
+        self.ui_manager.register_button_callback('bind_challenge', lambda: self.start_key_rebind(KeyAction.CHALLENGE))
 
         # Setup key binding system callbacks
         self._setup_key_binding_callbacks()
@@ -1014,7 +1008,9 @@ class Game:
             KeyAction.TOGGLE_BATTER: 'bind_toggle_batter',
             KeyAction.QUICK_PITCH: 'bind_quick_pitch',
             KeyAction.VIEW_PITCHES: 'bind_view_pitches',
-            KeyAction.MAIN_MENU: 'bind_main_menu'
+            KeyAction.MAIN_MENU: 'bind_main_menu',
+            KeyAction.TOGGLE_TRACK: 'bind_toggle_track',
+            KeyAction.CHALLENGE: 'bind_challenge',
         }
         if action in button_mapping:
             button_key = button_mapping[action]
@@ -1062,13 +1058,13 @@ class Game:
 
     def quick_pitch(self):
         """Quick pitch action via key binding."""
-        # Only work if we're in gameplay state and can pitch
-        if (hasattr(self, 'state_manager') and
-            self.state_manager.current_state and
-            self.state_manager.current_state.__class__.__name__ == 'GameplayState'):
-            # Trigger pitch if ready
-            if hasattr(self.state_manager.current_state, 'ready_to_pitch') and self.state_manager.current_state.ready_to_pitch:
-                self.state_manager.current_state.start_pitch()
+        if not hasattr(self, 'state_manager'):
+            return
+        state = self.state_manager.current_state
+        if state is None or state.__class__.__name__ != 'GameplayState':
+            return
+        if state.pitch_simulation is None:
+            state._initiate_pitch()
 
     def complete_key_rebind(self, new_key):
         """Complete the key rebinding process."""
@@ -1278,9 +1274,10 @@ class Game:
     def _abs_check_walkoff(self):
         """Trigger walkoff handling after an ABS-applied walk in gameday."""
         if (self.in_gameday_mode and self.gameday_manager is not None
-                and self.gameday_manager.check_walkoff(self.scoreKeeper.get_score())):
-            self.gameday_manager.player_score += self.scoreKeeper.get_score()
-            self.gameday_manager._current_half_runs = self.scoreKeeper.get_score()
+                and self.gameday_manager.check_walkoff()):
+            # player_score / _current_half_runs are already up-to-date via
+            # record_player_at_bat. Just commit the partial inning to the box
+            # score before transitioning.
             self.gameday_manager.player_inning_scores.append(
                 self.gameday_manager._current_half_runs
             )
@@ -1367,7 +1364,6 @@ class Game:
         else:
             post_count = f"{self.currentballs}-{self.currentstrikes}"
 
-        self._abs_overturned_pending = False
         self.abs_overlay.trigger(
             ball_xy=pc['ball_xy'],
             original_call=pc['original_call'],
@@ -1377,7 +1373,6 @@ class Game:
             pre_strikes=pre_s,
             pitch_label=f"{pc['pitchtype']}  {pc['speed_mph']:.0f} MPH",
             post_count_label=post_count,
-            on_complete=self._on_abs_overlay_complete,
         )
         self._run_abs_overlay_loop()
 
@@ -1388,9 +1383,6 @@ class Game:
             self._reverse_last_call()
 
         self.pending_challenge = None
-
-    def _on_abs_overlay_complete(self, overturned: bool):
-        self._abs_overturned_pending = bool(overturned)
 
     def _run_abs_overlay_loop(self):
         """Synchronous render loop for the overlay. Mirrors PitchSimulation.run.
@@ -1461,15 +1453,9 @@ class Game:
         if self.currentouts == 3 and not self.inning_ended:
             self.inning_ended = True
 
-            # Check if in gameday mode
-            if self.in_gameday_mode:
-                # Update player's score in gameday manager (add to cumulative score)
-                self.gameday_manager.player_score += self.scoreKeeper.get_score()
-                # Record half-inning runs for box score tracking
-                self.gameday_manager._current_half_runs = self.scoreKeeper.get_score()
-
-                # DON'T call end_half_inning() here - let the transition state handle it
-                # This ensures the state machine sees the correct inning state
+            # In gameday mode, player_score and _current_half_runs are kept in
+            # sync incrementally by record_player_at_bat. The transition state
+            # is responsible for calling end_half_inning().
 
             # Show inning end screen with continue button (both modes)
             self.menu_state = 'inning_end'

@@ -1,10 +1,14 @@
+from typing import TYPE_CHECKING
+
 import pygame
 import pygame.gfxdraw
 import pandas as pd
 from utils.physics import collision
-from main import Game
 from helpers import EnhancedPitchRecord
 from utils.pitch_physics import PitchTrajectory, UmpireCamera, DEFAULT_CAMERA
+
+if TYPE_CHECKING:
+    from main import Game
 
 # Load the model once, ideally passed in or as a singleton
 import pickle
@@ -14,7 +18,7 @@ model = pickle.load(open(get_path("ai/ai_umpire.pkl"), "rb"))
 class PitchSimulation:
     def __init__(self, game, release_point, pitchername, speed_mph, pfx_x, pfx_z,
                  target_x, target_y, pitchtype):
-        self.game: Game = game
+        self.game: "Game" = game
         self.release_point = release_point
         self.pitchername = pitchername
         self.speed_mph = speed_mph
@@ -424,12 +428,10 @@ class PitchSimulation:
     def _check_walkoff(self):
         """Check for walk-off win and trigger immediate game end if detected."""
         if (self.game.in_gameday_mode
-                and self.game.gameday_manager.check_walkoff(self.game.scoreKeeper.get_score())):
-            # Update cumulative score before transitioning
-            self.game.gameday_manager.player_score += self.game.scoreKeeper.get_score()
-            self.game.gameday_manager._current_half_runs = self.game.scoreKeeper.get_score()
-
-            # Record the partial inning in the box score
+                and self.game.gameday_manager.check_walkoff()):
+            # player_score / _current_half_runs are already up-to-date via
+            # record_player_at_bat. Just commit the partial inning to the box
+            # score before transitioning.
             self.game.gameday_manager.player_inning_scores.append(
                 self.game.gameday_manager._current_half_runs
             )
@@ -707,12 +709,6 @@ class PitchSimulation:
         if self.game.field_renderer.total_pitches % 10 == 0:
             self.game.field_renderer.save_data()
 
-        # Update records
-        if self.game.records.empty:
-            self.game.records = pd.DataFrame([self.new_entry])
-        else:
-            self.game.records = pd.concat([self.game.records, pd.DataFrame([self.new_entry])], ignore_index=True)
-
         # Update pitch trajectory colors
         if self.game.last_pitch_information:
             last_ball = self.game.last_pitch_information[-1]
@@ -722,7 +718,6 @@ class PitchSimulation:
 
         # Update data and AI
         self.game.last_pitch_type_thrown = self.pitchtype
-        self.game.pitchDataManager.insert_row(self.new_data_entry)
 
         # Record batter tendency data
         did_swing = self.game.swing_started > 0

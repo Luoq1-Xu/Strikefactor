@@ -133,15 +133,10 @@ class Scorebug:
             inn_text = self.label_font.render(f"{half}{inning}", True, self.LABEL_COLOR)
             screen.blit(inn_text, (x, y_center - 18))
 
-            # Scores
-            # After inning ends, current inning runs are already folded into player_score
-            # so only add scoreKeeper (current inning) when the inning is still active
-            if self.game.inning_ended:
-                player_total = gm.player_score
-            else:
-                player_total = gm.player_score + self.game.scoreKeeper.get_score()
+            # Scores. player_score is folded incrementally per at-bat via
+            # record_player_at_bat, so it's always live.
             opp_text = self.small_font.render(f"OPP {gm.opponent_score}", True, self.TEXT_COLOR)
-            you_text = self.small_font.render(f"YOU {player_total}", True, self.TEXT_COLOR)
+            you_text = self.small_font.render(f"YOU {gm.player_score}", True, self.TEXT_COLOR)
             screen.blit(opp_text, (x, y_center - 4))
             screen.blit(you_text, (x + 65, y_center - 4))
         else:
