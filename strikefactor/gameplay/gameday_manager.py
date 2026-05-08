@@ -609,7 +609,12 @@ class GameDayManager:
         return False
 
     def end_half_inning(self):
-        """End the current half inning and switch sides."""
+        """End the current half inning and switch sides.
+
+        After 9 innings, the game ends as soon as one side leads at the end
+        of a complete inning. If still tied, play continues into extras
+        (10th, 11th, ...). The home team's bottom half is skipped whenever
+        they already lead going into it (standard baseball convention)."""
         self.current_outs = 0
         self._consecutive_hits = 0
 
@@ -620,7 +625,8 @@ class GameDayManager:
             self.is_top_inning = False
             self.opponent_scorekeeper.reset()
 
-            # In baseball, if home team leads after top of 9th, bottom is not played
+            # If the home team (player) already leads after the top of the
+            # 9th or any extra inning, the bottom half isn't played.
             if self.current_inning >= 9 and self.player_score > self.opponent_score:
                 self.game_over = True
                 return
@@ -631,12 +637,15 @@ class GameDayManager:
             self.is_top_inning = True
             self.player_scorekeeper.reset()
 
-            # Check if 9 innings are complete before incrementing
-            if self.current_inning >= 9:
+            # After the 9th, end the game only if a winner is decided.
+            # Otherwise (tied), keep playing extra innings.
+            if (self.current_inning >= 9
+                    and self.player_score != self.opponent_score):
                 self.game_over = True
-            else:
-                # Move to next inning
-                self.current_inning += 1
+                return
+
+            # Move to the next inning (regular or extra).
+            self.current_inning += 1
 
     def get_player_momentum_bonus(self) -> float:
         """Get momentum bonus for player (expands contact window or boosts hit quality).
@@ -656,22 +665,22 @@ class GameDayManager:
 
         Includes the current half-inning's runs even before
         end_half_inning() has been called, so the box score stays in sync.
+        Always returns at least 9 columns; expands automatically when the
+        game has gone into extra innings.
         """
         opp = list(self.opponent_inning_scores)
         plr = list(self.player_inning_scores)
 
         # Append the in-progress half-inning runs if not yet committed
-        if self._current_half_runs > 0 or (self.current_inning > len(opp) if self.is_top_inning else self.current_inning > len(plr)):
-            if self.is_top_inning:
-                if len(opp) < self.current_inning:
-                    opp.append(self._current_half_runs)
-            else:
-                if len(plr) < self.current_inning:
-                    plr.append(self._current_half_runs)
+        if self.is_top_inning and len(opp) < self.current_inning:
+            opp.append(self._current_half_runs)
+        elif (not self.is_top_inning) and len(plr) < self.current_inning:
+            plr.append(self._current_half_runs)
 
-        # Pad to 9 innings
-        opp = (opp + [0] * 9)[:9]
-        plr = (plr + [0] * 9)[:9]
+        # Show at least 9 innings; grow if we've reached extras
+        n = max(9, len(opp), len(plr), self.current_inning)
+        opp = opp + [0] * (n - len(opp))
+        plr = plr + [0] * (n - len(plr))
         return {
             'opponent': opp,
             'player': plr,

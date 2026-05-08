@@ -23,6 +23,8 @@ from gameplay.field_renderer import FieldRenderer
 from gameplay.hit_outcome_manager import HitOutcomeManager
 from ui.ui_manager import UIManager
 from ui.scorebug import Scorebug
+from ui.minimal_hud import MinimalHUD
+from ui.broadcast_hud import BroadcastHUD
 from helpers import ScoreKeeper
 from gameplay.game_state_manager import GameStateManager
 from gameplay.random_scenario import RandomScenarioGenerator
@@ -338,6 +340,8 @@ class Game:
 
         # Set the key binding manager reference in UI manager
         self.ui_manager.set_key_binding_manager(self.key_binding_manager)
+        # Settings reference is needed for HUD-mode-aware button visibility.
+        self.ui_manager.set_settings_manager(self.settings_manager)
 
         # Sync PitchViz animation timing with display FPS setting
         self.ui_manager.update_view_window_fps(self.settings_manager.get_display_fps())
@@ -345,8 +349,15 @@ class Game:
         # Set callback for PitchViz window close button
         self.ui_manager.view_window.set_close_callback(self.exit_view_pitches)
 
-        # Scorebug overlay
+        # Three HUDs: Legacy (full bottom bar), Broadcast (4 corners), Minimal (corner widget).
         self.scorebug = Scorebug(self)
+        self.broadcast_hud = BroadcastHUD(self)
+        self.minimal_hud = MinimalHUD(self)
+        # Only legacy mode wants the field-rendered base diamond — broadcast
+        # and minimal both display bases themselves.
+        self.field_renderer.show_bases = (
+            self.settings_manager.get_hud_mode() == "legacy"
+        )
 
         # Random scenario generator
         self.random_scenario_generator = RandomScenarioGenerator()
@@ -449,6 +460,7 @@ class Game:
         self.ui_manager.register_button_callback('toggle_ump_sound_settings', lambda: self.toggle_umpire_sound_setting())
         self.ui_manager.register_button_callback('toggle_strikezone_settings', lambda: self.toggle_strikezone_setting())
         self.ui_manager.register_button_callback('toggle_abs_settings', lambda: self.toggle_abs_setting())
+        self.ui_manager.register_button_callback('toggle_hud_mode_settings', lambda: self.toggle_hud_mode())
         self.ui_manager.register_button_callback('reset_settings', lambda: self.reset_settings())
 
         # FPS settings callbacks
@@ -832,8 +844,11 @@ class Game:
         # Use stored previous mode to determine where to return
         previous_mode = self.previous_mode_before_pitchviz
 
-        # Return to the appropriate state based on inning status and mode
-        if self.currentouts == 3 and self.inning_ended:
+        # Return to the appropriate state based on inning status and mode.
+        # Gate on `inning_ended` alone — a walk-off ends the half-inning
+        # without reaching 3 outs, and we must not let the user fall back
+        # into gameplay from view-pitches in that case.
+        if self.inning_ended:
             self.ui_manager.set_button_visibility('inning_end')
             self.menu_state = 'inning_end'
             self.state_manager.change_state('inning_end')
@@ -940,6 +955,40 @@ class Game:
             self.pending_challenge = None
         self.ui_manager.update_settings_button_states(self.settings_manager)
 
+    def _draw_active_hud(self, surface):
+        """Dispatch to the HUD selected by the current setting. Only renders
+        on the gameplay-style states where the legacy scorebug also showed."""
+        if self.state_manager.current_state_name not in (
+            'gameplay', 'sandbox_gameplay', 'inning_end'
+        ):
+            return
+        mode = self.settings_manager.get_hud_mode()
+        if mode == "minimal":
+            self.minimal_hud.draw(surface)
+        elif mode == "broadcast":
+            self.broadcast_hud.draw(surface)
+        else:
+            self.scorebug.draw(surface)
+
+    def toggle_hud_mode(self):
+        """Cycle Legacy → Broadcast → Minimal → Legacy."""
+        new_mode = self.settings_manager.cycle_hud_mode()
+        self.ui_manager.update_settings_button_states(self.settings_manager)
+        # Big field-drawn base diamond is redundant in broadcast/minimal —
+        # both draw their own bases.
+        self.field_renderer.show_bases = (new_mode == "legacy")
+        # Re-apply visibility for the current state so side buttons show/hide
+        # immediately without waiting for the next state transition.
+        state_name = self.state_manager.current_state_name
+        visibility_map = {
+            'gameplay': 'in_game',
+            'view_pitches': 'view_pitches',
+            'visualization': 'visualise',
+            'inning_end': 'inning_end',
+        }
+        if state_name in visibility_map:
+            self.ui_manager.set_button_visibility(visibility_map[state_name])
+
     def reset_settings(self):
         """Reset all settings to defaults."""
         self.settings_manager.reset_to_defaults()
@@ -974,6 +1023,7 @@ class Game:
         self.key_binding_manager.register_callback(KeyAction.MAIN_MENU, lambda: self.set_menu_state(0))
         self.key_binding_manager.register_callback(KeyAction.TOGGLE_TRACK, self.toggle_track)
         self.key_binding_manager.register_callback(KeyAction.CHALLENGE, self.request_abs_challenge)
+        self.key_binding_manager.register_callback(KeyAction.TOGGLE_HUD_MODE, self.toggle_hud_mode)
 
     def enter_key_bindings_menu(self):
         """Enter key bindings configuration menu."""
@@ -1022,8 +1072,10 @@ class Game:
         new_visibility = not current_visibility
         self.key_binding_manager.set_ui_visibility(new_visibility)
 
-        # Toggle scorebug visibility in sync
+        # Toggle every HUD's visibility in sync with the global UI toggle.
         self.scorebug.visible = new_visibility
+        self.broadcast_hud.visible = new_visibility
+        self.minimal_hud.visible = new_visibility
 
         if new_visibility:
             # Determine current state
@@ -1395,8 +1447,7 @@ class Game:
             screen.fill("black")
             if self.state_manager.current_state is not None:
                 self.state_manager.current_state.render(screen)
-            if self.state_manager.current_state_name in ('gameplay', 'sandbox_gameplay', 'inning_end'):
-                self.scorebug.draw(screen)
+            self._draw_active_hud(screen)
             self.abs_overlay.update(int(time_delta * 1000))
             self.abs_overlay.render(screen)
             self.ui_manager.draw()
@@ -1526,9 +1577,8 @@ class Game:
             # Render current state to internal surface
             self.screen.fill("black")
             self.state_manager.render(self.screen)
-            # Draw scorebug during gameplay states
-            if self.state_manager.current_state_name in ('gameplay', 'sandbox_gameplay', 'inning_end'):
-                self.scorebug.draw(self.screen)
+            # Draw whichever HUD the user has selected.
+            self._draw_active_hud(self.screen)
             self.ui_manager.draw()
 
             # Scale and flip

@@ -15,6 +15,8 @@ class SettingsManager:
     DISPLAY_FPS_OPTIONS = [60, 120]
     ENGINE_FPS_OPTIONS = [60, 120]  # 60 is baseline for original physics
 
+    HUD_MODES = ["legacy", "broadcast", "minimal"]
+
     def __init__(self):
         self.settings_file = get_path("settings.json")
         self.default_settings = {
@@ -26,7 +28,8 @@ class SettingsManager:
             "display_mode": "windowed",  # "windowed" or "fullscreen"
             "display_fps": 60,           # Options: 60, 120
             "engine_fps": 60,            # Options: 60, 120 (60 = original physics)
-            "abs_enabled": True          # MLB-style ball/strike challenge system
+            "abs_enabled": True,         # MLB-style ball/strike challenge system
+            "hud_mode": "legacy"         # "legacy" | "broadcast" | "minimal"
         }
         self.current_settings = self.load_settings()
 
@@ -36,6 +39,10 @@ class SettingsManager:
             if os.path.exists(self.settings_file):
                 with open(self.settings_file, 'r') as f:
                     settings = json.load(f)
+                # Migrate legacy boolean minimal_hud → hud_mode string.
+                if "hud_mode" not in settings:
+                    settings["hud_mode"] = "minimal" if settings.get("minimal_hud") else "legacy"
+                settings.pop("minimal_hud", None)
                 # Ensure all default keys exist
                 for key, value in self.default_settings.items():
                     if key not in settings:
@@ -174,6 +181,19 @@ class SettingsManager:
         next_fps = self.ENGINE_FPS_OPTIONS[(idx + 1) % len(self.ENGINE_FPS_OPTIONS)]
         self.set_setting("engine_fps", next_fps)
         return next_fps
+
+    def get_hud_mode(self) -> str:
+        """Return the current HUD mode, defaulting to legacy if invalid."""
+        mode = self.get_setting("hud_mode")
+        return mode if mode in self.HUD_MODES else "legacy"
+
+    def cycle_hud_mode(self) -> str:
+        """Advance to the next HUD mode in legacy → broadcast → minimal → legacy."""
+        current = self.get_hud_mode()
+        idx = self.HUD_MODES.index(current)
+        next_mode = self.HUD_MODES[(idx + 1) % len(self.HUD_MODES)]
+        self.set_setting("hud_mode", next_mode)
+        return next_mode
 
     def reset_to_defaults(self):
         """Reset all settings to default values."""

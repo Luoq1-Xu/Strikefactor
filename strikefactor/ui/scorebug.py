@@ -10,18 +10,19 @@ class Scorebug:
     BAR_HEIGHT = 42
     BAR_WIDTH = 1280
 
-    # Colors
-    BG_COLOR = (15, 15, 25, 220)
-    TEXT_COLOR = (220, 220, 220)
-    LABEL_COLOR = (140, 140, 160)
-    BALL_COLOR = (80, 220, 80)
-    STRIKE_COLOR = (227, 75, 80)
-    OUT_COLOR = (227, 75, 80)
-    DOT_OFF_COLOR = (55, 55, 65)
-    BASE_ON_COLOR = (255, 220, 50)
-    BASE_OFF_COLOR = (70, 70, 80)
-    DIVIDER_COLOR = (70, 70, 90)
-    FLASH_COLOR = (40, 40, 55, 220)
+    # Colors — strict black/white/gray palette.
+    BG_COLOR = (0, 0, 0, 230)
+    TEXT_COLOR = (240, 240, 240)
+    LABEL_COLOR = (140, 140, 140)
+    # Active indicators are all white. Off state is dark gray.
+    BALL_COLOR = (240, 240, 240)
+    STRIKE_COLOR = (240, 240, 240)
+    OUT_COLOR = (240, 240, 240)
+    DOT_OFF_COLOR = (50, 50, 50)
+    BASE_ON_COLOR = (240, 240, 240)
+    BASE_OFF_COLOR = (50, 50, 50)
+    DIVIDER_COLOR = (90, 90, 90)
+    FLASH_COLOR = (30, 30, 30, 220)
 
     # Section X positions
     BASES_X = 12
@@ -118,7 +119,7 @@ class Scorebug:
             color = self.BASE_ON_COLOR if bases[i] == 'yellow' else self.BASE_OFF_COLOR
             points = [(bx, by - size), (bx + size, by), (bx, by + size), (bx - size, by)]
             pygame.draw.polygon(screen, color, points)
-            pygame.draw.polygon(screen, (30, 30, 40), points, 1)
+            pygame.draw.polygon(screen, (30, 30, 30), points, 1)
 
     def _draw_score(self, screen, y_center):
         """Draw score. GameDay shows both teams + inning, otherwise just runs."""
@@ -253,7 +254,7 @@ class Scorebug:
         if self._flash_timer > 0:
             alpha = int(220 * (self._flash_timer / 30))
             flash = pygame.Surface((245, self.BAR_HEIGHT), pygame.SRCALPHA)
-            flash.fill((40, 50, 70, alpha))
+            flash.fill((60, 60, 60, alpha))
             screen.blit(flash, (x - 5, y))
 
         if not self.last_pitch_type:

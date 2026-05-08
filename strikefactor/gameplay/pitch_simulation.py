@@ -426,7 +426,18 @@ class PitchSimulation:
         self.game.currentballs = 0
 
     def _check_walkoff(self):
-        """Check for walk-off win and trigger immediate game end if detected."""
+        """Check for walk-off win and flag a deferred game-end transition.
+
+        We do NOT stop the simulation here — letting the contact/follow-through
+        phases run out so the swing animation completes, the glove sound plays,
+        and `_finish_pitch` -> `cleanup()` records the winning pitch for
+        pitchviz. The state change is performed in `_finish_pitch` once the
+        pitch has fully resolved.
+
+        The "WALK-OFF WIN!" banner is owned by the celebration sequence in
+        InningEndState — letting the hit/walk banner stay visible through
+        the follow-through gives the celebration a natural first beat.
+        """
         if (self.game.in_gameday_mode
                 and self.game.gameday_manager.check_walkoff()):
             # player_score / _current_half_runs are already up-to-date via
@@ -436,18 +447,12 @@ class PitchSimulation:
                 self.game.gameday_manager._current_half_runs
             )
 
-            # Show walkoff banner
-            self.game.ui_manager.show_banner("WALK-OFF WIN!", typing_speed=0.05)
-
             # Mark inning as ended so check_inning_end() doesn't double-process
+            # and so view-pitches navigation routes back to inning_end, not
+            # gameplay.
             self.game.inning_ended = True
 
-            # Transition to inning end screen with continue button (not directly to final screen)
-            self.game.menu_state = 'inning_end'
-            self.game.state_manager.change_state('inning_end')
-
-            # Stop the pitch simulation
-            self.running = False
+            self._pending_walkoff = True
 
     def _is_follow_through_time(self, current_time):
         """Check if it's follow through time."""
@@ -663,6 +668,12 @@ class PitchSimulation:
         from ui.components import create_pci_cursor
         pygame.mouse.set_cursor(create_pci_cursor())
         self.cleanup()
+
+        # Walk-off transition was deferred from _check_walkoff so the swing
+        # animation and pitch recording could complete first.
+        if getattr(self, '_pending_walkoff', False):
+            self.game.menu_state = 'inning_end'
+            self.game.state_manager.change_state('inning_end')
 
     def _calculate_velocity_mph(self) -> float:
         """Return the pitch speed in MPH (directly from input parameter)."""

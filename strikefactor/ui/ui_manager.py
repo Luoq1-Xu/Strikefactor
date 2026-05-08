@@ -18,11 +18,25 @@ class UIManager:
         self.big_font = pygame.font.Font(resource_path(get_path("ui/font/8bitoperator_jve.ttf")), 84)  # +20% from 70
         self.button_callbacks = {}
         self.key_binding_manager = None  # Will be set after initialization
+        self.settings_manager = None  # Will be set after initialization
         self._create_ui_elements()
 
     def set_key_binding_manager(self, key_binding_manager):
         """Set the key binding manager reference for UI visibility control."""
         self.key_binding_manager = key_binding_manager
+
+    def set_settings_manager(self, settings_manager):
+        """Set the settings manager reference (e.g. for HUD mode lookups)."""
+        self.settings_manager = settings_manager
+
+    def _hud_mode(self) -> str:
+        if self.settings_manager is None:
+            return "legacy"
+        return self.settings_manager.get_hud_mode()
+
+    def _is_legacy_hud(self) -> bool:
+        """Side-panel buttons only render in legacy mode."""
+        return self._hud_mode() == "legacy"
 
     def register_button_callback(self, button_name, callback):
         """
@@ -197,6 +211,10 @@ class UIManager:
                 relative_rect=pygame.Rect((630, 430), (220, 50)),
                 text='Engine FPS: 60', manager=manager,
                 object_id=ObjectID(class_id='@settings_button')),
+            'toggle_hud_mode_settings': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((870, 430), (220, 50)),
+                text='HUD: Legacy', manager=manager,
+                object_id=ObjectID(class_id='@settings_button')),
             'key_bindings': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((515, 500), (250, 50)),
                 text='Key Bindings', manager=manager,
@@ -243,33 +261,41 @@ class UIManager:
                 relative_rect=pygame.Rect((300, 680), (680, 50)),
                 text='ABS Challenge: C', manager=manager),
 
-            # GameDay mode buttons
+            # GameDay mode buttons (broadcast-styled to match the refreshed UI)
             'start_gameday': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((490, 560), (300, 55)),
-                text='Start Game', manager=manager),
+                relative_rect=pygame.Rect((490, 580), (300, 44)),
+                text='STEP IN  >', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
             'gameday_prev_pitcher': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((255, 330), (50, 50)),
-                text='<', manager=manager),
+                text='<', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
             'gameday_next_pitcher': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((975, 330), (50, 50)),
-                text='>', manager=manager),
+                text='>', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
             # Dedicated menu-screen sized "main menu" for gameday menu states,
             # so the tiny (6, 428) sidebar button isn't shown on full menu screens.
             'gameday_main_menu': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((50, 660), (150, 45)),
-                text='Main Menu', manager=manager),
+                relative_rect=pygame.Rect((40, 660), (150, 36)),
+                text='MAIN MENU', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
             'next_inning': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((490, 550), (300, 50)),
-                text='Next Inning', manager=manager),
+                relative_rect=pygame.Rect((780, 600), (440, 44)),
+                text='NEXT INNING  >', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
             'start_batting': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((490, 550), (300, 50)),
-                text='Start Your At-Bat', manager=manager),
+                relative_rect=pygame.Rect((780, 600), (440, 44)),
+                text='STEP IN  >', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
             'view_game_log': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((490, 620), (300, 40)),
-                text='View Game Log', manager=manager),
+                relative_rect=pygame.Rect((780, 650), (210, 32)),
+                text='GAME LOG', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
             'final_menu': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((490, 550), (300, 50)),
-                text='Return to Main Menu', manager=manager),
+                relative_rect=pygame.Rect((780, 600), (440, 44)),
+                text='NEXT GAME  >', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
 
             # Mode selection buttons (for top-level menu)
             'arcade_mode': pygame_gui.elements.UIButton(
@@ -615,15 +641,16 @@ class UIManager:
             button.hide()
 
         if state == 'in_game':
-            self.buttons['strikezone'].show()
-            self.buttons['main_menu'].show()
-            self.buttons['toggle_ump_sound'].show()
-            self.buttons['view_pitches'].show()
-            self.buttons['toggle_batter'].show()
-            self.buttons['visualise'].show()
-            self.buttons['scout'].show()
-            self.buttons['lap_stats'].show()
-            self.buttons['view_laps'].show()
+            if self._is_legacy_hud():
+                self.buttons['strikezone'].show()
+                self.buttons['main_menu'].show()
+                self.buttons['toggle_ump_sound'].show()
+                self.buttons['view_pitches'].show()
+                self.buttons['toggle_batter'].show()
+                self.buttons['visualise'].show()
+                self.buttons['scout'].show()
+                self.buttons['lap_stats'].show()
+                self.buttons['view_laps'].show()
             # Scorebug handles stats display during gameplay
             self.scoreboard.hide()
             self.pitch_result.hide()
@@ -632,15 +659,16 @@ class UIManager:
             pass
         elif state == 'view_pitches':
             # Show the same buttons as in_game so they can toggle back
-            self.buttons['strikezone'].show()
-            self.buttons['main_menu'].show()
-            self.buttons['toggle_ump_sound'].show()
-            self.buttons['view_pitches'].show()
-            self.buttons['toggle_batter'].show()
-            self.buttons['visualise'].show()
-            self.buttons['scout'].show()
-            self.buttons['lap_stats'].show()
-            self.buttons['view_laps'].show()
+            if self._is_legacy_hud():
+                self.buttons['strikezone'].show()
+                self.buttons['main_menu'].show()
+                self.buttons['toggle_ump_sound'].show()
+                self.buttons['view_pitches'].show()
+                self.buttons['toggle_batter'].show()
+                self.buttons['visualise'].show()
+                self.buttons['scout'].show()
+                self.buttons['lap_stats'].show()
+                self.buttons['view_laps'].show()
             # Scorebug handles stats display
             self.scoreboard.hide()
             self.pitch_result.hide()
@@ -661,15 +689,16 @@ class UIManager:
             self.box_score_panel.hide()
         elif state == "visualise":
             # Show the same buttons as in_game so they can toggle back
-            self.buttons['strikezone'].show()
-            self.buttons['main_menu'].show()
-            self.buttons['toggle_ump_sound'].show()
-            self.buttons['view_pitches'].show()
-            self.buttons['toggle_batter'].show()
-            self.buttons['visualise'].show()
-            self.buttons['scout'].show()
-            self.buttons['lap_stats'].show()
-            self.buttons['view_laps'].show()
+            if self._is_legacy_hud():
+                self.buttons['strikezone'].show()
+                self.buttons['main_menu'].show()
+                self.buttons['toggle_ump_sound'].show()
+                self.buttons['view_pitches'].show()
+                self.buttons['toggle_batter'].show()
+                self.buttons['visualise'].show()
+                self.buttons['scout'].show()
+                self.buttons['lap_stats'].show()
+                self.buttons['view_laps'].show()
             self.scoreboard.hide()
             self.pitch_result.hide()
         elif state == 'summary':
@@ -681,13 +710,15 @@ class UIManager:
             self.lap_log_panel.hide()
             self.box_score_panel.hide()
         elif state == 'inning_end':
+            # Continue button always shown so the player can advance.
             self.buttons['continue_to_summary'].show()
-            self.buttons['visualise'].show()
-            self.buttons['view_pitches'].show()
-            self.buttons['strikezone'].show()
-            self.buttons['main_menu'].show()
-            self.buttons['lap_stats'].show()
-            self.buttons['view_laps'].show()
+            if self._is_legacy_hud():
+                self.buttons['visualise'].show()
+                self.buttons['view_pitches'].show()
+                self.buttons['strikezone'].show()
+                self.buttons['main_menu'].show()
+                self.buttons['lap_stats'].show()
+                self.buttons['view_laps'].show()
             self.scouting_panel.hide()
             self.lap_log_panel.hide()
             self.scoreboard.hide()
@@ -704,6 +735,7 @@ class UIManager:
             self.buttons['toggle_abs_settings'].show()
             self.buttons['display_fps_setting'].show()
             self.buttons['engine_fps_setting'].show()
+            self.buttons['toggle_hud_mode_settings'].show()
             self.buttons['key_bindings'].show()
             self.buttons['reset_settings'].show()
             self.banner.hide()
@@ -744,6 +776,7 @@ class UIManager:
             self.pitch_result.hide()
             self.scouting_panel.hide()
             self.lap_log_panel.hide()
+            self.box_score_panel.hide()
         elif state == 'gameday_simulation':
             # After opponent simulation, ready to start player batting
             self.buttons['start_batting'].show()
@@ -753,6 +786,7 @@ class UIManager:
             self.pitch_result.hide()
             self.scouting_panel.hide()
             self.lap_log_panel.hide()
+            self.box_score_panel.hide()
         elif state == 'gameday_final':
             # Game over screen
             self.buttons['final_menu'].show()
@@ -761,6 +795,7 @@ class UIManager:
             self.pitch_result.hide()
             self.scouting_panel.hide()
             self.lap_log_panel.hide()
+            self.box_score_panel.hide()
         elif state == 'mode_select':
             # Top-level mode selection (Arcade/Sandbox)
             self.buttons['arcade_mode'].show()
@@ -858,6 +893,12 @@ class UIManager:
         engine_fps = settings_manager.get_engine_fps()
         self.buttons['display_fps_setting'].set_text(f"Display FPS: {display_fps}")
         self.buttons['engine_fps_setting'].set_text(f"Engine FPS: {engine_fps}")
+
+        # Update HUD mode button (cycles legacy → broadcast → minimal).
+        hud_mode = settings_manager.get_hud_mode()
+        self.buttons['toggle_hud_mode_settings'].set_text(
+            f"HUD: {hud_mode.capitalize()}"
+        )
 
         # Highlight current difficulty button
         current_difficulty = settings_manager.get_difficulty().value

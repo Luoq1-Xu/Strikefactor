@@ -803,7 +803,96 @@
         2
       ],
       "opponent_starter": "degrom"
+    },
+    {
+      "date": "2026-05-07T22:49:33.585052",
+      "player_score": 7,
+      "opponent_score": 7,
+      "result": "TIE",
+      "difficulty": "hall_of_fame",
+      "player_inning_scores": [
+        2,
+        0,
+        0,
+        0,
+        0,
+        5,
+        0,
+        0,
+        0
+      ],
+      "opponent_inning_scores": [
+        4,
+        1,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        0
+      ],
+      "opponent_starter": "sasaki"
+    },
+    {
+      "date": "2026-05-07T23:06:14.861755",
+      "player_score": 1,
+      "opponent_score": 3,
+      "result": "LOSS",
+      "difficulty": "hall_of_fame",
+      "player_inning_scores": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0
+      ],
+      "opponent_inning_scores": [
+        2,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "opponent_starter": "degrom"
+    },
+    {
+      "date": "2026-05-07T23:17:24.410720",
+      "player_score": 12,
+      "opponent_score": 3,
+      "result": "WIN",
+      "difficulty": "hall_of_fame",
+      "player_inning_scores": [
+        0,
+        3,
+        4,
+        0,
+        3,
+        0,
+        2,
+        0
+      ],
+      "opponent_inning_scores": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        1
+      ],
+      "opponent_starter": "sale"
     }
   ],
-  "last_updated": "2026-05-01T14:51:44.443811"
+  "last_updated": "2026-05-07T23:17:24.411000"
 }

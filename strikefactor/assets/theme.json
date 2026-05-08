@@ -224,21 +224,21 @@
     {
         "colours":
         {
-            "normal_bg": "#0F0F19DC",
-            "hovered_bg": "#1E1E2DF0",
-            "disabled_bg": "#0F0F1990",
-            "selected_bg": "#0F0F19DC",
-            "active_bg": "#0F0F19DC",
-            "normal_text": "#DCDCDC",
+            "normal_bg": "#000000",
+            "hovered_bg": "#1A1A1A",
+            "disabled_bg": "#000000",
+            "selected_bg": "#1A1A1A",
+            "active_bg": "#1A1A1A",
+            "normal_text": "#FFFFFF",
             "hovered_text": "#FFFFFF",
             "selected_text": "#FFFFFF",
-            "disabled_text": "#46465A",
-            "active_text": "#8C8CA0",
-            "normal_border": "#46465A",
-            "hovered_border": "#8C8CA0",
-            "disabled_border": "#2A2A38",
-            "selected_border": "#46465A",
-            "active_border": "#46465A",
+            "disabled_text": "#555555",
+            "active_text": "#FFFFFF",
+            "normal_border": "#888888",
+            "hovered_border": "#FFFFFF",
+            "disabled_border": "#333333",
+            "selected_border": "#FFFFFF",
+            "active_border": "#FFFFFF",
             "normal_text_shadow": "#00000000",
             "hovered_text_shadow": "#00000000",
             "disabled_text_shadow": "#00000000",
@@ -255,8 +255,7 @@
         },
         "misc":
         {
-            "shape": "rounded_rectangle",
-            "shape_corner_radius": "3",
+            "shape": "rectangle",
             "border_width": "1",
             "shadow_width": "0"
         }

@@ -7,5 +7,6 @@
   "display_mode": "windowed",
   "display_fps": 120,
   "engine_fps": 120,
-  "abs_enabled": false
+  "abs_enabled": true,
+  "hud_mode": "broadcast"
 }

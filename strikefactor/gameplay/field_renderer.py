@@ -19,6 +19,7 @@ class FieldRenderer:
         self.screen = screen
         self.strikezone = pygame.Rect(strikezone_rect)
         self.strikezonedrawn = 1  # 1: Hidden, 2: Outline only, 3: Grid, 4: Heatmap, 5: Heatmap with Averages
+        self.show_bases = True  # Disabled in minimal HUD mode (the corner widget shows them).
         
         # Heatmap data structure: 9 segments [top_left, top_center, top_right, mid_left, center, mid_right, bot_left, bot_center, bot_right]
         self.heatmap_data = [0, 0, 0, 0, 0, 0, 0, 0, 0]
@@ -133,7 +134,8 @@ class FieldRenderer:
         """
         self.draw_strikezone()
         self.draw_homeplate()
-        self.draw_bases(bases_status)
+        if self.show_bases:
+            self.draw_bases(bases_status)
     
     def get_zone_segment(self, x, y):
         """

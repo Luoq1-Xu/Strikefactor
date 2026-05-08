@@ -14,6 +14,7 @@ class KeyAction(Enum):
     MAIN_MENU = "main_menu"
     TOGGLE_TRACK = "toggle_track"
     CHALLENGE = "challenge"
+    TOGGLE_HUD_MODE = "toggle_hud_mode"
 
 class KeyBindingManager:
     def __init__(self, settings_manager):
@@ -29,7 +30,8 @@ class KeyBindingManager:
             KeyAction.VIEW_PITCHES.value: pygame.K_v,
             KeyAction.MAIN_MENU.value: pygame.K_ESCAPE,
             KeyAction.TOGGLE_TRACK.value: pygame.K_t,
-            KeyAction.CHALLENGE.value: pygame.K_c
+            KeyAction.CHALLENGE.value: pygame.K_c,
+            KeyAction.TOGGLE_HUD_MODE.value: pygame.K_u
         }
 
         self.current_bindings = self.load_bindings()
@@ -104,7 +106,8 @@ class KeyBindingManager:
             KeyAction.VIEW_PITCHES: "View Pitches",
             KeyAction.MAIN_MENU: "Main Menu",
             KeyAction.TOGGLE_TRACK: "Toggle Track",
-            KeyAction.CHALLENGE: "ABS Challenge"
+            KeyAction.CHALLENGE: "ABS Challenge",
+            KeyAction.TOGGLE_HUD_MODE: "Toggle HUD Mode"
         }
         return action_names.get(action, action.value.replace('_', ' ').title())
 
