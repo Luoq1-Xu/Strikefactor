@@ -11,6 +11,10 @@ class HitOutcomeManager:
         self.ishomerun = ''
         self.momentum_bonus = 0.0  # Set by gameday mode for hot streak
 
+        # Last contact metrics — read by HitAnimation for trajectory + HR distance.
+        self.last_quality = 0.0
+        self.last_vertical_offset = 0.0
+
         # Right-handed batter's hand position
         # Used to determine the contact zone for the bat
         self.rhpos = (490, 453)
@@ -48,6 +52,8 @@ class HitOutcomeManager:
         quality, vertical_offset = self._compute_contact_quality(
             swing_location_y, ball_location_y, timing_diff
         )
+        self.last_quality = quality
+        self.last_vertical_offset = vertical_offset
 
         multipliers = self._get_difficulty_multipliers()
         out_modifier = multipliers["out_probability_modifier"]
@@ -96,6 +102,8 @@ class HitOutcomeManager:
         quality, vertical_offset = self._compute_contact_quality(
             swing_location_y, ball_location_y, timing_diff
         )
+        self.last_quality = quality
+        self.last_vertical_offset = vertical_offset
 
         multipliers = self._get_difficulty_multipliers()
         out_modifier = multipliers["out_probability_modifier"]

@@ -95,6 +95,11 @@ class PitchSimulation:
         self.previous_state = self.game.current_state
         self.recording_state = 0
 
+        # Set when a hit is registered; the animation runs in place of
+        # follow-through and defers the outcome banner until it finishes.
+        # Player presses any key to advance once the banner is up.
+        self.hit_animation = None
+
         self.new_entry = {
             'Pitcher': self.pitchername, 'PitchType': self.pitchtype, 'FirstX': 0, 'FirstY': 0,
             'SecondX': 0, 'SecondY': 0, 'FinalX': 0, 'FinalY': 0, 'isHit': "false",
@@ -130,10 +135,18 @@ class PitchSimulation:
         self.game.sound_manager.update()
         self.game.screen.fill("black")
         time_delta = self.game.clock.tick_busy_loop(self.engine_fps)/1000.0
+
+        current_time = pygame.time.get_ticks()
+
+        # Hit animation owns the frame once active — bypasses pitcher draw,
+        # trajectory tracking, and the normal phase dispatch below.
+        if self.hit_animation is not None:
+            self._handle_hit_animation_phase(current_time, time_delta)
+            return
+
         self.game.ui_manager.draw()
         self.game.ui_manager.update(time_delta)
 
-        current_time = pygame.time.get_ticks()
         self.game.current_pitcher.draw_pitcher(self.starttime, current_time)
 
         if self.starttime + self.windup < current_time < self.arrival_time:
@@ -355,13 +368,17 @@ class PitchSimulation:
         # DEBUG: Log hit_string from hit_outcome_manager
         print(f">>> _handle_successful_hit: hit_string='{hit_string}', swing_type={self.swing_type}", flush=True)
 
+        # Snapshot contact metrics for the hit animation (shape + HR distance).
+        contact_quality = self.game.hit_outcome_manager.last_quality
+        contact_vertical_offset = self.game.hit_outcome_manager.last_vertical_offset
+
         # Handle different outcomes
         if hit_string in ["FLYOUT", "GROUNDOUT"]:
-            self._handle_out_result(hit_string)
+            self._handle_out_result(hit_string, contact_vertical_offset, contact_quality)
         else:
-            self._handle_hit_result(hit_string, score_before)
+            self._handle_hit_result(hit_string, score_before, contact_vertical_offset, contact_quality)
 
-    def _handle_out_result(self, out_type):
+    def _handle_out_result(self, out_type, vertical_offset=0.0, quality=0.0):
         """Handle flyout or groundout results."""
         self.is_hit = False  # This is an out, not a hit
         self.game.currentouts += 1
@@ -370,8 +387,8 @@ class PitchSimulation:
         # Record at-bat (outs count as at-bats in baseball)
         self.game.field_renderer.record_at_bat()
 
-        # Display the out result
-        self.game.ui_manager.show_banner(out_type)
+        # Banner is deferred — fires once the hit animation finishes.
+        self._start_hit_animation(out_type, out_type, vertical_offset, quality)
         self.game._display_pitch_results(out_type, self.pitchtype, self.speed_mph)
         self.new_entry['isHit'] = out_type
 
@@ -384,7 +401,7 @@ class PitchSimulation:
         self.game.currentstrikes = 0
         self.game.currentballs = 0
 
-    def _handle_hit_result(self, hit_string, score_before=0):
+    def _handle_hit_result(self, hit_string, score_before=0, vertical_offset=0.0, quality=0.0):
         """Handle successful hit results."""
         self.is_hit = True
         self.game.hits += 1
@@ -405,10 +422,10 @@ class PitchSimulation:
         )
 
         if homerun_text != '':
-            self.game.ui_manager.show_banner("{}".format(homerun_text))
             self.game.homeruns_allowed += 1
-        else:
-            self.game.ui_manager.show_banner("{}".format(hit_string))
+        banner_text = homerun_text if homerun_text != '' else hit_string
+        # Banner is deferred — fires once the hit animation finishes.
+        self._start_hit_animation(hit_string, banner_text, vertical_offset, quality)
 
         self.game._display_pitch_results(f"HIT - {hit_string}", self.pitchtype, self.speed_mph)
         self.new_entry['isHit'] = hit_string
@@ -674,6 +691,41 @@ class PitchSimulation:
         if getattr(self, '_pending_walkoff', False):
             self.game.menu_state = 'inning_end'
             self.game.state_manager.change_state('inning_end')
+
+    def _start_hit_animation(self, outcome, banner_text, vertical_offset=0.0, quality=0.0):
+        """Begin the post-contact animation; defers the outcome banner until it ends."""
+        from gameplay.hit_animation import HitAnimation
+        self.hit_animation = HitAnimation(
+            self.game,
+            outcome=outcome,
+            on_complete=lambda: self.game.ui_manager.show_banner(banner_text),
+            vertical_offset=vertical_offset,
+            quality=quality,
+        )
+
+    def _handle_hit_animation_phase(self, current_time, time_delta):
+        """Render the hit animation; fire deferred banner; wait for player input.
+
+        Events are drained every frame — pre-banner presses (e.g. a stale
+        swing key from before contact resolved) are silently dropped. Once
+        the banner has fired, the next key or click advances the play.
+        """
+        self.hit_animation.update(current_time)
+        self.hit_animation.draw(self.game.screen)
+
+        if self.hit_animation.finished and not self.hit_animation.banner_fired:
+            self.hit_animation.on_complete()
+            self.hit_animation.banner_fired = True
+
+        self.game.ui_manager.update(time_delta)
+        self.game.ui_manager.draw()
+        self.game.flip_display()
+
+        for event in pygame.event.get():
+            if (self.hit_animation.banner_fired
+                    and event.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN)):
+                self._finish_pitch()
+                return
 
     def _calculate_velocity_mph(self) -> float:
         """Return the pitch speed in MPH (directly from input parameter)."""
