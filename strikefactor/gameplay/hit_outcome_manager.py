@@ -49,6 +49,15 @@ class HitOutcomeManager:
         return quality, vertical_offset
 
     def get_contact_hit_outcome(self, swing_location_y=None, ball_location_y=None, timing_diff=None):
+        """Coarse outcome at contact. Returns one of:
+            "FLYOUT", "GROUNDOUT" — out paths, unchanged.
+            "HOME RUN"            — predetermined; runners advance now.
+            "HIT"                 — generic non-HR hit; the HitAnimation will
+                                    classify SINGLE/DOUBLE/TRIPLE by retrieve
+                                    time and pitch_simulation will then call
+                                    apply_classified_outcome() to advance the
+                                    runners.
+        """
         quality, vertical_offset = self._compute_contact_quality(
             swing_location_y, ball_location_y, timing_diff
         )
@@ -73,30 +82,20 @@ class HitOutcomeManager:
             else:
                 return "FLYOUT" if random.random() < 0.5 else "GROUNDOUT"
 
-        # Hit outcomes: quality shifts weight toward extra-base hits
-        # Normalized remaining probability space
+        # Hit branch — only the HR boundary still matters here. Below it,
+        # the outcome is generic "HIT" and the animation's retrieve-time
+        # classification picks SINGLE/DOUBLE/TRIPLE later. The existing
+        # ceiling math is reused only to derive the HR cutoff.
         hit_rand = random.uniform(0, 1)
-
-        # Quality-scaled thresholds (higher quality = more XBH)
-        single_ceiling = 0.70 - 0.25 * quality   # 0.70 at q=0 -> 0.45 at q=1
-        double_ceiling = single_ceiling + 0.18 + 0.10 * quality  # grows with quality
+        single_ceiling = 0.70 - 0.25 * quality
+        double_ceiling = single_ceiling + 0.18 + 0.10 * quality
         triple_ceiling = double_ceiling + 0.06 + 0.04 * quality
 
-        if hit_rand <= single_ceiling:
-            self.hit_type = 1
-            hit_result = "SINGLE"
-        elif hit_rand <= double_ceiling:
-            self.hit_type = 2
-            hit_result = "DOUBLE"
-        elif hit_rand <= triple_ceiling:
-            self.hit_type = 3
-            hit_result = "TRIPLE"
-        else:
+        if hit_rand > triple_ceiling:
             self.hit_type = 4
-            hit_result = "HOME RUN"
-
-        self.update_runners_and_score()
-        return hit_result
+            self.update_runners_and_score()
+            return "HOME RUN"
+        return "HIT"
 
     def get_power_hit_outcome(self, swing_location_y=None, ball_location_y=None, timing_diff=None):
         quality, vertical_offset = self._compute_contact_quality(
@@ -121,28 +120,29 @@ class HitOutcomeManager:
             else:
                 return "FLYOUT" if random.random() < 0.6 else "GROUNDOUT"
 
-        # Power swing: more weight to XBH, especially HR
+        # Same HR-boundary-only collapse as get_contact_hit_outcome. Power
+        # swings push more random rolls past triple_ceiling so HRs are
+        # naturally more common; SINGLE/DOUBLE/TRIPLE distribution comes
+        # from physics + retrieve-time classification.
         hit_rand = random.uniform(0, 1)
-
-        single_ceiling = 0.40 - 0.20 * quality   # 0.40 at q=0 -> 0.20 at q=1
+        single_ceiling = 0.40 - 0.20 * quality
         double_ceiling = single_ceiling + 0.25 + 0.05 * quality
         triple_ceiling = double_ceiling + 0.10 + 0.05 * quality
 
-        if hit_rand <= single_ceiling:
-            self.hit_type = 1
-            hit_result = "SINGLE"
-        elif hit_rand <= double_ceiling:
-            self.hit_type = 2
-            hit_result = "DOUBLE"
-        elif hit_rand <= triple_ceiling:
-            self.hit_type = 3
-            hit_result = "TRIPLE"
-        else:
+        if hit_rand > triple_ceiling:
             self.hit_type = 4
-            hit_result = "HOME RUN"
+            self.update_runners_and_score()
+            return "HOME RUN"
+        return "HIT"
 
+    def apply_classified_outcome(self, outcome_str):
+        """Called by pitch_simulation once the animation has classified a
+        non-HR HIT into SINGLE / DOUBLE / TRIPLE based on retrieve time.
+        Sets hit_type and advances runners accordingly.
+        """
+        mapping = {"SINGLE": 1, "DOUBLE": 2, "TRIPLE": 3}
+        self.hit_type = mapping.get(outcome_str, 1)
         self.update_runners_and_score()
-        return hit_result
     
     def power_timing_quality(self, swing_starttime, starttime, traveltime, windup_time):
         diff = abs((swing_starttime + 150) - (starttime + windup_time + traveltime))
@@ -225,6 +225,20 @@ class HitOutcomeManager:
             # Groundouts play either foul or single sounds
             groundout_sounds = ['foul', 'single']
             sound_choice = random.choice(groundout_sounds)
+            self.sound_manager.play(sound_choice)
+        elif outcome == "HIT":
+            # Generic HIT plays at contact, before the SINGLE/DOUBLE/TRIPLE
+            # classification is known. Pick a sound from contact quality so
+            # weak contact sounds weak and a hard-hit ball gets a satisfying
+            # crack — the actual outcome banner / classification arrives
+            # after the animation, the sound is just immediate feedback.
+            q = self.last_quality
+            if q < 0.4:
+                sound_choice = random.choice(['single', 'foul'])
+            elif q < 0.7:
+                sound_choice = random.choice(['single', 'double'])
+            else:
+                sound_choice = random.choice(['double', 'triple'])
             self.sound_manager.play(sound_choice)
         elif self.hit_type == 1:
             self.sound_manager.play('single')

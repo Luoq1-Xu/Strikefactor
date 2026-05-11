@@ -94,37 +94,44 @@ GROUNDOUT_CATCH_HOLD   =  450
 FLYOUT_TRAVEL_MS       = 4000
 FLYOUT_CATCH_HOLD      =  500
 
-# In-air time per outcome (FLY shape default). Calibrated against MLB hang
-# times: routine fly to OF ~3–4 sec, HRs 4.5–6 sec. Singles run shorter
-# because most are liners or grounders, not full flies. Triples and HRs are
-# longest — they have to carry to (or past) the wall.
-HIT_DURATIONS = {
-    "SINGLE":   2500,
-    "DOUBLE":   3300,
-    "TRIPLE":   4000,
-    "HOME RUN": 5000,
+# Flight duration. HOME RUN keeps its own value (calibrated against real
+# 4–6 s HR hang times). Generic HIT uses a base value that's quality-scaled
+# in _setup_hit. Tuned higher than a screamer's "instant" feel — at q=1
+# we end up around 2.6 s, at q=0 around 4 s — so balls don't rocket through
+# the air faster than the fielders can read.
+HIT_BASE_DURATION_MS = 3300
+HR_DURATION_MS = 5000
+
+# Fly-arc peak (px) for HOME RUN. HIT shapes derive their peak from
+# LINER_PEAK_RANGE / quality-scaled FLY peak / POPUP_PEAK_RANGE.
+HR_PEAK_H = 200
+FLY_HIT_PEAK_RANGE = (60, 130)   # quality-scaled inside _setup_hit
+
+# Per-shape landing-distance ranges (ft) for the generic HIT outcome,
+# parameterized by quality. Quality maps the random sample inside the
+# range — q=0 lands near the min, q=1 near the max — and a small uniform
+# spread keeps each contact looking distinct. GROUNDER doesn't use this
+# table; it routes through SQUIBBLER_LANDING / GROUNDER_SINGLE_LANDING
+# (already shape-specific). POP_UP routes through POPUP_LANDING (shallow
+# regardless). LINER/FLY use these ranges directly.
+HIT_LANDING_FT = {
+    # FLY range extends past the OFs (~290–310 ft home) into the warning
+    # track so well-struck balls actually clear the defenders. Combined with
+    # wall-hit detection in classification, this lets balls off the wall
+    # become doubles/triples instead of dying as singles in the OF's glove.
+    "LINER": (140, 290),
+    "FLY":   (170, 360),
 }
-# Standard fly-arc peak per outcome.
-HIT_PEAK_H = {
-    "SINGLE":    50,
-    "DOUBLE":    80,
-    "TRIPLE":   110,
-    "HOME RUN": 200,
-}
-# Per-outcome landing distance from home (ft). These are the source of truth
-# for where the ball lands (not where it ends up — see HIT_ROLL for friction).
-# Lateral angle is sampled separately per outcome (see _pick_hit_landing) so
-# we can model real hit patterns:
-#   SINGLE — LINER/FLY shapes drop in front of OFs (180–250 ft); GROUNDER
-#            shapes use GROUNDER_SINGLE_LANDING and land within the IF, then
-#            roll out past it.
-#   DOUBLE — gaps between OFs, or hard-hit balls down the line.
-#   TRIPLE — deepest hits, carry to the wall in deep gaps or down the line.
-HIT_DIST_FT = {
-    "SINGLE": (180, 250),
-    "DOUBLE": (260, 330),
-    "TRIPLE": (310, 365),
-}
+
+# Retrieve-time thresholds (ms from landing to fielder securing the ball).
+# Drives SINGLE / DOUBLE / TRIPLE classification for the HIT outcome.
+# Calibrated against a fielder's natural run-up time on routine plays —
+# even an OF charging in on a shallow fly takes ~2.5–3 s from landing to
+# the ball, so the SINGLE cutoff has to sit above that or every routine
+# play classifies as a single. Wall-bouncers bypass these thresholds
+# entirely (see WALL_HIT classification override).
+RETRIEVE_TIME_SINGLE_MAX_MS = 2800
+RETRIEVE_TIME_DOUBLE_MAX_MS = 5000
 # Pop-up landing — shallow, regardless of underlying outcome (px depth).
 POPUP_LANDING = {"depth": (150, 220), "lateral_frac": 0.5}
 
@@ -134,26 +141,23 @@ POPUP_LANDING = {"depth": (150, 220), "lateral_frac": 0.5}
 # single by passing the IFs, not by being dropped past them.
 GROUNDER_SINGLE_LANDING = {"depth_ft": (130, 185), "lateral_frac": 0.55}
 
-# Post-landing ball physics for SINGLE / DOUBLE / TRIPLE. After landing
-# the ball integrates with linear friction v(τ) = v0 − a·τ. v0 is sampled
-# off the in-flight arc just before landing (finite difference), so the
-# transition has no perceptible pause. Friction is tuned much lower than
-# pure grass-rolling friction (~3 ft/s²) for game pacing, but low enough
-# that the ball clearly continues to roll for ~2–4 seconds after the
-# bounces stop — the fielder has to chase, which is what makes hits read
-# like real plays. Tighter values made balls die inside the bounce window.
-HIT_ROLL = {
-    "SINGLE": {"decel": 0.000022},
-    "DOUBLE": {"decel": 0.000016},
-    "TRIPLE": {"decel": 0.000012},
-}
+# Rolling friction during the post-landing phase (px/ms²). Uniform across
+# hit outcomes — once a baseball is on the grass, friction is a property
+# of the surface, not how the ball got there. Distance-to-stop scales as
+# v²/(2a), so harder hits naturally roll farther without any per-outcome
+# tuning. Real grass rolling friction is ~3–10 ft/s² (≈0.1–0.3g); we run
+# higher than that for game pacing, but low enough that the ball still
+# clearly rolls for 1–2 s after the bounces stop. Higher friction also
+# keeps balls from routinely reaching the wall and rebounding straight
+# back into a fielder's glove.
+ROLLING_DECEL_PX_MS2 = 0.000035
 
 # Energy retained on impact, multiplied onto the sampled in-flight velocity.
 # Liner skips through; grounder is already on the ground; fly drops nearly
 # vertically and loses some horizontal carry; pop-up deadens hard. This is
 # the only place shape affects post-landing speed — once the ball is on the
 # ground, friction is a property of the grass, not the trajectory shape, so
-# rolling decel is uniform across shapes (see HIT_ROLL).
+# rolling decel is uniform across shapes (see ROLLING_DECEL_PX_MS2).
 SHAPE_LAND_FACTOR = {
     "LINER":    0.92,
     "GROUNDER": 1.00,
@@ -179,7 +183,7 @@ BOUNCE_HEIGHT_THRESHOLD_PX = 3.0
 
 # Per-bounce horizontal velocity loss. Each time the ball completes a
 # bounce, ground friction during the impact removes a small fraction of
-# horizontal speed. Continuous friction (HIT_ROLL.decel) handles the slow
+# horizontal speed. Continuous friction (ROLLING_DECEL_PX_MS2) handles the slow
 # decay during air time and rolling; this captures the impulse-style loss
 # at each impact. 4% per bounce is on the low end of real grass-impact
 # friction, chosen so the ball still has meaningful momentum when it
@@ -204,7 +208,13 @@ BOUNCE_HEIGHT_MAX_PX = 26   # cap so a tall fly doesn't moonshot the first hop
 # restitution < 1 so the carom loses energy.
 LANDING_WALL_MARGIN_PX  = 25
 BALL_WALL_MARGIN_PX     = 8
-WALL_BOUNCE_RESTITUTION = 0.55
+# Wall caroms now lose ~80% of energy on impact (was 0.55 = ~70% retained).
+# At the previous restitution, a screamer that reached the wall came back
+# at 55% of its incoming speed and rolled most of the way back to a fielder
+# in shallow OF — turning what should be a wall-bound XBH into an instant
+# single. With 0.20, the ball loses most of its momentum on the wall and
+# essentially dies there; a fielder still has to run all the way out.
+WALL_BOUNCE_RESTITUTION = 0.20
 
 # Squibbler landing — weak grounder, very short travel (~70–125 ft).
 SQUIBBLER_LANDING = {"depth": (100, 175), "lateral_frac": 0.5}
@@ -226,10 +236,17 @@ SHAPE_WEIGHTS = {
     "HOME RUN": [("FLY", 1.00)],
 }
 
-# HR distance scaling (ft). Quality-driven; below threshold pegs to min.
-HR_DIST_MIN_FT = 365
-HR_DIST_MAX_FT = 485
-HR_QUALITY_THRESHOLD = 0.4
+# HR carry past the wall (px). Most HRs barely clear; only the highest
+# quality contact carries deep. The displayed distance is computed from
+# the actual landing position rather than a quality-only mapping, so the
+# number on screen always matches where the ball lands. A squared bias
+# (carry = base + (rand**EXPONENT) * range) skews most carries toward
+# zero — i.e., "just-cleared" wall-scrapers — so blasts to the deepest
+# part of the screen are the rare exception, not the norm.
+HR_CARRY_MIN_PX           = 4
+HR_CARRY_BASE_RANGE_PX    = 22
+HR_CARRY_QUALITY_BONUS_PX = 60
+HR_CARRY_BIAS_EXPONENT    = 2.0
 
 # Fielder motion. Constant-velocity with acceleration/deceleration phases —
 # exponential easing produced a "snap to position then freeze" look that
@@ -238,8 +255,8 @@ FIELDER_MAX_SPEED_PX_MS = 0.040         # ~28 ft/sec at 1.4 px/ft (MLB Statcast 
 FIELDER_ACCEL_TIME_MS   = 220.0         # ramp from 0 to max_speed
 FIELDER_DECEL_RADIUS_PX = 28.0          # start slowing within this radius of target
 FIELDER_DECEL_FLOOR     = 0.20          # never below 20% speed in decel zone
-REACTION_DELAY_MIN_MS   = 120.0         # jittered per fielder so they don't all start in sync
-REACTION_DELAY_MAX_MS   = 240.0
+REACTION_DELAY_MIN_MS   = 200.0         # see-react-step: a real OF needs 200–400 ms before the first stride
+REACTION_DELAY_MAX_MS   = 380.0         # jittered per fielder so they don't all start in sync
 SWAY_AMPLITUDE          = 1.6
 SWAY_FREQUENCY          = 0.0018        # rad/ms
 LEAN_BASE_PX            = 5.0           # initial lean magnitude
@@ -256,6 +273,14 @@ GLOVE_COLOR             = (255, 200, 100)
 # friction guarantees the ball stops eventually, and the fielder converges
 # afterwards; we let the play run to a natural close rather than truncating.
 SECURE_RADIUS_PX        = 14
+# Post-landing, any non-primary fielder this close to the live ball ditches
+# the "lean toward the ball" idle and actively chases at full sprint. Real
+# baseball isn't single-fielder — when a ball rolls past the assigned
+# pursuer toward another defender, that defender is who actually picks it
+# up. ~100 px ≈ 70 ft is tight enough that only genuinely nearby fielders
+# intervene; with a wider radius, multiple OFs converged on every play and
+# the closest one always secured fast (turning extra-base hits into singles).
+ACTIVE_CHASE_RADIUS_PX  = 100
 
 
 def _lerp(a, b, t):
@@ -362,9 +387,9 @@ def _pick_hit_landing(outcome, shape, quality=1.0):
     driven (pop-up = shallow infield fly; squibbler = weak grounder) and
     behave the same regardless of which SINGLE outcome generated them.
 
-    GROUNDER singles also override depth: real grounder singles land inside
+    GROUNDER hits also override depth: real grounder singles land inside
     the IF and roll past the IFs into the OF, rather than dropping in past
-    them. The post-landing roll (HIT_ROLL.decel) carries the ball out.
+    them. The post-landing roll (ROLLING_DECEL_PX_MS2) carries the ball out.
     """
     # Shape overrides — POP_UP and squibblers ignore outcome distance.
     if shape == "POP_UP":
@@ -373,88 +398,112 @@ def _pick_hit_landing(outcome, shape, quality=1.0):
         lat = random.uniform(-1, 1) * depth * spec["lateral_frac"]
         return _clamp_inside_wall((HOME[0] + lat, HOME[1] - depth),
                                   LANDING_WALL_MARGIN_PX)
-    if (shape == "GROUNDER" and outcome == "SINGLE"
-            and quality < SQUIBBLER_QUALITY_THRESHOLD):
-        spec = SQUIBBLER_LANDING
-        depth = random.uniform(*spec["depth"])
-        lat = random.uniform(-1, 1) * depth * spec["lateral_frac"]
-        return _clamp_inside_wall((HOME[0] + lat, HOME[1] - depth),
-                                  LANDING_WALL_MARGIN_PX)
-    # Hard grounder single — lands within / just past the IF, rolls out
-    # to where the OF picks it up. Squibbler case caught above.
-    if shape == "GROUNDER" and outcome == "SINGLE":
-        spec = GROUNDER_SINGLE_LANDING
-        depth = random.uniform(*spec["depth_ft"]) * FT_TO_PX
+    # Grounder hits — squibbler vs hard contact split. Both apply to the
+    # generic HIT outcome and to legacy SINGLE callers.
+    if shape == "GROUNDER" and outcome in ("SINGLE", "HIT"):
+        if quality < SQUIBBLER_QUALITY_THRESHOLD:
+            spec = SQUIBBLER_LANDING
+            depth = random.uniform(*spec["depth"])
+        else:
+            spec = GROUNDER_SINGLE_LANDING
+            depth = random.uniform(*spec["depth_ft"]) * FT_TO_PX
         lat = random.uniform(-1, 1) * depth * spec["lateral_frac"]
         return _clamp_inside_wall((HOME[0] + lat, HOME[1] - depth),
                                   LANDING_WALL_MARGIN_PX)
 
+    # Generic HIT — quality-driven distance and a layered angle bias for
+    # higher-quality contact: down-the-line shots, LCF/RCF gap shots, or
+    # uniform-across-fair as a fallback. The retrieve-time classification
+    # downstream converts long carries into doubles/triples and short ones
+    # into singles, so we only need to produce a believable physical
+    # landing — but routing more high-quality contact toward the lines and
+    # gaps is what gives the corner OF a long chase, which is where real-
+    # life doubles and triples come from.
+    if outcome == "HIT":
+        q = max(0.0, min(1.0, quality))
+        dist_min, dist_max = HIT_LANDING_FT.get(shape, HIT_LANDING_FT["LINER"])
+        # Center the random window around q-scaled mid; keeps each contact
+        # different even at fixed quality.
+        mid = dist_min + (dist_max - dist_min) * q
+        spread = (dist_max - dist_min) * 0.18
+        dist_ft = random.uniform(max(dist_min, mid - spread),
+                                 min(dist_max, mid + spread))
+        # Probabilities sum to <= 1; the leftover budget falls through to
+        # the uniform-across-fair branch. Higher quality unlocks more line
+        # and gap shots — the angles where the corner OF has the longest
+        # run-up.
+        line_prob = 0.08 + 0.20 * q
+        gap_prob  = 0.22 + 0.30 * q
+        roll = random.random()
+        if roll < line_prob:
+            # Down-the-line shot. 53° / 127° sit just inside the foul lines
+            # (50° / 130° clamp) so the ball stays fair without drifting
+            # back toward CF. The corner OF (LF/RF) has to cover ~150–200 px
+            # to retrieve, naturally producing extra-base hits.
+            side = random.choice((-1, 1))
+            base = math.radians(53) if side > 0 else math.radians(127)
+            angle = base + random.uniform(-0.05, 0.05)
+        elif roll < line_prob + gap_prob:
+            side = random.choice((-1, 1))
+            gap = math.radians(79) if side > 0 else math.radians(101)
+            angle = gap + random.uniform(-0.10, 0.10)
+        else:
+            angle = random.uniform(math.radians(50), math.radians(130))
+        point = _polar_point(angle, dist_ft * FT_TO_PX)
+        return _clamp_inside_wall(point, LANDING_WALL_MARGIN_PX)
+
     if outcome == "HOME RUN":
         # HRs land past the wall. Direction biased toward the pull/center
-        # area (most HRs aren't down-the-line shots); how far past the wall
-        # scales with quality (better contact = deeper carry).
+        # area (most HRs aren't down-the-line shots). Carry past the wall
+        # uses a squared bias so most rolls produce small carries (just-
+        # cleared, wall-scrapers); only the right tail produces deep blasts.
+        # Quality enlarges the *range* of possible carries, not the
+        # likelihood of large ones — so even on max-quality contact, most
+        # HRs still barely clear, with the occasional moonshot.
         angle = random.gauss(math.radians(90), math.radians(22))
         angle = max(math.radians(50), min(math.radians(130), angle))
         wall_r = _wall_r_at(angle)
         q = max(0.0, min(1.0, quality))
-        carry_px = random.uniform(15, 45) + q * 55
+        bias = random.random() ** HR_CARRY_BIAS_EXPONENT
+        carry_range = HR_CARRY_BASE_RANGE_PX + q * HR_CARRY_QUALITY_BONUS_PX
+        carry_px = HR_CARRY_MIN_PX + bias * carry_range
         return _polar_point(angle, wall_r + carry_px)
 
-    if outcome == "SINGLE":
-        # In front of the OFs — short distance from home (130–225 ft) keeps
-        # the ball from clearing where corner OFs play (~290 ft) even after
-        # the post-landing roll. Angle uniform across fair territory, with
-        # a slight pull toward the lines for variety.
-        dist_ft = random.uniform(*HIT_DIST_FT["SINGLE"])
-        angle = random.uniform(math.radians(48), math.radians(132))
-        return _polar_point(angle, dist_ft * FT_TO_PX)
-
-    if outcome == "DOUBLE":
-        # 30% down-the-line, 70% in the gap. Gap angles are the BISECTORS
-        # between adjacent OFs — LF (112°) and CF (90°) → 101°; CF (90°) and
-        # RF (68°) → 79°. Spread is kept under 6° so the ball doesn't drift
-        # back onto an OF's standing position (which is what made every gap
-        # double previously land underneath the corner OF).
-        dist_ft = random.uniform(*HIT_DIST_FT["DOUBLE"])
-        if random.random() < 0.30:
-            side = random.choice((-1, 1))
-            base = math.radians(50) if side > 0 else math.radians(130)
-            angle = base + random.uniform(0, 0.08) * side
-        else:
-            side = random.choice((-1, 1))
-            gap = math.radians(79) if side > 0 else math.radians(101)
-            angle = gap + random.uniform(-0.10, 0.10)
-        point = _polar_point(angle, dist_ft * FT_TO_PX)
-        return _clamp_inside_wall(point, LANDING_WALL_MARGIN_PX)
-
-    if outcome == "TRIPLE":
-        # Triples carry deeper — ~45% down-the-line, ~55% deep gap. Almost
-        # never up the middle (CF can usually catch up to those). Gap angles
-        # match the OF bisectors (79° / 101°), same reasoning as DOUBLE.
-        dist_ft = random.uniform(*HIT_DIST_FT["TRIPLE"])
-        side = random.choice((-1, 1))
-        if random.random() < 0.45:
-            base = math.radians(48) if side > 0 else math.radians(132)
-            angle = base + random.uniform(0, 0.06) * side
-        else:
-            gap = math.radians(79) if side > 0 else math.radians(101)
-            angle = gap + random.uniform(-0.10, 0.10)
-        point = _polar_point(angle, dist_ft * FT_TO_PX)
-        return _clamp_inside_wall(point, LANDING_WALL_MARGIN_PX)
-
-    # Fallback — treat unknown outcomes as singles.
-    dist_ft = random.uniform(*HIT_DIST_FT["SINGLE"])
-    angle = random.uniform(math.radians(48), math.radians(132))
-    return _polar_point(angle, dist_ft * FT_TO_PX)
+    # Fallback — treat any unknown outcome as a generic HIT (which the
+    # caller above already handles for the standard case). Reaches here
+    # only if a stale legacy outcome string is passed in.
+    q = max(0.0, min(1.0, quality))
+    dist_min, dist_max = HIT_LANDING_FT.get(shape, HIT_LANDING_FT["LINER"])
+    dist_ft = random.uniform(dist_min, dist_min + (dist_max - dist_min) * (0.4 + 0.4 * q))
+    angle = random.uniform(math.radians(50), math.radians(130))
+    point = _polar_point(angle, dist_ft * FT_TO_PX)
+    return _clamp_inside_wall(point, LANDING_WALL_MARGIN_PX)
 
 
 def _pick_shape(outcome, vertical_offset):
-    """Hybrid: outs are deterministic from vertical_offset; hits are weighted-random."""
+    """Pick a trajectory shape from outcome + bat-vs-ball alignment.
+
+    Outs are deterministic; HIT (the generic non-HR hit) is fully driven by
+    vertical_offset so the visual matches how the bat met the ball; HOME
+    RUN and any legacy outcomes fall back to weighted random.
+    """
     if outcome == "GROUNDOUT":
         return "GROUNDER"
     if outcome == "FLYOUT":
         # Bat way under the ball -> infield pop-up.
         return "POP_UP" if vertical_offset < -25 else "FLY"
+    if outcome == "HIT":
+        # Vertical-offset thresholds match the FLYOUT pop-up cutoff (-25)
+        # for consistency with the existing convention. Magnitudes outside
+        # ±8 reliably skew flight: bat clearly above ball -> grounder, bat
+        # clearly under ball -> fly; near zero -> liner.
+        if vertical_offset < -25:
+            return "POP_UP"
+        if vertical_offset < -8:
+            return "FLY"
+        if vertical_offset > 8:
+            return "GROUNDER"
+        return "LINER"
     weights = SHAPE_WEIGHTS.get(outcome, [("FLY", 1.0)])
     r = random.random()
     cum = 0.0
@@ -513,17 +562,32 @@ class HitAnimation:
         self._elapsed = 0
         self._last_elapsed = 0
 
-        # For SINGLE/DOUBLE/TRIPLE the ball lands on the ground and a fielder
-        # has to run it down. Animation pauses when secured (within
-        # SECURE_RADIUS_PX of the ball) instead of timing out at duration_ms.
-        self._needs_secure = outcome in ("SINGLE", "DOUBLE", "TRIPLE")
+        # For HIT (and legacy SINGLE/DOUBLE/TRIPLE) the ball lands on the
+        # ground and a fielder has to run it down. Animation pauses when
+        # secured (within SECURE_RADIUS_PX of the ball) instead of timing
+        # out at duration_ms. For HIT the resolved outcome is classified
+        # from the secure time — see classified_outcome below.
+        self._needs_secure = outcome in ("SINGLE", "DOUBLE", "TRIPLE", "HIT")
         self._secured = False
+        self._secured_at_ms = None  # elapsed time when ball was retrieved
+
+        # Final outcome after classification. For non-HIT outcomes this is
+        # known up front; for HIT it stays None until the fielder secures
+        # the ball, at which point retrieve time picks SINGLE/DOUBLE/TRIPLE.
+        self.classified_outcome = None if outcome == "HIT" else outcome
 
         # Stateful ball-on-ground physics (SDT). Lazy-initialized at the
         # landing transition by _init_ball_on_ground.
         self._ball_pos = None
         self._ball_v = None
         self._ball_decel = 0.0
+
+        # Set true the first time the rolling ball reflects off the elliptical
+        # outfield wall (see _step_ball_on_ground). Drives an XBH override in
+        # the HIT classifier — a ball that reaches the wall is, by physical
+        # definition, past every OF, so it should never resolve as a single
+        # regardless of how quickly the ricochet brings it back to a fielder.
+        self._wall_hit = False
 
         # Build the 9-fielder roster. Random sway phases + reaction delays so
         # fielders don't move in lockstep — the team reads the ball with
@@ -556,25 +620,31 @@ class HitAnimation:
         self._ball = HOME
         self._ball_shadow = HOME
 
-        # HR distance (None for non-HR).
+        # HR distance (set after _setup_hit, from the actual landing point).
         self.hr_distance_ft = None
-        if outcome == "HOME RUN":
-            q = max(HR_QUALITY_THRESHOLD, min(1.0, quality))
-            t = (q - HR_QUALITY_THRESHOLD) / max(1e-6, 1.0 - HR_QUALITY_THRESHOLD)
-            self.hr_distance_ft = round(
-                HR_DIST_MIN_FT + t * (HR_DIST_MAX_FT - HR_DIST_MIN_FT)
-            )
 
         # Outcome-specific setup + target assignment.
         if outcome == "GROUNDOUT":
             self._setup_groundout()
         elif outcome == "FLYOUT":
             self._setup_flyout()
-        elif outcome in HIT_DURATIONS:
+        elif outcome in ("HIT", "HOME RUN", "SINGLE", "DOUBLE", "TRIPLE"):
             self._setup_hit(outcome)
         else:
-            self.outcome = "SINGLE"
-            self._setup_hit("SINGLE")
+            self.outcome = "HIT"
+            self.classified_outcome = None
+            self._setup_hit("HIT")
+
+        # Compute HR distance from where the ball actually lands so the
+        # number on screen always matches the visual. Without this, the old
+        # quality-driven mapping could show 480 ft on a HR that visibly
+        # landed just past the wall (or vice versa).
+        if outcome == "HOME RUN":
+            landing_ft = math.hypot(
+                self._hit_end[0] - HOME[0],
+                HOME[1] - self._hit_end[1],
+            ) / FT_TO_PX
+            self.hr_distance_ft = round(landing_ft)
 
         # Lazy-init fonts on first draw that needs them.
         self._font = None
@@ -662,9 +732,15 @@ class HitAnimation:
     def _setup_hit(self, outcome):
         self._hit_end = _pick_hit_landing(outcome, self.shape, self.quality)
 
-        # Peak chosen per shape (FLY uses outcome's standard peak).
+        # Peak chosen per shape. HOME RUN uses its scripted peak; HIT uses
+        # a quality-scaled FLY peak so soft flies arc lower than screamers.
         if self.shape == "FLY":
-            self._hit_peak = HIT_PEAK_H[outcome]
+            if outcome == "HOME RUN":
+                self._hit_peak = HR_PEAK_H
+            else:
+                q = max(0.0, min(1.0, self.quality))
+                lo, hi = FLY_HIT_PEAK_RANGE
+                self._hit_peak = lo + q * (hi - lo)
         elif self.shape == "LINER":
             self._hit_peak = random.uniform(*LINER_PEAK_RANGE)
         elif self.shape == "POP_UP":
@@ -673,7 +749,16 @@ class HitAnimation:
             self._hit_peak = 0
             self._grounder_peaks = _grounder_peaks(self.quality)
 
-        self.duration_ms = HIT_DURATIONS[outcome]
+        # Duration. HOME RUN keeps its scripted hang time. HIT (across all
+        # shapes) is quality-scaled: harder contact zips visually, weaker
+        # contact drifts. Scaling is intentionally gentle (1.2 → 0.8 of
+        # base) so even q=1 contact takes ~2.6 s in the air rather than
+        # rocketing through the field faster than the fielders can read.
+        if outcome == "HOME RUN":
+            self.duration_ms = HR_DURATION_MS
+        else:
+            q = max(0.0, min(1.0, self.quality))
+            self.duration_ms = int(HIT_BASE_DURATION_MS * (1.2 - 0.4 * q))
 
         if outcome == "HOME RUN":
             # Closest OF runs back toward the wall along the ball's bearing,
@@ -697,11 +782,11 @@ class HitAnimation:
         # Pick primary fielder by depth: POP_UPs and squibblers (which land
         # 80–130 ft from home) go to an IF; balls past the IFs go to the OF.
         # Threshold (-220 px) sits just past the deepest IF home (145 ft =
-        # 203 px). Hard grounder singles get a dedicated override — they
-        # land in the IF but roll out past it, and the OF (not the IF)
-        # picks them up, so we route to the OF up front.
+        # 203 px). Hard grounder hits get a dedicated override — they land
+        # in the IF but roll out past it, and the OF (not the IF) picks
+        # them up, so we route to the OF up front.
         is_grounder_single_through = (
-            outcome == "SINGLE" and self.shape == "GROUNDER"
+            outcome in ("SINGLE", "HIT") and self.shape == "GROUNDER"
             and self.quality >= SQUIBBLER_QUALITY_THRESHOLD
         )
         if self.shape == "POP_UP" or (
@@ -757,8 +842,14 @@ class HitAnimation:
 
         excluded = {primary}
 
-        # XBH: cutoff infielder shifts to relay between OF and 2B.
-        if outcome in ("DOUBLE", "TRIPLE"):
+        # Cutoff vs. backup. The classified outcome isn't known yet for HIT,
+        # so use the landing depth as the proxy: any ball that lands deep
+        # enough to be a potential XBH gets the relay infielder shifted to
+        # the cutoff line. Shallow hits get an adjacent backup instead.
+        landing_dist = math.hypot(self._hit_end[0] - HOME[0],
+                                  self._hit_end[1] - HOME[1])
+        deep_hit = landing_dist > 280  # ~200 ft — past where corner OFs play
+        if outcome in ("DOUBLE", "TRIPLE") or (outcome == "HIT" and deep_hit):
             cutoff = "SS" if self._hit_end[0] < HOME[0] else "2B"
             if cutoff != primary:
                 cutoff_home = self.fielders[cutoff].home_pos
@@ -791,17 +882,37 @@ class HitAnimation:
             self.fielders[r].home_pos[1] - self.fielders[role].home_pos[1]))
 
     def _update_lean_targets(self):
-        """Recompute lean targets each frame so non-primary fielders track the
-        live ball position. Lean magnitude grows with play progress, so fielders
-        keep moving (a step at a time) instead of snapping to one spot at t=0
-        and freezing for the rest of the play.
+        """Recompute non-primary fielder targets each frame.
+
+        Default: small "lean" toward the ball — keeps the team alive at
+        rest without committing to a play. Magnitude grows with progress,
+        so fielders keep moving a step at a time instead of freezing.
+
+        After the ball has landed and is on the ground, any non-primary
+        fielder within ACTIVE_CHASE_RADIUS_PX of the live ball ditches the
+        lean and actively chases at full sprint. This handles the case
+        where the ball rolls past the assigned primary toward a different
+        defender — that defender becomes a real pursuer instead of just
+        leaning into the play.
         """
         progress = min(1.0, self._elapsed / max(1, self.duration_ms))
         max_lean = LEAN_BASE_PX + LEAN_GROWTH_PX * progress
         focus = self._ball
+        ball_on_ground = (self._needs_secure
+                          and self._elapsed > self.duration_ms
+                          and not self._secured)
         for role, f in self.fielders.items():
             if role in self._lean_excluded:
                 continue
+            if ball_on_ground:
+                d_ball = math.hypot(focus[0] - f.pos[0],
+                                    focus[1] - f.pos[1])
+                if d_ball < ACTIVE_CHASE_RADIUS_PX:
+                    f.target = (focus[0], focus[1])
+                    # Tight decel zone so the chaser doesn't ease off
+                    # before reaching the ball — secure-radius approach.
+                    f.decel_radius_px = SECURE_RADIUS_PX
+                    continue
             home = f.home_pos
             dx = focus[0] - home[0]
             dy = focus[1] - home[1]
@@ -853,29 +964,23 @@ class HitAnimation:
     def _init_ball_on_ground(self):
         """Initialize stateful ball physics at the landing transition.
 
-        Velocity is sampled off the in-flight arc just before landing
-        (finite difference at t≈0.97), then trimmed by SHAPE_LAND_FACTOR for
-        impact energy loss. This is what kills the perceived 'pause' at the
-        bounce: the ball arrives at the ground moving at its in-flight
-        speed and continues at the same speed. Stash the in-flight peak so
-        the post-landing bounce visualization scales with it.
+        Horizontal motion is linear in all four arc shapes (the sin-based
+        lift only offsets the rendered y), so the ground-frame velocity at
+        landing is exactly (hit_end − HOME) / duration_ms. Trimmed by
+        SHAPE_LAND_FACTOR for impact energy loss. Sampling from the
+        rendered arc (with lift) instead leaks the arc's vertical-lift
+        component into _ball_v[1] — for a sharp grounder, lift at t=0.97
+        is ~3 px, contributing a spurious ~0.04 px/ms downward y-velocity
+        that pushes the ball deeper post-landing. Linear sampling avoids
+        the artifact entirely.
         """
         self._ball_pos = [self._hit_end[0], self._hit_end[1]]
-        self._ball_decel = HIT_ROLL[self.outcome]["decel"]
+        self._ball_decel = ROLLING_DECEL_PX_MS2
 
-        t_sample = 0.97
-        if self.shape == "GROUNDER":
-            sample = _arc_grounder(HOME, self._hit_end,
-                                   self._grounder_peaks, t_sample)
-        elif self.shape == "LINER":
-            sample = _arc_liner(HOME, self._hit_end, self._hit_peak, t_sample)
-        else:
-            sample = _arc_fly(HOME, self._hit_end, self._hit_peak, t_sample)
-        dt = (1.0 - t_sample) * self.duration_ms
         factor = SHAPE_LAND_FACTOR.get(self.shape, 1.0)
         self._ball_v = [
-            (self._hit_end[0] - sample[0]) / dt * factor,
-            (self._hit_end[1] - sample[1]) / dt * factor,
+            (self._hit_end[0] - HOME[0]) / self.duration_ms * factor,
+            (self._hit_end[1] - HOME[1]) / self.duration_ms * factor,
         ]
 
         # Precompute a bounce schedule: a list of (start_ms, duration_ms, height_px)
@@ -990,6 +1095,10 @@ class HitAnimation:
             ny_p = -ny_m
             v_outward = self._ball_v[0] * nx_p + self._ball_v[1] * ny_p
             if v_outward > 0:
+                # Record the impact for HIT classification — any ball that
+                # reaches the wall is at minimum a double regardless of how
+                # the carom lands.
+                self._wall_hit = True
                 k = (1.0 + WALL_BOUNCE_RESTITUTION) * v_outward
                 self._ball_v[0] -= k * nx_p
                 self._ball_v[1] -= k * ny_p
@@ -1060,9 +1169,15 @@ class HitAnimation:
 
         # Primary runs into the catch with cosine ease-in/out, arriving on the
         # ball. Override pos directly so we get exactly-on-ball arrival
-        # regardless of the constant-velocity stepper.
-        eased = 0.5 - 0.5 * math.cos(math.pi * ball_t)
+        # regardless of the constant-velocity stepper. Reaction delay holds
+        # the fielder in place for the first 200–380 ms (see-react-step) —
+        # without it, every fielder starts running the instant the ball is
+        # struck, which reads as superhuman.
         primary = self.fielders[self._primary_role]
+        delay = primary.reaction_delay_ms
+        move_window = max(1.0, self._t_ball_arrive - delay)
+        move_t = max(0.0, min(1.0, (elapsed - delay) / move_window))
+        eased = 0.5 - 0.5 * math.cos(math.pi * move_t)
         cx, cy = _lerp(self._primary_start, self._primary_stop, eased)
         primary.pos[0] = cx
         primary.pos[1] = cy
@@ -1124,8 +1239,11 @@ class HitAnimation:
         primary = self.fielders[self._primary_role]
         if self.outcome == "HOME RUN":
             if in_flight:
-                t = elapsed / self.duration_ms
-                eased = 0.5 - 0.5 * math.cos(math.pi * t)
+                # Reaction delay before the OF turns and retreats to the wall.
+                delay = primary.reaction_delay_ms
+                move_window = max(1.0, self.duration_ms - delay)
+                move_t = max(0.0, min(1.0, (elapsed - delay) / move_window))
+                eased = 0.5 - 0.5 * math.cos(math.pi * move_t)
                 cx, cy = _lerp(self._primary_start, self._primary_stop, eased)
                 primary.pos[0] = cx
                 primary.pos[1] = cy
@@ -1136,10 +1254,44 @@ class HitAnimation:
             # Pacing was for the in-flight phase only — once the ball is on
             # the ground the fielder sprints to chase it down.
             primary.max_speed = self._primary_full_speed
-            d = math.hypot(primary.pos[0] - self._ball[0],
-                           primary.pos[1] - self._ball[1])
-            if d < SECURE_RADIUS_PX:
+            primary.decel_radius_px = SECURE_RADIUS_PX
+            # Any fielder near the ball can secure it — the ball sometimes
+            # rolls past the assigned primary toward a different defender,
+            # and that defender (already chasing via _update_lean_targets'
+            # active-chase branch) makes the play. Closest fielder to the
+            # ball wins the race; pin the play to whoever it was so the
+            # post-secure rendering shows the right glove.
+            closest_role = None
+            closest_dist = float('inf')
+            for role, f in self.fielders.items():
+                d = math.hypot(f.pos[0] - self._ball[0],
+                               f.pos[1] - self._ball[1])
+                if d < closest_dist:
+                    closest_dist = d
+                    closest_role = role
+            if closest_dist < SECURE_RADIUS_PX:
                 self._secured = True
+                self._secured_at_ms = self._elapsed
+                if closest_role is not None and closest_role != self._primary_role:
+                    self._primary_role = closest_role
+                # For the generic HIT outcome, classify SINGLE / DOUBLE /
+                # TRIPLE from how long the fielder took. Balls that reached
+                # the wall override the SINGLE branch entirely — by physical
+                # definition the ball got past every OF, so it has to be at
+                # minimum a double regardless of how the carom returns.
+                if self.outcome == "HIT" and self.classified_outcome is None:
+                    retrieve_ms = self._secured_at_ms - self.duration_ms
+                    if self._wall_hit:
+                        if retrieve_ms >= RETRIEVE_TIME_DOUBLE_MAX_MS:
+                            self.classified_outcome = "TRIPLE"
+                        else:
+                            self.classified_outcome = "DOUBLE"
+                    elif retrieve_ms < RETRIEVE_TIME_SINGLE_MAX_MS:
+                        self.classified_outcome = "SINGLE"
+                    elif retrieve_ms < RETRIEVE_TIME_DOUBLE_MAX_MS:
+                        self.classified_outcome = "DOUBLE"
+                    else:
+                        self.classified_outcome = "TRIPLE"
 
     # ---- Draw -----------------------------------------------------------
 
@@ -1213,7 +1365,13 @@ class HitAnimation:
         body.set_alpha(int(alpha * 255))
         shadow.set_alpha(int(alpha * 200))
 
-        rect = body.get_rect(center=(int(self._hit_end[0]), int(self._hit_end[1]) - 28))
+        # Clamp text to remain visible even when the ball lands at or above
+        # the top of the screen (the rare deep blasts). Without this, the
+        # distance disappears off-screen exactly when the player most wants
+        # to read it.
+        text_h = body.get_height()
+        text_y = max(text_h // 2 + 4, int(self._hit_end[1]) - 28)
+        rect = body.get_rect(center=(int(self._hit_end[0]), text_y))
         screen.blit(shadow, rect.move(2, 2))
         screen.blit(body, rect)
 

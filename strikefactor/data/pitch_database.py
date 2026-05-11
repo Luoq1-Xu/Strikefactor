@@ -2,14 +2,40 @@
 SQLite pitch data collection system.
 
 Captures every pitch with full 9-parameter kinematics, trajectory sampling,
-at-bat context, and outcome data for analytics and pitch similarity analysis.
+at-bat context, outcome data, and per-pitch skill signals (timing, contact
+quality, mistake flags, ABS umpire-vs-truth) for analytics and pitch
+similarity analysis.
+
+Tables:
+- pitches: one row per thrown pitch
+- pitch_trajectories: 20-point 3D trajectory samples per pitch
+- at_bats: one row per resolved at-bat (pitches.ab_id joins back)
+- games: one row per user-facing game (Arcade encounter, GameDay 9-inning,
+         Sandbox session)
+- batter_profiles: persisted BatterProfile aggregates per (mode, difficulty)
 """
 
 import sqlite3
 import uuid
 import os
 import glob
+import json
 from datetime import datetime, timedelta
+
+
+# Pitcher handedness — used to populate pitches.pitcher_hand. Kept here
+# rather than on the Pitcher class so the existing pitcher constructors
+# don't need a new arg.
+PITCHER_HANDEDNESS = {
+    "sale": "L",
+    "mcclanahan": "L",
+    "degrom": "R",
+    "yamamoto": "R",
+    "sasaki": "R",
+}
+
+
+SCHEMA_VERSION = 2  # Bumped when migrations are added; see PitchDB._migrate.
 
 
 class PitchDB:
@@ -19,12 +45,15 @@ class PitchDB:
     CREATE TABLE IF NOT EXISTS pitches (
         pitch_id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
+        game_id TEXT,
+        ab_id TEXT,
         game_mode TEXT,
         difficulty TEXT,
         created_at TEXT NOT NULL,
 
         -- Pitcher
         pitcher_name TEXT NOT NULL,
+        pitcher_hand TEXT,
         pitch_type TEXT NOT NULL,
         ai_selection INTEGER,
 
@@ -43,7 +72,7 @@ class PitchDB:
         plate_x_ft REAL,
         plate_z_ft REAL,
 
-        -- Context
+        -- AB / count context
         strikes_before INTEGER,
         balls_before INTEGER,
         outs_before INTEGER,
@@ -53,12 +82,33 @@ class PitchDB:
         batter_hand TEXT,
         prev_pitch_type TEXT,
 
+        -- GameDay context (NULL outside gameday)
+        inning INTEGER,
+        is_top_inning INTEGER,
+        score_diff INTEGER,
+        is_starter INTEGER,
+        pitcher_pitch_count INTEGER,
+        pitcher_fatigue REAL,
+        mistake_pitch INTEGER,
+
+        -- Skill signals
+        swing_timing_diff_ms REAL,
+        contact_quality REAL,
+        vertical_offset_in REAL,
+
+        -- Umpire / ABS
+        ai_umpire_strike INTEGER,
+        truth_strike INTEGER,
+        abs_challenged INTEGER,
+        abs_overturned INTEGER,
+
         -- Outcome
         swing_type INTEGER,
         on_time INTEGER,
         outcome TEXT,
         is_strike INTEGER,
-        is_hit INTEGER
+        is_hit INTEGER,
+        runs_scored_on_pitch INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS pitch_trajectories (
@@ -75,13 +125,70 @@ class PitchDB:
     CREATE TABLE IF NOT EXISTS at_bats (
         ab_id TEXT PRIMARY KEY,
         session_id TEXT NOT NULL,
+        game_id TEXT,
         pitcher_name TEXT,
         batter_hand TEXT,
         pitch_count INTEGER,
         final_outcome TEXT,
         created_at TEXT NOT NULL
     );
+
+    CREATE TABLE IF NOT EXISTS games (
+        game_id TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
+        game_mode TEXT NOT NULL,
+        difficulty TEXT NOT NULL,
+        pitcher_name TEXT,
+        started_at TEXT NOT NULL,
+        ended_at TEXT,
+        final_player_score INTEGER,
+        final_opponent_score INTEGER,
+        result TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS batter_profiles (
+        profile_key TEXT PRIMARY KEY,
+        game_mode TEXT NOT NULL,
+        difficulty TEXT NOT NULL,
+        aggregates_json TEXT NOT NULL,
+        updated_at TEXT NOT NULL
+    );
     """
+
+    # Indexes created post-migration so they reference columns that may
+    # only exist after the v1→v2 ALTER TABLEs in _migrate().
+    POST_MIGRATE_INDEXES = (
+        "CREATE INDEX IF NOT EXISTS idx_pitches_game ON pitches(game_id)",
+        "CREATE INDEX IF NOT EXISTS idx_pitches_ab ON pitches(ab_id)",
+        "CREATE INDEX IF NOT EXISTS idx_pitches_mode_diff ON pitches(game_mode, difficulty)",
+    )
+
+    # Columns added after the initial v1 schema. Each is applied via
+    # ALTER TABLE if missing — SQLite doesn't support "ADD COLUMN IF NOT
+    # EXISTS", so we probe the table info first.
+    V2_PITCHES_COLUMNS = [
+        ("game_id", "TEXT"),
+        ("ab_id", "TEXT"),
+        ("pitcher_hand", "TEXT"),
+        ("inning", "INTEGER"),
+        ("is_top_inning", "INTEGER"),
+        ("score_diff", "INTEGER"),
+        ("is_starter", "INTEGER"),
+        ("pitcher_pitch_count", "INTEGER"),
+        ("pitcher_fatigue", "REAL"),
+        ("mistake_pitch", "INTEGER"),
+        ("swing_timing_diff_ms", "REAL"),
+        ("contact_quality", "REAL"),
+        ("vertical_offset_in", "REAL"),
+        ("ai_umpire_strike", "INTEGER"),
+        ("truth_strike", "INTEGER"),
+        ("abs_challenged", "INTEGER"),
+        ("abs_overturned", "INTEGER"),
+        ("runs_scored_on_pitch", "INTEGER"),
+    ]
+    V2_AT_BATS_COLUMNS = [
+        ("game_id", "TEXT"),
+    ]
 
     # Backup policy
     BACKUP_DIR_NAME = "backups"
@@ -96,7 +203,36 @@ class PitchDB:
         self.conn.execute("PRAGMA journal_mode=WAL")
         self.conn.execute("PRAGMA foreign_keys=ON")
         self.conn.executescript(self.SCHEMA)
+        self._migrate()
         self.conn.commit()
+
+    def _migrate(self):
+        """Apply ALTER TABLE migrations and create post-migrate indexes.
+
+        Indexes live here (not in SCHEMA) so they reference columns that may
+        only exist after the ALTER TABLEs below run on a pre-v2 database.
+        """
+        cur = self.conn.execute("PRAGMA user_version")
+        version = cur.fetchone()[0]
+
+        if version < SCHEMA_VERSION:
+            # Determine which columns already exist (running this on a fresh
+            # v2 db is a no-op because executescript already created them).
+            existing_pitches = {row[1] for row in self.conn.execute("PRAGMA table_info(pitches)")}
+            for col, decl in self.V2_PITCHES_COLUMNS:
+                if col not in existing_pitches:
+                    self.conn.execute(f"ALTER TABLE pitches ADD COLUMN {col} {decl}")
+
+            existing_ab = {row[1] for row in self.conn.execute("PRAGMA table_info(at_bats)")}
+            for col, decl in self.V2_AT_BATS_COLUMNS:
+                if col not in existing_ab:
+                    self.conn.execute(f"ALTER TABLE at_bats ADD COLUMN {col} {decl}")
+
+            self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+
+        # Always (re)create indexes — IF NOT EXISTS makes this cheap.
+        for sql in self.POST_MIGRATE_INDEXES:
+            self.conn.execute(sql)
 
     @classmethod
     def _auto_backup(cls, db_path):
@@ -172,6 +308,43 @@ class PitchDB:
                 list(ab_dict.values()),
             )
 
+    def insert_game(self, game_dict):
+        cols = ", ".join(game_dict.keys())
+        placeholders = ", ".join("?" for _ in game_dict)
+        with self.conn:
+            self.conn.execute(
+                f"INSERT INTO games ({cols}) VALUES ({placeholders})",
+                list(game_dict.values()),
+            )
+
+    def update_game(self, game_id, updates):
+        if not updates:
+            return
+        sets = ", ".join(f"{k} = ?" for k in updates.keys())
+        params = list(updates.values()) + [game_id]
+        with self.conn:
+            self.conn.execute(f"UPDATE games SET {sets} WHERE game_id = ?", params)
+
+    def upsert_batter_profile(self, profile_key, game_mode, difficulty, aggregates_json):
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO batter_profiles (profile_key, game_mode, difficulty, aggregates_json, updated_at)
+                VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(profile_key) DO UPDATE SET
+                    aggregates_json = excluded.aggregates_json,
+                    updated_at = excluded.updated_at
+                """,
+                (profile_key, game_mode, difficulty, aggregates_json, datetime.now().isoformat()),
+            )
+
+    def get_batter_profile(self, profile_key):
+        row = self.conn.execute(
+            "SELECT aggregates_json FROM batter_profiles WHERE profile_key = ?",
+            (profile_key,),
+        ).fetchone()
+        return row[0] if row else None
+
     def query(self, sql, params=()):
         return self.conn.execute(sql, params).fetchall()
 
@@ -189,7 +362,54 @@ class PitchDataExtractor:
     })
 
     @staticmethod
-    def extract_pitch_record(sim, session_id):
+    def _classify_game_mode(sim):
+        if sim.game.in_gameday_mode:
+            return "gameday"
+        if getattr(sim.game, 'menu_state', None) == 'sandbox_gameplay':
+            return "sandbox"
+        return "arcade"
+
+    @staticmethod
+    def _difficulty_value(sim):
+        # Use the .value form ("hall_of_fame") so it joins cleanly against
+        # gameday_history.json and the games table.
+        return sim.game.settings_manager.get_difficulty().value
+
+    @staticmethod
+    def _gameday_context(sim):
+        """Pull GameDay-specific context. Returns dict with NULL-able fields."""
+        if not sim.game.in_gameday_mode or sim.game.gameday_manager is None:
+            return {
+                "inning": None,
+                "is_top_inning": None,
+                "score_diff": None,
+                "is_starter": None,
+                "pitcher_pitch_count": None,
+                "pitcher_fatigue": None,
+            }
+        gm = sim.game.gameday_manager
+        # pitch_count on PitcherStats is incremented AFTER the pitch resolves
+        # via the gameplay flow; at extract time it reflects the count BEFORE
+        # this pitch (which is what we want for "pitcher_pitch_count entering
+        # this pitch"). The active stats object updates fatigue with it.
+        try:
+            stats = gm.get_active_pitcher_stats()
+            pc = stats.pitch_count
+            fatigue = stats.fatigue
+        except Exception:
+            pc, fatigue = None, None
+        is_starter = int(gm.current_pitcher_name == gm.opponent_pitcher_preset.get('starter'))
+        return {
+            "inning": gm.current_inning,
+            "is_top_inning": int(bool(gm.is_top_inning)),
+            "score_diff": gm.player_score - gm.opponent_score,
+            "is_starter": is_starter,
+            "pitcher_pitch_count": pc,
+            "pitcher_fatigue": fatigue,
+        }
+
+    @staticmethod
+    def extract_pitch_record(sim, session_id, game_id, ab_id):
         """Build a dict suitable for the pitches table."""
         traj = sim.trajectory
         pitch_id = str(uuid.uuid4())
@@ -197,30 +417,23 @@ class PitchDataExtractor:
         # Plate location from trajectory at travel_time
         plate_x, _, plate_z = traj.position_at(traj.travel_time)
 
-        # Game mode
-        if sim.game.in_gameday_mode:
-            game_mode = "gameday"
-        elif getattr(sim.game, 'menu_state', None) == 'sandbox_gameplay':
-            game_mode = "sandbox"
-        else:
-            game_mode = "arcade"
-
-        # Difficulty
-        difficulty = str(sim.game.settings_manager.get_difficulty())
-
-        # AI selection
+        game_mode = PitchDataExtractor._classify_game_mode(sim)
+        difficulty = PitchDataExtractor._difficulty_value(sim)
         ai_selection = getattr(sim.game, "pitch_chosen", None)
-
-        # Context from new_data_entry
         ctx = sim.new_data_entry
+        gd = PitchDataExtractor._gameday_context(sim)
+        pitcher_hand = PITCHER_HANDEDNESS.get((sim.pitchername or "").lower())
 
-        return pitch_id, {
+        record = {
             "pitch_id": pitch_id,
             "session_id": session_id,
+            "game_id": game_id,
+            "ab_id": ab_id,
             "game_mode": game_mode,
             "difficulty": difficulty,
             "created_at": datetime.now().isoformat(),
             "pitcher_name": sim.pitchername,
+            "pitcher_hand": pitcher_hand,
             "pitch_type": sim.pitchtype,
             "ai_selection": ai_selection,
             "x0": traj.x0, "y0": traj.y0, "z0": traj.z0,
@@ -242,12 +455,28 @@ class PitchDataExtractor:
             "runner_3b": int(ctx.get("RunnerThird", False)),
             "batter_hand": ctx.get("Handedness", ""),
             "prev_pitch_type": ctx.get("PrevPitch", ""),
+            "inning": gd["inning"],
+            "is_top_inning": gd["is_top_inning"],
+            "score_diff": gd["score_diff"],
+            "is_starter": gd["is_starter"],
+            "pitcher_pitch_count": gd["pitcher_pitch_count"],
+            "pitcher_fatigue": gd["pitcher_fatigue"],
+            "mistake_pitch": int(bool(getattr(sim, "mistake_pitch", False))),
+            "swing_timing_diff_ms": getattr(sim, "swing_timing_diff_ms", None),
+            "contact_quality": getattr(sim, "contact_quality", None),
+            "vertical_offset_in": getattr(sim, "vertical_offset_in", None),
+            "ai_umpire_strike": _nullable_int(getattr(sim, "ai_umpire_strike", None)),
+            "truth_strike": _nullable_int(getattr(sim, "truth_strike", None)),
+            "abs_challenged": int(bool(getattr(sim, "abs_challenged", False))),
+            "abs_overturned": int(bool(getattr(sim, "abs_overturned", False))),
             "swing_type": sim.swing_type,
             "on_time": sim.on_time,
             "outcome": getattr(sim, "outcome", ""),
             "is_strike": int(sim.is_strike),
             "is_hit": int(sim.is_hit),
+            "runs_scored_on_pitch": int(getattr(sim, "runs_scored_on_pitch", 0) or 0),
         }
+        return pitch_id, record
 
     @staticmethod
     def sample_trajectory(trajectory, n=20):
@@ -263,8 +492,21 @@ class PitchDataExtractor:
         return samples
 
 
+def _nullable_int(v):
+    if v is None:
+        return None
+    return int(bool(v))
+
+
 class PitchDatabaseService:
-    """Singleton facade — coordinates extraction and insertion."""
+    """Singleton facade — coordinates extraction and insertion.
+
+    Lifecycle model:
+    - session_id: per-process UUID, set in __init__ and never reset.
+    - current_game_id: per-game UUID, set by start_game(), cleared by end_game().
+    - current_ab_id: per-at-bat UUID, generated lazily on first pitch of an AB
+      and cleared once the at-bat resolves.
+    """
 
     _instance = None
 
@@ -278,16 +520,84 @@ class PitchDatabaseService:
         db_path = os.path.join(os.path.dirname(__file__), "strikefactor.db")
         self.db = PitchDB(db_path)
         self.session_id = str(uuid.uuid4())
+        self.current_game_id = None
+        self.current_ab_id = None
         self._ab_pitch_count = 0
         self._ab_pitcher = None
         self._ab_hand = None
 
+    # --- Game lifecycle ---
+
+    def start_game(self, game_mode, difficulty, pitcher_name=None):
+        """Begin a new game. Returns the new game_id.
+
+        Auto-ends any previously-open game so callers don't have to remember
+        to balance every transition path. The auto-end stamps ended_at but
+        leaves scores/result NULL since the previous game wasn't completed
+        through a normal end (player abandoned to menu mid-game).
+        """
+        if self.current_game_id is not None:
+            self.end_game()
+        game_id = str(uuid.uuid4())
+        try:
+            self.db.insert_game({
+                "game_id": game_id,
+                "session_id": self.session_id,
+                "game_mode": game_mode,
+                "difficulty": difficulty,
+                "pitcher_name": pitcher_name,
+                "started_at": datetime.now().isoformat(),
+                "ended_at": None,
+                "final_player_score": None,
+                "final_opponent_score": None,
+                "result": None,
+            })
+        except Exception as e:
+            print(f"[pitch_db] start_game failed: {e}")
+        self.current_game_id = game_id
+        # Reset per-AB state so a new game doesn't inherit a stale AB.
+        self.current_ab_id = None
+        self._ab_pitch_count = 0
+        self._ab_pitcher = None
+        self._ab_hand = None
+        return game_id
+
+    def end_game(self, player_score=None, opponent_score=None, result=None):
+        """Finalize the current game with score and result. No-op if no game open."""
+        if self.current_game_id is None:
+            return
+        try:
+            self.db.update_game(self.current_game_id, {
+                "ended_at": datetime.now().isoformat(),
+                "final_player_score": player_score,
+                "final_opponent_score": opponent_score,
+                "result": result,
+            })
+        except Exception as e:
+            print(f"[pitch_db] end_game failed: {e}")
+        ended_id = self.current_game_id
+        self.current_game_id = None
+        self.current_ab_id = None
+        self._ab_pitch_count = 0
+        self._ab_pitcher = None
+        self._ab_hand = None
+        return ended_id
+
+    # --- Pitch / AB recording ---
+
     def record_pitch(self, sim):
         """Record a single pitch from a completed PitchSimulation."""
         try:
-            pitch_id, record = PitchDataExtractor.extract_pitch_record(sim, self.session_id)
+            # Ensure an AB id exists for this pitch — generate lazily so that
+            # even pitches outside a started_game (shouldn't happen, but
+            # defensive) still get grouped.
+            if self.current_ab_id is None:
+                self.current_ab_id = str(uuid.uuid4())
 
-            # Trajectory samples
+            pitch_id, record = PitchDataExtractor.extract_pitch_record(
+                sim, self.session_id, self.current_game_id, self.current_ab_id
+            )
+
             traj_samples = PitchDataExtractor.sample_trajectory(sim.trajectory)
             traj_rows = [(pitch_id, idx, t, x, y, z) for idx, t, x, y, z in traj_samples]
 
@@ -309,13 +619,47 @@ class PitchDatabaseService:
 
     def _record_at_bat(self, final_outcome):
         ab = {
-            "ab_id": str(uuid.uuid4()),
+            "ab_id": self.current_ab_id,
             "session_id": self.session_id,
+            "game_id": self.current_game_id,
             "pitcher_name": self._ab_pitcher,
             "batter_hand": self._ab_hand,
             "pitch_count": self._ab_pitch_count,
             "final_outcome": final_outcome,
             "created_at": datetime.now().isoformat(),
         }
-        self.db.insert_at_bat(ab)
+        try:
+            self.db.insert_at_bat(ab)
+        except Exception as e:
+            print(f"[pitch_db] insert_at_bat failed: {e}")
+        self.current_ab_id = None
         self._ab_pitch_count = 0
+
+    # --- BatterProfile persistence ---
+
+    @staticmethod
+    def _profile_key(game_mode, difficulty):
+        return f"{game_mode}|{difficulty}"
+
+    def save_batter_profile(self, game_mode, difficulty, aggregates_dict):
+        """Persist a BatterProfile's serialized aggregates."""
+        try:
+            self.db.upsert_batter_profile(
+                self._profile_key(game_mode, difficulty),
+                game_mode,
+                difficulty,
+                json.dumps(aggregates_dict),
+            )
+        except Exception as e:
+            print(f"[pitch_db] save_batter_profile failed: {e}")
+
+    def load_batter_profile(self, game_mode, difficulty):
+        """Return a previously persisted BatterProfile dict, or None."""
+        try:
+            blob = self.db.get_batter_profile(self._profile_key(game_mode, difficulty))
+            if blob is None:
+                return None
+            return json.loads(blob)
+        except Exception as e:
+            print(f"[pitch_db] load_batter_profile failed: {e}")
+            return None

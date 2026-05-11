@@ -892,7 +892,36 @@
         1
       ],
       "opponent_starter": "sale"
+    },
+    {
+      "date": "2026-05-10T12:20:29.420860",
+      "player_score": 9,
+      "opponent_score": 5,
+      "result": "WIN",
+      "difficulty": "hall_of_fame",
+      "player_inning_scores": [
+        4,
+        3,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "opponent_inning_scores": [
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        0,
+        1,
+        2
+      ],
+      "opponent_starter": "degrom"
     }
   ],
-  "last_updated": "2026-05-07T23:17:24.411000"
+  "last_updated": "2026-05-10T12:20:29.421844"
 }

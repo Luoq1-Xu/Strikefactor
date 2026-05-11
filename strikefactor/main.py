@@ -326,6 +326,10 @@ class Game:
         self.challenge_manager = ChallengeManager()
         self.abs_overlay = ABSChallengeOverlay(self)
         self.pending_challenge = None
+        # Per-pitch ABS verdict flags consumed by PitchSimulation.cleanup
+        # to populate pitches.abs_challenged / abs_overturned.
+        self._last_pitch_abs_challenged = False
+        self._last_pitch_abs_overturned = False
 
         # Settings management (initialize early so other components can use it)
         self.settings_manager = SettingsManager()
@@ -633,7 +637,7 @@ class Game:
         self.menu_state = gamemode_name
         self.pitcher_manager.set_current_pitcher(pitcher_name)
         self.game_stats.reset_game_stats()
-        self.batter_profile.reset()
+        self._load_batter_profile_for_current_bucket()
         self.challenge_manager.set_unlimited(False)
         self.challenge_manager.reset_all()
         self.inning_ended = False
@@ -643,6 +647,8 @@ class Game:
         self.scorebug.last_pitch_type = ""  # Reset last pitch display
         crosshair = create_pci_cursor()
         pygame.mouse.set_cursor(crosshair)
+        # Begin a new game in the pitch DB so all pitches share a game_id.
+        self._db_start_game("arcade", pitcher_name=pitcher_name)
         self.state_manager.handle_menu_state_change(gamemode_name)
         # Update scouting panel with new pitcher
         self.ui_manager.update_scouting_panel(self.current_pitcher)
@@ -669,14 +675,14 @@ class Game:
     def enter_random_scenario(self):
         """Enter a random scenario game mode."""
         scenario = self.random_scenario_generator.generate_random_scenario()
-        
+
         # Set the pitcher
         pitcher_name = scenario['pitcher']
         self.pitcher_manager.set_current_pitcher(pitcher_name)
-        
+
         # Set up the game state with the scenario
         self.game_stats.reset_game_stats()
-        self.batter_profile.reset()
+        self._load_batter_profile_for_current_bucket()
         self.challenge_manager.set_unlimited(False)
         self.challenge_manager.reset_all()
         self.game_stats.currentballs = scenario['balls']
@@ -703,10 +709,83 @@ class Game:
         crosshair = create_pci_cursor()
         pygame.mouse.set_cursor(crosshair)
 
+        # Random scenarios are part of arcade play — start a new arcade game.
+        self._db_start_game("arcade", pitcher_name=pitcher_name)
+
         # Transition to gameplay state
         self.state_manager.change_state('gameplay')
         # Update scouting panel with new pitcher
         self.ui_manager.update_scouting_panel(self.current_pitcher)
+
+    # ---------------- Pitch DB / batter profile helpers ----------------
+
+    def _current_bucket_key(self):
+        """Return the (game_mode, difficulty) tuple matching the current
+        session, used for both batting_stats.json and the SQLite per-bucket
+        batter profile.
+        """
+        if self.in_gameday_mode:
+            mode = "gameday"
+        elif self.menu_state == "sandbox_gameplay":
+            mode = "sandbox"
+        else:
+            mode = "arcade"
+        difficulty = self.settings_manager.get_difficulty().value
+        return mode, difficulty
+
+    def _db_start_game(self, game_mode, pitcher_name=None):
+        """Open a games row in the pitch DB so all subsequent pitches share a game_id."""
+        try:
+            from data.pitch_database import PitchDatabaseService
+            difficulty = self.settings_manager.get_difficulty().value
+            PitchDatabaseService.get_instance().start_game(game_mode, difficulty, pitcher_name)
+            # Steer the FieldRenderer to the matching aggregate bucket so
+            # heatmap/triple-slash counters update the right partition.
+            self.field_renderer.set_active_bucket(game_mode, difficulty)
+        except Exception as e:
+            print(f"[pitch_db] _db_start_game failed: {e}")
+
+    def _db_end_game_if_open(self, player_score=None, opponent_score=None, result=None):
+        """Close the active games row, if any. Safe to call from any transition."""
+        try:
+            from data.pitch_database import PitchDatabaseService
+            svc = PitchDatabaseService.get_instance()
+            if svc.current_game_id is not None:
+                svc.end_game(player_score=player_score,
+                             opponent_score=opponent_score,
+                             result=result)
+        except Exception as e:
+            print(f"[pitch_db] _db_end_game_if_open failed: {e}")
+
+    def _load_batter_profile_for_current_bucket(self):
+        """Load the persisted BatterProfile for the active (mode, difficulty)
+        bucket so AI exploitation doesn't carry across difficulties or modes.
+        Falls back to a fresh profile if none is stored yet.
+        """
+        try:
+            from data.pitch_database import PitchDatabaseService
+            mode, difficulty = self._current_bucket_key()
+            data = PitchDatabaseService.get_instance().load_batter_profile(mode, difficulty)
+            if data is None:
+                self.batter_profile.reset()
+            else:
+                self.batter_profile.from_dict(data)
+        except Exception as e:
+            print(f"[pitch_db] load_batter_profile failed: {e}; resetting profile")
+            self.batter_profile.reset()
+
+    def _save_batter_profile_for_current_bucket(self):
+        """Persist the in-memory BatterProfile back to the pitch DB so it
+        survives across launches (segregated by game_mode and difficulty).
+        """
+        try:
+            from data.pitch_database import PitchDatabaseService
+            mode, difficulty = self._current_bucket_key()
+            PitchDatabaseService.get_instance().save_batter_profile(
+                mode, difficulty, self.batter_profile.to_dict()
+            )
+        except Exception as e:
+            print(f"[pitch_db] save_batter_profile failed: {e}")
 
     def enter_gameday_mode(self):
         """Enter GameDay mode - show the pitcher selection screen.
@@ -740,11 +819,15 @@ class Game:
 
         # Fresh per-game state.
         self.game_stats.reset_game_stats()
-        self.batter_profile.reset()
+        self._load_batter_profile_for_current_bucket()
         self.scoreKeeper.reset()
         self.challenge_manager.set_unlimited(False)
         self.challenge_manager.reset_all()
         self.inning_ended = False
+
+        # Begin a new GameDay record. pitcher_name is None at the game level
+        # because the opponent uses a staff (starter + relievers).
+        self._db_start_game("gameday", pitcher_name=None)
 
         self.menu_state = 'gameday'
         self.state_manager.change_state('gameday_transition')
@@ -752,6 +835,7 @@ class Game:
 
     def enter_arcade_mode(self):
         """Enter Arcade mode (pitcher selection menu)."""
+        self._db_end_game_if_open()
         self.in_gameday_mode = False
         self.gameday_manager = None
         self.current_gamemode = 0
@@ -760,6 +844,7 @@ class Game:
 
     def enter_sandbox_mode(self):
         """Enter Sandbox mode - show pitcher selection menu."""
+        self._db_end_game_if_open()
         self.in_gameday_mode = False
         self.gameday_manager = None
         self.menu_state = 'sandbox_menu'
@@ -772,7 +857,7 @@ class Game:
 
         # Reset game stats for fresh start
         self.game_stats.reset_game_stats()
-        self.batter_profile.reset()
+        self._load_batter_profile_for_current_bucket()
         self.scoreKeeper.reset()
         self.challenge_manager.reset_all()
         # Sandbox is for exploration — challenges are unlimited there.
@@ -786,6 +871,9 @@ class Game:
         # Set cursor
         crosshair = create_pci_cursor()
         pygame.mouse.set_cursor(crosshair)
+
+        # Begin a new sandbox session in the pitch DB.
+        self._db_start_game("sandbox", pitcher_name=pitcher_name)
 
         self.menu_state = 'sandbox_gameplay'
         self.current_gamemode = 'sandbox_gameplay'
@@ -808,6 +896,8 @@ class Game:
     def return_to_mode_select(self):
         """Return to main mode selection menu."""
         self.pitcher_manager.save_all_ai()
+        self._save_batter_profile_for_current_bucket()
+        self._db_end_game_if_open()
         self.menu_state = 'mode_select'
         self.current_gamemode = 0
         self.inning_ended = False
@@ -825,6 +915,8 @@ class Game:
         self.menu_state = state
         if state == 0:  # Returning to main menu
             self.pitcher_manager.save_all_ai()
+            self._save_batter_profile_for_current_bucket()
+            self._db_end_game_if_open()
             self.current_gamemode = 0
             self.inning_ended = False
             self.in_gameday_mode = False
@@ -928,6 +1020,10 @@ class Game:
     def set_difficulty(self, difficulty_level):
         """Set the difficulty level."""
         self.settings_manager.set_difficulty(difficulty_level)
+        # Steer aggregates to the new (mode, difficulty) bucket so the
+        # heatmap and triple-slash track the right partition immediately.
+        mode, difficulty = self._current_bucket_key()
+        self.field_renderer.set_active_bucket(mode, difficulty)
         self.ui_manager.update_settings_button_states(self.settings_manager)
         self.ui_manager.show_settings_info(self.settings_manager)
 
@@ -1387,6 +1483,10 @@ class Game:
     def clear_pending_challenge(self):
         """Called when the next pitch starts (window closes)."""
         self.pending_challenge = None
+        # Reset per-pitch ABS challenge result flags so cleanup of pitch N+1
+        # doesn't inherit pitch N's verdict.
+        self._last_pitch_abs_challenged = False
+        self._last_pitch_abs_overturned = False
 
     def request_abs_challenge(self):
         """Triggered by the CHALLENGE key. Runs the overlay synchronously."""
@@ -1433,6 +1533,11 @@ class Game:
 
         if overturned:
             self._reverse_last_call()
+
+        # Stash for the active pitch's DB record. Read from
+        # PitchSimulation.cleanup via self.game._last_pitch_abs_*.
+        self._last_pitch_abs_challenged = True
+        self._last_pitch_abs_overturned = bool(overturned)
 
         self.pending_challenge = None
 

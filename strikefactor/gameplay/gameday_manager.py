@@ -720,8 +720,13 @@ class GameDayManager:
 
     # --- Persistence methods ---
 
-    def save_game_result(self):
-        """Save the completed game result to gameday_history.json."""
+    def save_game_result(self, game_id: Optional[str] = None,
+                         session_id: Optional[str] = None):
+        """Save the completed game result to gameday_history.json.
+
+        game_id / session_id are foreign keys back into the pitch DB so the
+        per-pitch log can be joined to the high-level game outcome.
+        """
         if self._result_saved:
             return
         self._result_saved = True
@@ -730,6 +735,8 @@ class GameDayManager:
                      "LOSS" if self.opponent_score > self.player_score else "TIE"
         result = {
             'date': datetime.now().isoformat(),
+            'game_id': game_id,
+            'session_id': session_id,
             'player_score': self.player_score,
             'opponent_score': self.opponent_score,
             'result': result_str,

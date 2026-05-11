@@ -1270,7 +1270,28 @@ class GameDayTransitionState(GameState):
 
     def _save_result_once(self):
         """Save game result exactly once when entering FINAL phase."""
-        self.game.gameday_manager.save_game_result()
+        gm = self.game.gameday_manager
+
+        # Grab the open pitch-DB ids BEFORE end_game closes them so we can
+        # write them into gameday_history.json as foreign keys.
+        from data.pitch_database import PitchDatabaseService
+        svc = PitchDatabaseService.get_instance()
+        game_id = svc.current_game_id
+        session_id = svc.session_id
+
+        gm.save_game_result(game_id=game_id, session_id=session_id)
+
+        # Close the pitch-DB games row with the final score and result.
+        result_str = ("WIN" if gm.player_score > gm.opponent_score
+                      else "LOSS" if gm.opponent_score > gm.player_score
+                      else "TIE")
+        self.game._db_end_game_if_open(
+            player_score=gm.player_score,
+            opponent_score=gm.opponent_score,
+            result=result_str,
+        )
+        # Persist the BatterProfile we built up over this game.
+        self.game._save_batter_profile_for_current_bucket()
 
     def handle_event(self, event):
         """Handle events - button clicks for continuing."""

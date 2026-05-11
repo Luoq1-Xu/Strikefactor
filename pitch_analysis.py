@@ -2,12 +2,14 @@
 StrikeFactor Pitch Database Analysis
 Generates visualizations from the SQLite pitch database.
 """
+import argparse
 import sqlite3
 import os
 import json
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
+from dataclasses import dataclass
 from matplotlib.gridspec import GridSpec
 from collections import defaultdict
 
@@ -21,6 +23,84 @@ conn.row_factory = sqlite3.Row
 
 def fetch(sql, params=()):
     return conn.execute(sql, params).fetchall()
+
+
+# ── Filter (mode + difficulty) ───────────────────────────────────────────
+MODE_CHOICES = ("arcade", "gameday", "sandbox")
+DIFFICULTY_CHOICES = ("rookie", "amateur", "professional", "all_star", "hall_of_fame")
+
+MODE_LABEL = {
+    "arcade": "Arcade",
+    "gameday": "GameDay",
+    "sandbox": "Sandbox",
+}
+DIFFICULTY_LABEL = {
+    "rookie": "Rookie",
+    "amateur": "Amateur",
+    "professional": "Professional",
+    "all_star": "All-Star",
+    "hall_of_fame": "Hall of Fame",
+}
+
+
+@dataclass(frozen=True)
+class Filter:
+    modes: tuple        # subset of MODE_CHOICES; () = all
+    difficulties: tuple # subset of DIFFICULTY_CHOICES; () = all
+
+    @property
+    def label(self):
+        m = ", ".join(MODE_LABEL[x] for x in self.modes) if self.modes else "All modes"
+        d = ", ".join(DIFFICULTY_LABEL[x] for x in self.difficulties) if self.difficulties else "All difficulties"
+        return f"{m} · {d}"
+
+
+def parse_args():
+    p = argparse.ArgumentParser(description="StrikeFactor pitch analysis (filterable).")
+    p.add_argument("--mode", choices=list(MODE_CHOICES) + ["all"], default="gameday",
+                   help="Game mode to include (default: gameday). 'all' = no mode filter.")
+    p.add_argument("--difficulty", choices=list(DIFFICULTY_CHOICES) + ["all"],
+                   default="hall_of_fame",
+                   help="Difficulty to include (default: hall_of_fame). 'all' = no difficulty filter.")
+    return p.parse_args()
+
+
+def pitches_where(filt, alias=""):
+    """Returns (sql_fragment, params) — sql is prefixed with ' AND ' or empty.
+
+    The fragment filters the pitches table (or any aliased view of it that
+    exposes game_mode and difficulty columns directly).
+    """
+    a = f"{alias}." if alias else ""
+    clauses, params = [], []
+    if filt.modes:
+        clauses.append(f"{a}game_mode IN ({','.join('?' * len(filt.modes))})")
+        params.extend(filt.modes)
+    if filt.difficulties:
+        clauses.append(f"{a}difficulty IN ({','.join('?' * len(filt.difficulties))})")
+        params.extend(filt.difficulties)
+    return (" AND " + " AND ".join(clauses) if clauses else "", params)
+
+
+# Outcomes that terminate an at-bat. Counting pitches whose `outcome` is in
+# this set is equivalent to counting completed at-bats — and lets us derive
+# AB-level stats from pitches directly, which is the only table that has
+# game_mode/difficulty for historical rows. (pitches.ab_id is NULL for
+# pre-V2 data and games table is sparse, so neither can be joined reliably.)
+TERMINAL_OUTCOMES_TUPLE = (
+    "strikeout", "walk", "SINGLE", "DOUBLE", "TRIPLE", "HOME RUN",
+    "GROUNDOUT", "FLYOUT", "LINEOUT",
+)
+TERMINAL_OUTCOMES_SQL = (
+    "('strikeout','walk','SINGLE','DOUBLE','TRIPLE','HOME RUN',"
+    "'GROUNDOUT','FLYOUT','LINEOUT')"
+)
+
+
+# Module-level filter; set in __main__ from CLI args. Default = today's
+# "show me everything" so importing the module doesn't blow up on missing
+# state.
+FILTER = Filter(modes=(), difficulties=())
 
 
 # ── Styling ──────────────────────────────────────────────────────────────
@@ -95,20 +175,26 @@ _gameday_runs_cache = None
 
 
 def _gameday_runs_by_pitcher():
-    """Sum runs allowed per pitcher across all completed GameDay games.
+    """Sum runs allowed per pitcher across completed GameDay games.
 
     Why: at_bats has no game_mode column and the DB doesn't track runs
     scored, but gameday_history.json records final scores per game and
     attributes them to a single starter. Approximate but the only source.
+
+    Honors FILTER.difficulties so ERA tracks the difficulty slice the rest
+    of the analysis is showing.
     """
     global _gameday_runs_cache
     if _gameday_runs_cache is not None:
         return _gameday_runs_cache
     runs, games = defaultdict(int), defaultdict(int)
+    allowed = set(FILTER.difficulties) if FILTER.difficulties else None
     try:
         with open(GAMEDAY_HISTORY_PATH) as f:
             data = json.load(f)
         for g in data.get("games", []):
+            if allowed is not None and g.get("difficulty") not in allowed:
+                continue
             db_name = STARTER_TO_DB_NAME.get(str(g.get("opponent_starter", "")).lower())
             if db_name:
                 runs[db_name] += g.get("opponent_score", 0)
@@ -140,6 +226,7 @@ def _avg(rate):
 
 def pitcher_pitch_metrics(pname):
     """Pitch-level (Statcast-style) metrics for one pitcher."""
+    where_extra, params = pitches_where(FILTER)
     sql = f"""
         SELECT
             COUNT(*) AS np,
@@ -157,9 +244,9 @@ def pitcher_pitch_metrics(pname):
                        AND outcome NOT IN ('ball','walk') THEN 1 ELSE 0 END) AS first_strikes,
             SUM(CASE WHEN strikes_before = 2 THEN 1 ELSE 0 END) AS two_strike_pitches,
             SUM(CASE WHEN strikes_before = 2 AND outcome = 'strikeout' THEN 1 ELSE 0 END) AS putaways
-        FROM pitches WHERE pitcher_name = ?
+        FROM pitches WHERE pitcher_name = ?{where_extra}
     """
-    row = dict(fetch(sql, (pname,))[0])
+    row = dict(fetch(sql, (pname, *params))[0])
     np_ = row["np"] or 0
     swings = row["swings"] or 0
     zone = row["zone"] or 0
@@ -181,15 +268,18 @@ def pitcher_pitch_metrics(pname):
 def pitcher_classic_line(pname):
     """Standard pitcher box-score line (IP, BF, H, R, ER, HR, BB, K, ERA, WHIP).
 
-    Uses GameDay-mode pitches only — ERA/WHIP are only meaningful when the
-    pitcher worked through innings rather than arcade at-bats. Runs are
-    sourced from gameday_history.json (see _gameday_runs_by_pitcher).
+    Always pinned to GameDay (ERA/WHIP only make sense for full innings),
+    but honors the active difficulty filter. Runs are sourced from
+    gameday_history.json (see _gameday_runs_by_pitcher).
     """
+    # Force gameday regardless of FILTER.modes — classic stats require innings.
+    diff_filter = Filter(modes=("gameday",), difficulties=FILTER.difficulties)
+    where_extra, params = pitches_where(diff_filter)
     rows = fetch(
-        "SELECT outcome, COUNT(*) AS c FROM pitches "
-        "WHERE pitcher_name = ? AND game_mode = 'gameday' "
-        "GROUP BY outcome",
-        (pname,),
+        f"SELECT outcome, COUNT(*) AS c FROM pitches "
+        f"WHERE pitcher_name = ?{where_extra} "
+        f"GROUP BY outcome",
+        (pname, *params),
     )
     counts = {r["outcome"]: r["c"] for r in rows}
 
@@ -222,10 +312,12 @@ def pitcher_classic_line(pname):
 
 def pitcher_outcome_metrics(pname):
     """At-bat-level rate stats (K%, BB%, BABIP, wOBA, etc.) for one pitcher."""
+    w, params = pitches_where(FILTER)
     rows = fetch(
-        "SELECT final_outcome, COUNT(*) AS c FROM at_bats "
-        "WHERE pitcher_name = ? GROUP BY final_outcome",
-        (pname,),
+        f"SELECT outcome AS final_outcome, COUNT(*) AS c FROM pitches "
+        f"WHERE pitcher_name = ? AND outcome IN {TERMINAL_OUTCOMES_SQL}{w} "
+        f"GROUP BY outcome",
+        (pname, *params),
     )
     counts = {r["final_outcome"]: r["c"] for r in rows}
     pa = sum(counts.values())
@@ -247,8 +339,10 @@ def pitcher_outcome_metrics(pname):
     # wOBA (linear-weights, simplified — no HBP/SF/IBB tracked)
     woba = (0.69 * bb + 0.89 * s + 1.27 * d + 1.62 * t + 2.10 * hr) / pa if pa else 0
     babip = (h - hr) / bip if bip > 0 else 0
+    p_where, p_params = pitches_where(FILTER)
     pitches = fetch(
-        "SELECT COUNT(*) AS c FROM pitches WHERE pitcher_name = ?", (pname,)
+        f"SELECT COUNT(*) AS c FROM pitches WHERE pitcher_name = ?{p_where}",
+        (pname, *p_params),
     )[0]["c"]
     return {
         "pa": pa, "ab": ab, "h": h, "bb": bb, "k": k, "hr": hr,
@@ -265,26 +359,47 @@ def pitcher_outcome_metrics(pname):
     }
 
 
+def _save_empty_figure(filename, title):
+    """Render a placeholder figure when the active filter yields no data."""
+    fig, ax = plt.subplots(figsize=(10, 5))
+    fig.suptitle(f"{title}\n{FILTER.label}", fontsize=14, fontweight="bold")
+    ax.text(0.5, 0.5, f"No pitches match the active filter:\n{FILTER.label}",
+            ha="center", va="center", fontsize=13, color="#888")
+    ax.axis("off")
+    fig.savefig(os.path.join(OUT_DIR, filename), dpi=150, bbox_inches="tight")
+    plt.close(fig)
+
+
 # ═══════════════════════════════════════════════════════════════════════
 # FIGURE 1: Pitch Arsenal Speed Distributions (violin/box per pitcher)
 # ═══════════════════════════════════════════════════════════════════════
 def fig1_speed_distributions():
-    pitchers = fetch("SELECT DISTINCT pitcher_name FROM pitches")
+    w, p = pitches_where(FILTER)
+    pitchers = fetch(f"SELECT DISTINCT pitcher_name FROM pitches WHERE 1=1{w}", p)
     pitcher_names = [r["pitcher_name"] for r in pitchers]
+    if not pitcher_names:
+        _save_empty_figure("01_speed_distributions.png",
+                           "Pitch Speed Distributions by Pitcher")
+        print("  [1/9] Speed distributions (no data)")
+        return
 
     fig, axes = plt.subplots(1, len(pitcher_names), figsize=(18, 6), sharey=True)
-    fig.suptitle("Pitch Speed Distributions by Pitcher", fontsize=16, fontweight="bold", y=0.98)
+    if len(pitcher_names) == 1:
+        axes = [axes]
+    fig.suptitle(f"Pitch Speed Distributions by Pitcher\n{FILTER.label}",
+                 fontsize=16, fontweight="bold", y=0.98)
 
     for ax, pname in zip(axes, pitcher_names):
         types = fetch(
-            "SELECT DISTINCT pitch_type FROM pitches WHERE pitcher_name = ?", (pname,)
+            f"SELECT DISTINCT pitch_type FROM pitches WHERE pitcher_name = ?{w}",
+            (pname, *p),
         )
         data, labels, colors = [], [], []
         for pt in types:
             pt_name = pt["pitch_type"]
             speeds = [r["speed_mph"] for r in fetch(
-                "SELECT speed_mph FROM pitches WHERE pitcher_name = ? AND pitch_type = ?",
-                (pname, pt_name)
+                f"SELECT speed_mph FROM pitches WHERE pitcher_name = ? AND pitch_type = ?{w}",
+                (pname, pt_name, *p),
             )]
             if speeds:
                 data.append(speeds)
@@ -315,11 +430,19 @@ def fig1_speed_distributions():
 # FIGURE 2: Pitch Location Scatter (plate_x vs plate_z with strikezone)
 # ═══════════════════════════════════════════════════════════════════════
 def fig2_pitch_locations():
-    pitchers = fetch("SELECT DISTINCT pitcher_name FROM pitches")
+    w, p = pitches_where(FILTER)
+    pitchers = fetch(f"SELECT DISTINCT pitcher_name FROM pitches WHERE 1=1{w}", p)
     pitcher_names = [r["pitcher_name"] for r in pitchers]
+    if not pitcher_names:
+        _save_empty_figure("02_pitch_locations.png", "Pitch Locations at the Plate")
+        print("  [2/9] Pitch locations (no data)")
+        return
 
     fig, axes = plt.subplots(1, len(pitcher_names), figsize=(20, 5))
-    fig.suptitle("Pitch Locations at the Plate", fontsize=16, fontweight="bold", y=1.02)
+    if len(pitcher_names) == 1:
+        axes = [axes]
+    fig.suptitle(f"Pitch Locations at the Plate\n{FILTER.label}",
+                 fontsize=16, fontweight="bold", y=1.02)
 
     # Strike zone approx: x ∈ [-0.83, 0.83] ft, z ∈ [1.5, 3.5] ft
     sz_x, sz_w = -0.83, 1.66
@@ -327,8 +450,8 @@ def fig2_pitch_locations():
 
     for ax, pname in zip(axes, pitcher_names):
         rows = fetch(
-            "SELECT plate_x_ft, plate_z_ft, pitch_type FROM pitches WHERE pitcher_name = ?",
-            (pname,)
+            f"SELECT plate_x_ft, plate_z_ft, pitch_type FROM pitches WHERE pitcher_name = ?{w}",
+            (pname, *p),
         )
         for pt in set(r["pitch_type"] for r in rows):
             xs = [r["plate_x_ft"] for r in rows if r["pitch_type"] == pt]
@@ -358,14 +481,19 @@ def fig2_pitch_locations():
 # ═══════════════════════════════════════════════════════════════════════
 def fig3_movement_plot():
     fig, ax = plt.subplots(figsize=(9, 8))
-    ax.set_title("Pitch Movement Profile (All Pitchers)", fontsize=14, fontweight="bold")
+    ax.set_title(f"Pitch Movement Profile (All Pitchers) — {FILTER.label}",
+                 fontsize=13, fontweight="bold")
 
+    w, p = pitches_where(FILTER)
+    any_data = False
     for pt in PITCH_COLORS:
         rows = fetch(
-            "SELECT pfx_x_inches, pfx_z_inches FROM pitches WHERE pitch_type = ?", (pt,)
+            f"SELECT pfx_x_inches, pfx_z_inches FROM pitches WHERE pitch_type = ?{w}",
+            (pt, *p),
         )
         if not rows:
             continue
+        any_data = True
         xs = [r["pfx_x_inches"] for r in rows]
         zs = [r["pfx_z_inches"] for r in rows]
         ax.scatter(xs, zs, c=PITCH_COLORS[pt], label=f"{PITCH_NAMES.get(pt, pt)} ({len(rows)})",
@@ -374,6 +502,10 @@ def fig3_movement_plot():
         ax.scatter(np.mean(xs), np.mean(zs), c=PITCH_COLORS[pt], s=200,
                    marker="X", edgecolors="white", linewidths=1.5, zorder=5)
 
+    if not any_data:
+        ax.text(0.5, 0.5, f"No pitches match:\n{FILTER.label}",
+                ha="center", va="center", transform=ax.transAxes,
+                fontsize=13, color="#888")
     ax.axhline(0, color="#555", linewidth=0.8)
     ax.axvline(0, color="#555", linewidth=0.8)
     ax.set_xlabel("Horizontal Break (inches)")
@@ -390,8 +522,17 @@ def fig3_movement_plot():
 # FIGURE 4: At-Bat Outcome Breakdown (stacked bar by pitcher)
 # ═══════════════════════════════════════════════════════════════════════
 def fig4_outcome_breakdown():
-    pitchers = fetch("SELECT DISTINCT pitcher_name FROM at_bats")
+    w, p = pitches_where(FILTER)
+    pitchers = fetch(
+        f"SELECT DISTINCT pitcher_name FROM pitches "
+        f"WHERE outcome IN {TERMINAL_OUTCOMES_SQL}{w}",
+        p,
+    )
     pitcher_names = [r["pitcher_name"] for r in pitchers]
+    if not pitcher_names:
+        _save_empty_figure("04_outcome_breakdown.png", "At-Bat Outcomes by Pitcher")
+        print("  [4/9] Outcome breakdown (no data)")
+        return
 
     outcome_order = ["strikeout", "GROUNDOUT", "FLYOUT", "LINEOUT", "SINGLE", "DOUBLE", "TRIPLE", "HOME RUN", "walk"]
     outcome_colors = {
@@ -401,7 +542,8 @@ def fig4_outcome_breakdown():
     }
 
     fig, ax = plt.subplots(figsize=(12, 6))
-    fig.suptitle("At-Bat Outcomes by Pitcher", fontsize=14, fontweight="bold")
+    fig.suptitle(f"At-Bat Outcomes by Pitcher — {FILTER.label}",
+                 fontsize=14, fontweight="bold")
 
     x = np.arange(len(pitcher_names))
     bottoms = np.zeros(len(pitcher_names))
@@ -410,8 +552,9 @@ def fig4_outcome_breakdown():
         counts = []
         for pname in pitcher_names:
             rows = fetch(
-                "SELECT COUNT(*) as c FROM at_bats WHERE pitcher_name = ? AND final_outcome = ?",
-                (pname, outcome)
+                f"SELECT COUNT(*) as c FROM pitches "
+                f"WHERE pitcher_name = ? AND outcome = ?{w}",
+                (pname, outcome, *p),
             )
             counts.append(rows[0]["c"])
         counts = np.array(counts, dtype=float)
@@ -435,9 +578,12 @@ def fig4_outcome_breakdown():
 # FIGURE 5: Pitch Type Usage by Count (heatmap)
 # ═══════════════════════════════════════════════════════════════════════
 def fig5_pitch_by_count():
+    w, p = pitches_where(FILTER)
     rows = fetch(
-        "SELECT balls_before, strikes_before, pitch_type, COUNT(*) as c "
-        "FROM pitches GROUP BY balls_before, strikes_before, pitch_type"
+        f"SELECT balls_before, strikes_before, pitch_type, COUNT(*) as c "
+        f"FROM pitches WHERE 1=1{w} "
+        f"GROUP BY balls_before, strikes_before, pitch_type",
+        p,
     )
 
     counts_map = defaultdict(lambda: defaultdict(int))
@@ -446,6 +592,11 @@ def fig5_pitch_by_count():
         count_str = f"{r['balls_before']}-{r['strikes_before']}"
         counts_map[count_str][r["pitch_type"]] += r["c"]
         all_types.add(r["pitch_type"])
+
+    if not all_types:
+        _save_empty_figure("05_pitch_by_count.png", "Pitch Type Usage % by Count")
+        print("  [5/9] Pitch by count (no data)")
+        return
 
     count_order = ["0-0", "0-1", "0-2", "1-0", "1-1", "1-2", "2-0", "2-1", "2-2", "3-0", "3-1", "3-2"]
     count_order = [c for c in count_order if c in counts_map]
@@ -464,7 +615,8 @@ def fig5_pitch_by_count():
     ax.set_yticks(range(len(type_order)))
     ax.set_yticklabels([PITCH_NAMES.get(t, t) for t in type_order])
     ax.set_xlabel("Count (B-S)")
-    ax.set_title("Pitch Type Usage % by Count", fontsize=14, fontweight="bold")
+    ax.set_title(f"Pitch Type Usage % by Count — {FILTER.label}",
+                 fontsize=13, fontweight="bold")
 
     # Annotate cells
     for i in range(len(type_order)):
@@ -487,12 +639,16 @@ def fig5_pitch_by_count():
 def fig6_trajectories():
     # Sample a few pitches per type for clarity
     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-    fig.suptitle("Pitch Trajectories (sampled)", fontsize=14, fontweight="bold")
+    fig.suptitle(f"Pitch Trajectories (sampled) — {FILTER.label}",
+                 fontsize=14, fontweight="bold")
 
+    w, p = pitches_where(FILTER)
     # Side view (y vs z) and top view (y vs x)
     for pt in PITCH_COLORS:
         pitch_ids = fetch(
-            "SELECT pitch_id FROM pitches WHERE pitch_type = ? ORDER BY RANDOM() LIMIT 8", (pt,)
+            f"SELECT pitch_id FROM pitches WHERE pitch_type = ?{w} "
+            f"ORDER BY RANDOM() LIMIT 8",
+            (pt, *p),
         )
         for pid_row in pitch_ids:
             traj = fetch(
@@ -538,13 +694,22 @@ def fig6_trajectories():
 # ═══════════════════════════════════════════════════════════════════════
 def fig7_dashboard():
     fig = plt.figure(figsize=(16, 13))
-    fig.suptitle("StrikeFactor Session Dashboard", fontsize=16, fontweight="bold", y=0.99)
+    fig.suptitle(f"StrikeFactor Session Dashboard — {FILTER.label}",
+                 fontsize=16, fontweight="bold", y=0.99)
     gs = GridSpec(3, 3, figure=fig, hspace=0.40, wspace=0.30,
                   height_ratios=[0.8, 1.0, 1.0])
 
+    pw, pp = pitches_where(FILTER)
+
     # ── Panel HEADLINE: Classic pitching line (GameDay) ────────────
+    # Pitcher list derived from pitches with terminal outcomes (= completed
+    # at-bats) so it honors the active filter even on historical data.
     ax_h = fig.add_subplot(gs[0, :])
-    pitchers_all = [r["pitcher_name"] for r in fetch("SELECT DISTINCT pitcher_name FROM at_bats")]
+    pitchers_all = [r["pitcher_name"] for r in fetch(
+        f"SELECT DISTINCT pitcher_name FROM pitches "
+        f"WHERE outcome IN {TERMINAL_OUTCOMES_SQL}{pw}",
+        pp,
+    )]
     line_rows = []
     for pn in pitchers_all:
         c = pitcher_classic_line(pn)
@@ -577,7 +742,7 @@ def fig7_dashboard():
         ax_h.set_title("Pitching Line — GameDay (R from final scores; ER = R, no errors tracked)",
                        fontweight="bold", pad=12, fontsize=12)
     else:
-        ax_h.text(0.5, 0.5, "No GameDay innings recorded yet",
+        ax_h.text(0.5, 0.5, f"No GameDay innings recorded for {FILTER.label}",
                   ha="center", va="center", fontsize=12, color="#888")
         ax_h.set_title("Pitching Line — GameDay", fontweight="bold", pad=12, fontsize=12)
     ax_h.axis("off")
@@ -585,8 +750,9 @@ def fig7_dashboard():
     # Panel A: Strike rate by pitch type
     ax_a = fig.add_subplot(gs[1, 0])
     types = fetch(
-        "SELECT pitch_type, SUM(is_strike) as strikes, COUNT(*) as total "
-        "FROM pitches GROUP BY pitch_type ORDER BY pitch_type"
+        f"SELECT pitch_type, SUM(is_strike) as strikes, COUNT(*) as total "
+        f"FROM pitches WHERE 1=1{pw} GROUP BY pitch_type ORDER BY pitch_type",
+        pp,
     )
     names = [PITCH_NAMES.get(r["pitch_type"], r["pitch_type"]) for r in types]
     rates = [r["strikes"] / r["total"] * 100 for r in types]
@@ -600,8 +766,9 @@ def fig7_dashboard():
     # Panel B: Swing rate (swing_type > 0) by pitch type
     ax_b = fig.add_subplot(gs[1, 1])
     swing_data = fetch(
-        "SELECT pitch_type, SUM(CASE WHEN swing_type > 0 THEN 1 ELSE 0 END) as swings, COUNT(*) as total "
-        "FROM pitches GROUP BY pitch_type ORDER BY pitch_type"
+        f"SELECT pitch_type, SUM(CASE WHEN swing_type > 0 THEN 1 ELSE 0 END) as swings, COUNT(*) as total "
+        f"FROM pitches WHERE 1=1{pw} GROUP BY pitch_type ORDER BY pitch_type",
+        pp,
     )
     names_b = [PITCH_NAMES.get(r["pitch_type"], r["pitch_type"]) for r in swing_data]
     swing_rates = [r["swings"] / r["total"] * 100 for r in swing_data]
@@ -614,18 +781,31 @@ def fig7_dashboard():
 
     # Panel C: Pitch count pie chart
     ax_c = fig.add_subplot(gs[1, 2])
-    type_counts = fetch("SELECT pitch_type, COUNT(*) as c FROM pitches GROUP BY pitch_type ORDER BY c DESC")
+    type_counts = fetch(
+        f"SELECT pitch_type, COUNT(*) as c FROM pitches WHERE 1=1{pw} "
+        f"GROUP BY pitch_type ORDER BY c DESC",
+        pp,
+    )
     wedge_labels = [PITCH_NAMES.get(r["pitch_type"], r["pitch_type"]) for r in type_counts]
     wedge_sizes = [r["c"] for r in type_counts]
     wedge_colors = [PITCH_COLORS.get(r["pitch_type"], "#888") for r in type_counts]
-    ax_c.pie(wedge_sizes, labels=wedge_labels, colors=wedge_colors, autopct="%1.0f%%",
-             textprops={"fontsize": 9, "color": "#e0e0e0"}, pctdistance=0.75,
-             wedgeprops={"edgecolor": "#1a1a2e", "linewidth": 1})
+    if wedge_sizes:
+        ax_c.pie(wedge_sizes, labels=wedge_labels, colors=wedge_colors, autopct="%1.0f%%",
+                 textprops={"fontsize": 9, "color": "#e0e0e0"}, pctdistance=0.75,
+                 wedgeprops={"edgecolor": "#1a1a2e", "linewidth": 1})
+    else:
+        ax_c.text(0.5, 0.5, "No data", ha="center", va="center",
+                  fontsize=11, color="#888")
+        ax_c.axis("off")
     ax_c.set_title("Pitch Type Distribution", fontweight="bold")
 
     # Panel D: Batting line by pitcher (slash line + rate stats)
     ax_d = fig.add_subplot(gs[2, 0:2])
-    pitchers = fetch("SELECT DISTINCT pitcher_name FROM at_bats")
+    pitchers = fetch(
+        f"SELECT DISTINCT pitcher_name FROM pitches "
+        f"WHERE outcome IN {TERMINAL_OUTCOMES_SQL}{pw}",
+        pp,
+    )
     table_data = []
     for p in pitchers:
         pn = p["pitcher_name"]
@@ -642,38 +822,51 @@ def fig7_dashboard():
 
     col_labels = ["Pitcher", "PA", "H", "HR", "BB", "K",
                   "AVG", "OBP", "SLG", "OPS", "K%", "BB%", "BABIP", "wOBA"]
-    table = ax_d.table(cellText=table_data, colLabels=col_labels, loc="center",
-                        cellLoc="center")
-    table.auto_set_font_size(False)
-    table.set_fontsize(8)
-    table.scale(1, 1.6)
-    # Style table
-    for (row, col), cell in table.get_celld().items():
-        cell.set_edgecolor("#2a2a4a")
-        if row == 0:
-            cell.set_facecolor("#2c3e50")
-            cell.set_text_props(fontweight="bold", color="#e0e0e0")
-        else:
-            cell.set_facecolor("#16213e")
-            cell.set_text_props(color="#e0e0e0")
+    if table_data:
+        table = ax_d.table(cellText=table_data, colLabels=col_labels, loc="center",
+                            cellLoc="center")
+        table.auto_set_font_size(False)
+        table.set_fontsize(8)
+        table.scale(1, 1.6)
+        for (row, col), cell in table.get_celld().items():
+            cell.set_edgecolor("#2a2a4a")
+            if row == 0:
+                cell.set_facecolor("#2c3e50")
+                cell.set_text_props(fontweight="bold", color="#e0e0e0")
+            else:
+                cell.set_facecolor("#16213e")
+                cell.set_text_props(color="#e0e0e0")
+    else:
+        ax_d.text(0.5, 0.5, f"No at-bats match {FILTER.label}",
+                  ha="center", va="center", fontsize=12, color="#888")
     ax_d.axis("off")
     ax_d.set_title("Batting Performance vs Each Pitcher", fontweight="bold", pad=20)
 
     # Panel E: Pitch speed box by pitcher
     ax_e = fig.add_subplot(gs[2, 2])
-    pitcher_names = [r["pitcher_name"] for r in fetch("SELECT DISTINCT pitcher_name FROM pitches")]
+    pitcher_names = [r["pitcher_name"] for r in fetch(
+        f"SELECT DISTINCT pitcher_name FROM pitches WHERE 1=1{pw}", pp,
+    )]
     speed_data = []
     labels_e = []
     for pn in pitcher_names:
-        speeds = [r["speed_mph"] for r in fetch("SELECT speed_mph FROM pitches WHERE pitcher_name = ?", (pn,))]
-        speed_data.append(speeds)
-        labels_e.append(PITCHER_DISPLAY.get(pn, pn).split()[-1])  # Last name only
+        speeds = [r["speed_mph"] for r in fetch(
+            f"SELECT speed_mph FROM pitches WHERE pitcher_name = ?{pw}",
+            (pn, *pp),
+        )]
+        if speeds:
+            speed_data.append(speeds)
+            labels_e.append(PITCHER_DISPLAY.get(pn, pn).split()[-1])  # Last name only
 
-    bp = ax_e.boxplot(speed_data, patch_artist=True, labels=labels_e)
-    palette = ["#e74c3c", "#3498db", "#2ecc71", "#f39c12", "#9b59b6"]
-    for patch, color in zip(bp["boxes"], palette):
-        patch.set_facecolor(color)
-        patch.set_alpha(0.7)
+    if speed_data:
+        bp = ax_e.boxplot(speed_data, patch_artist=True, labels=labels_e)
+        palette = ["#e74c3c", "#3498db", "#2ecc71", "#f39c12", "#9b59b6"]
+        for patch, color in zip(bp["boxes"], palette):
+            patch.set_facecolor(color)
+            patch.set_alpha(0.7)
+    else:
+        ax_e.text(0.5, 0.5, "No data", ha="center", va="center",
+                  fontsize=11, color="#888")
     ax_e.set_ylabel("Speed (mph)")
     ax_e.set_title("Speed Range by Pitcher", fontweight="bold")
     ax_e.tick_params(axis="x", rotation=30)
@@ -688,10 +881,21 @@ def fig7_dashboard():
 # FIGURE 8: Pitcher Plate Discipline / Statcast-style profile
 # ═══════════════════════════════════════════════════════════════════════
 def fig8_plate_discipline():
-    pitchers = [r["pitcher_name"] for r in fetch("SELECT DISTINCT pitcher_name FROM at_bats")]
+    w, p = pitches_where(FILTER)
+    pitchers = [r["pitcher_name"] for r in fetch(
+        f"SELECT DISTINCT pitcher_name FROM pitches "
+        f"WHERE outcome IN {TERMINAL_OUTCOMES_SQL}{w}",
+        p,
+    )]
+    if not pitchers:
+        _save_empty_figure("08_plate_discipline.png",
+                           "Pitcher Plate-Discipline & Rate Stats")
+        print("  [8/9] Plate-discipline summary (no data)")
+        return
 
     fig = plt.figure(figsize=(16, 9))
-    fig.suptitle("Pitcher Plate-Discipline & Rate Stats", fontsize=15, fontweight="bold", y=0.98)
+    fig.suptitle(f"Pitcher Plate-Discipline & Rate Stats — {FILTER.label}",
+                 fontsize=15, fontweight="bold", y=0.98)
     gs = GridSpec(2, 2, figure=fig, height_ratios=[1.4, 1.0], hspace=0.35, wspace=0.25)
 
     # ── Top: full Statcast-style table ────────────────────────────────
@@ -784,28 +988,120 @@ def fig8_plate_discipline():
 
 
 # ═══════════════════════════════════════════════════════════════════════
-# FIGURE 9: Per-pitch-type performance matrix (heatmap of key rates)
+# FIGURE 9: Pitch-Type Scouting Card
 # ═══════════════════════════════════════════════════════════════════════
+
+# Per-metric MLB reference points (poor / avg / elite). Each column is
+# colored independently using these thresholds — green = better than league
+# average from the pitcher's perspective, red = worse. xBA flips because
+# lower is better.
+SCOUTING_BENCH = {
+    # higher-is-better metrics
+    "CSW%":     (26.0, 30.0, 34.0),
+    "Whiff%":   (18.0, 24.0, 32.0),
+    "Chase%":   (25.0, 31.0, 36.0),
+    "PutAway%": (17.0, 21.0, 25.0),
+    # lower-is-better — elite < avg < poor flips the score automatically
+    "xBA":      (0.270, 0.245, 0.220),
+}
+
+
+def _scouting_score(val, key, col_min, col_max):
+    """Return a directional score in [-1, +1]: +1 = elite, -1 = poor.
+
+    Anchored on MLB average (score = 0). The green/red endpoints extend to
+    whichever is more extreme — the MLB poor/elite threshold or the column's
+    own min/max. That way the gradient stretches across whatever range the
+    data actually occupies (avoids "everything saturated green" when the
+    whole dataset sits above MLB average).
+    """
+    poor, avg, elite = SCOUTING_BENCH[key]
+    higher_better = (elite > avg)
+    if higher_better:
+        if val < avg:
+            denom = avg - min(col_min, poor)
+            return -min(1.0, (avg - val) / denom) if denom else 0.0
+        denom = max(col_max, elite) - avg
+        return min(1.0, (val - avg) / denom) if denom else 0.0
+    # xBA — lower is better; poor sits above avg, elite below
+    if val > avg:
+        denom = max(col_max, poor) - avg
+        return -min(1.0, (val - avg) / denom) if denom else 0.0
+    denom = avg - min(col_min, elite)
+    return min(1.0, (avg - val) / denom) if denom else 0.0
+
+
+def _scouting_color(val, key, col_stats):
+    """Pick a fill color for a single scouting-card cell.
+
+    col_stats: dict mapping metric key -> (min, max) across the rendered rows.
+    """
+    bad = (192, 57, 43)        # #c0392b
+    neutral = (236, 219, 143)  # #ecdb8f — pale cream around league avg
+    good = (39, 174, 96)       # #27ae60
+    usage_lo = (45, 55, 72)    # #2d3748
+    usage_hi = (49, 130, 206)  # #3182ce
+
+    def blend(c1, c2, t):
+        return tuple(int(c1[k] + (c2[k] - c1[k]) * t) for k in range(3))
+
+    def to_hex(c):
+        return f"#{c[0]:02x}{c[1]:02x}{c[2]:02x}"
+
+    if key == "Usage%":
+        mx = col_stats[key][1]
+        t = (val / mx) if mx else 0
+        return to_hex(blend(usage_lo, usage_hi, t))
+
+    col_min, col_max = col_stats[key]
+    score = _scouting_score(val, key, col_min, col_max)
+    if score >= 0:
+        return to_hex(blend(neutral, good, score))
+    return to_hex(blend(neutral, bad, -score))
+
+
+def _text_color_for(bg_hex):
+    """Pick black or white text for adequate contrast on a given fill."""
+    r, g, b = (int(bg_hex[i:i+2], 16) for i in (1, 3, 5))
+    # YIQ luminance — standard formula for contrast decisions
+    return "#1a1a2e" if (0.299 * r + 0.587 * g + 0.114 * b) > 150 else "#ffffff"
+
+
+def _format_scouting_value(val, key):
+    if key == "xBA":
+        s = f"{val:.3f}"
+        return s.lstrip("0") if val < 1 else s
+    return f"{val:.0f}%"
+
+
 def fig9_pitch_type_performance():
+    """One-glance scouting card: which pitch types are working, vs MLB.
+
+    Each column has its own directional palette anchored on MLB benchmarks
+    so a green cell always means "good for the pitcher" — regardless of
+    whether the metric reads higher- or lower-is-better.
+    """
+    w, p = pitches_where(FILTER)
     types = [r["pitch_type"] for r in fetch(
-        "SELECT pitch_type, COUNT(*) c FROM pitches GROUP BY pitch_type "
-        "HAVING c >= 20 ORDER BY c DESC"
+        f"SELECT pitch_type, COUNT(*) c FROM pitches WHERE 1=1{w} "
+        f"GROUP BY pitch_type HAVING c >= 20 ORDER BY c DESC",
+        p,
     )]
     if not types:
+        _save_empty_figure("09_pitch_type_performance.png",
+                           "Pitch-Type Scouting Card")
         print("  [9/9] Skipped (no pitch types with enough samples)")
         return
 
-    metric_keys = ["Usage%", "Strike%", "CSW%", "Whiff%", "Swing%", "Chase%",
-                   "Zone%", "PutAway%", "GB%", "xBA"]
-    matrix = np.zeros((len(types), len(metric_keys)))
+    total_pitches = fetch(
+        f"SELECT COUNT(*) c FROM pitches WHERE 1=1{w}", p,
+    )[0]["c"] or 1
 
-    total_pitches = fetch("SELECT COUNT(*) c FROM pitches")[0]["c"] or 1
-
-    for i, pt in enumerate(types):
+    rows = []
+    for pt in types:
         sql = f"""
             SELECT
                 COUNT(*) AS np,
-                SUM(CASE WHEN outcome NOT IN ('ball','walk') THEN 1 ELSE 0 END) AS strikes,
                 SUM(CASE WHEN swing_type > 0 THEN 1 ELSE 0 END) AS swings,
                 SUM(CASE WHEN swing_type > 0 AND outcome IN ('strike','strikeout')
                          THEN 1 ELSE 0 END) AS whiffs,
@@ -815,65 +1111,107 @@ def fig9_pitch_type_performance():
                 SUM(CASE WHEN swing_type > 0 AND NOT {IN_ZONE_SQL} THEN 1 ELSE 0 END) AS o_swings,
                 SUM(CASE WHEN strikes_before = 2 THEN 1 ELSE 0 END) AS two_strike,
                 SUM(CASE WHEN strikes_before = 2 AND outcome = 'strikeout' THEN 1 ELSE 0 END) AS putaway,
-                SUM(CASE WHEN outcome = 'GROUNDOUT' THEN 1 ELSE 0 END) AS go,
                 SUM(CASE WHEN outcome IN ('GROUNDOUT','FLYOUT','LINEOUT',
                                           'SINGLE','DOUBLE','TRIPLE','HOME RUN')
                          THEN 1 ELSE 0 END) AS bip,
                 SUM(CASE WHEN outcome IN ('SINGLE','DOUBLE','TRIPLE','HOME RUN')
                          THEN 1 ELSE 0 END) AS hits
-            FROM pitches WHERE pitch_type = ?
+            FROM pitches WHERE pitch_type = ?{w}
         """
-        r = dict(fetch(sql, (pt,))[0])
+        r = dict(fetch(sql, (pt, *p))[0])
         np_ = r["np"] or 1
         swings = r["swings"] or 0
-        zone = r["zone"] or 0
-        o_zone = np_ - zone
-        bip = r["bip"] or 0
-        ab_like = swings - (r["whiffs"] or 0) - 0  # in-play + foul; no walks here
-        # xBA proxy: hits / (in-play balls + whiffs) treats every swing-and-miss as out
-        ab_proxy = bip + (r["whiffs"] or 0)
-        matrix[i] = [
-            100 * np_ / total_pitches,
-            100 * r["strikes"] / np_,
-            100 * (r["called_strikes"] + r["whiffs"]) / np_,
-            100 * r["whiffs"] / swings if swings else 0,
-            100 * swings / np_,
-            100 * r["o_swings"] / o_zone if o_zone else 0,
-            100 * zone / np_,
-            100 * r["putaway"] / r["two_strike"] if r["two_strike"] else 0,
-            100 * r["go"] / bip if bip else 0,
-            1000 * r["hits"] / ab_proxy if ab_proxy else 0,  # ‰ for color scale
-        ]
+        o_zone = np_ - (r["zone"] or 0)
+        # xBA proxy: hits / (balls in play + whiffs) — every swing-and-miss
+        # counts as an out, so this approximates MLB Statcast xBA's role.
+        ab_proxy = (r["bip"] or 0) + (r["whiffs"] or 0)
+        rows.append({
+            "type":     pt,
+            "Usage%":   100 * np_ / total_pitches,
+            "CSW%":     100 * ((r["called_strikes"] or 0) + (r["whiffs"] or 0)) / np_,
+            "Whiff%":   100 * (r["whiffs"] or 0) / swings if swings else 0,
+            "Chase%":   100 * (r["o_swings"] or 0) / o_zone if o_zone else 0,
+            "PutAway%": 100 * (r["putaway"] or 0) / r["two_strike"] if r["two_strike"] else 0,
+            "xBA":      (r["hits"] or 0) / ab_proxy if ab_proxy else 0,
+        })
 
-    fig, ax = plt.subplots(figsize=(13, 1.0 + 0.7 * len(types)))
-    im = ax.imshow(matrix, aspect="auto", cmap="RdYlGn")
-    ax.set_xticks(range(len(metric_keys)))
-    ax.set_xticklabels(metric_keys, rotation=0, fontsize=10)
-    ax.set_yticks(range(len(types)))
-    ax.set_yticklabels([f"{PITCH_NAMES.get(t, t)}" for t in types], fontsize=11)
-    ax.set_title("Pitch-Type Performance Matrix", fontsize=14, fontweight="bold", pad=14)
+    # Most-thrown pitches at top — the eye lands where it matters most.
+    rows.sort(key=lambda x: -x["Usage%"])
 
-    for i in range(len(types)):
+    metric_keys = ["Usage%", "CSW%", "Whiff%", "Chase%", "PutAway%", "xBA"]
+    col_stats = {
+        key: (min(r[key] for r in rows), max(r[key] for r in rows))
+        for key in metric_keys
+    }
+    n_cols = len(metric_keys)
+    n_rows = len(rows)
+
+    fig, ax = plt.subplots(figsize=(11, 1.5 + 0.85 * n_rows))
+    ax.set_xlim(0, n_cols)
+    ax.set_ylim(0, n_rows)
+    ax.invert_yaxis()  # row 0 (highest usage) at the top
+
+    for i, row in enumerate(rows):
         for j, key in enumerate(metric_keys):
-            v = matrix[i, j]
-            if key == "xBA":
-                txt = f".{int(round(v)):03d}"
-            else:
-                txt = f"{v:.0f}%"
-            ax.text(j, i, txt, ha="center", va="center", fontsize=10,
-                    color="black", fontweight="bold")
+            val = row[key]
+            color = _scouting_color(val, key, col_stats)
+            ax.add_patch(plt.Rectangle((j, i), 1, 1, facecolor=color,
+                                        edgecolor="#1a1a2e", linewidth=1.2))
+            ax.text(j + 0.5, i + 0.5, _format_scouting_value(val, key),
+                    ha="center", va="center", fontsize=13, fontweight="bold",
+                    color=_text_color_for(color))
 
-    plt.colorbar(im, ax=ax, label="value (relative scale)", shrink=0.7)
-    fig.tight_layout()
+    # Y-axis: pitch type names
+    ax.set_yticks([i + 0.5 for i in range(n_rows)])
+    ax.set_yticklabels([PITCH_NAMES.get(r["type"], r["type"]) for r in rows],
+                        fontsize=12, fontweight="bold")
+
+    # X-axis: metric + MLB benchmark on a second line
+    ax.set_xticks([j + 0.5 for j in range(n_cols)])
+    labels = []
+    for key in metric_keys:
+        if key in SCOUTING_BENCH:
+            _, avg, _ = SCOUTING_BENCH[key]
+            if key == "xBA":
+                labels.append(f"{key}\nMLB ≈ .{int(round(avg * 1000)):03d}")
+            else:
+                labels.append(f"{key}\nMLB ≈ {avg:.0f}%")
+        else:
+            labels.append(f"{key}\n(volume)")
+    ax.set_xticklabels(labels, fontsize=11)
+    ax.tick_params(axis="x", length=0, pad=10)
+    ax.tick_params(axis="y", length=0)
+    for spine in ax.spines.values():
+        spine.set_visible(False)
+
+    ax.set_title(f"Pitch-Type Scouting Card — {FILTER.label}",
+                 fontsize=14, fontweight="bold", pad=18)
+    fig.text(0.5, 0.01,
+             "Color reads from the pitcher's POV: green = better than MLB avg, "
+             "red = worse · Usage% is volume only (blue = thrown more often) · "
+             "xBA is inverted: lower is better",
+             ha="center", fontsize=9, color="#9aa", style="italic")
+    fig.tight_layout(rect=[0, 0.03, 1, 1])
     fig.savefig(os.path.join(OUT_DIR, "09_pitch_type_performance.png"),
                 dpi=150, bbox_inches="tight")
     plt.close(fig)
-    print("  [9/9] Pitch-type performance matrix")
+    print("  [9/9] Pitch-type scouting card")
 
 
 # ═══════════════════════════════════════════════════════════════════════
+def _apply_cli_filter():
+    """Replace the module-level FILTER from parsed CLI args."""
+    global FILTER
+    args = parse_args()
+    FILTER = Filter(
+        modes=() if args.mode == "all" else (args.mode,),
+        difficulties=() if args.difficulty == "all" else (args.difficulty,),
+    )
+
+
 if __name__ == "__main__":
-    print("Generating StrikeFactor pitch analysis...")
+    _apply_cli_filter()
+    print(f"Generating StrikeFactor pitch analysis ({FILTER.label})...")
     fig1_speed_distributions()
     fig2_pitch_locations()
     fig3_movement_plot()

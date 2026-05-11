@@ -144,6 +144,54 @@ class BatterProfile:
             return 0.3
         return self.first_pitch_swings / self.first_pitch_count
 
+    def to_dict(self) -> dict:
+        """Serialize the profile's aggregates to a JSON-safe dict.
+
+        Used by PitchDatabaseService.save_batter_profile so tendencies
+        survive across launches, segregated by (game_mode, difficulty).
+        """
+        return {
+            "version": 1,
+            "zone_swings": self.zone_swings,
+            "pitch_type_swings": self.pitch_type_swings,
+            "chase_swings": self.chase_swings,
+            "chase_pitches": self.chase_pitches,
+            "first_pitch_swings": self.first_pitch_swings,
+            "first_pitch_count": self.first_pitch_count,
+            "count_swings": self.count_swings,
+        }
+
+    def from_dict(self, data: dict):
+        """Restore aggregates from a previously to_dict()'d payload.
+
+        Resets first so missing keys behave like a fresh profile, then
+        copies in whatever was persisted. Unknown keys are ignored.
+        """
+        self.reset()
+        if not isinstance(data, dict):
+            return
+        # zone_swings / count_swings are dicts of [int, int]; coerce list
+        # values back to lists so increments work.
+        zs = data.get("zone_swings")
+        if isinstance(zs, dict):
+            for k, v in zs.items():
+                if k in self.zone_swings and isinstance(v, (list, tuple)) and len(v) == 2:
+                    self.zone_swings[k] = [int(v[0]), int(v[1])]
+        pts = data.get("pitch_type_swings")
+        if isinstance(pts, dict):
+            for k, v in pts.items():
+                if isinstance(v, (list, tuple)) and len(v) == 2:
+                    self.pitch_type_swings[k] = [int(v[0]), int(v[1])]
+        cs = data.get("count_swings")
+        if isinstance(cs, dict):
+            for k, v in cs.items():
+                if k in self.count_swings and isinstance(v, (list, tuple)) and len(v) == 2:
+                    self.count_swings[k] = [int(v[0]), int(v[1])]
+        self.chase_swings = int(data.get("chase_swings", 0))
+        self.chase_pitches = int(data.get("chase_pitches", 0))
+        self.first_pitch_swings = int(data.get("first_pitch_swings", 0))
+        self.first_pitch_count = int(data.get("first_pitch_count", 0))
+
     def get_pitch_bonuses(self, available_pitches, count_state):
         """Calculate Q-value bonuses for each pitch type based on batter tendencies.
 

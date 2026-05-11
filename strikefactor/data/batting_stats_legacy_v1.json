@@ -1,0 +1,37 @@
+{
+  "heatmap_data": [
+    64,
+    74,
+    56,
+    85,
+    127,
+    110,
+    64,
+    94,
+    66
+  ],
+  "heatmap_attempts": [
+    330,
+    411,
+    328,
+    465,
+    557,
+    468,
+    345,
+    409,
+    366
+  ],
+  "total_swings": 3679,
+  "total_hits": 1171,
+  "total_pitches": 12525,
+  "total_at_bats": 3788,
+  "total_singles": 589,
+  "total_doubles": 299,
+  "total_triples": 91,
+  "total_home_runs": 192,
+  "total_walks": 60,
+  "total_hbp": 0,
+  "total_sacrifice_flies": 0,
+  "last_updated": "2026-05-10T23:12:14.977759",
+  "version": "1.2"
+}

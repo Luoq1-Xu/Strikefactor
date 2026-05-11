@@ -3,15 +3,56 @@ import pygame.gfxdraw
 import colorsys
 import json
 import os
+import shutil
 from datetime import datetime
 
+
+# Bucket key sentinel used until the Game tells us which (mode, difficulty)
+# bucket is active. Pitches recorded under this key indicate the bucket
+# wasn't initialized — should not happen in normal flow.
+DEFAULT_BUCKET_KEY = "unknown|unknown"
+
+
+def _fresh_bucket() -> dict:
+    """Empty stats block used for a brand-new (mode, difficulty) bucket."""
+    return {
+        'heatmap_data': [0] * 9,
+        'heatmap_attempts': [0] * 9,
+        'total_swings': 0,
+        'total_hits': 0,
+        'total_pitches': 0,
+        'total_at_bats': 0,
+        'total_singles': 0,
+        'total_doubles': 0,
+        'total_triples': 0,
+        'total_home_runs': 0,
+        'total_walks': 0,
+        'total_hbp': 0,
+        'total_sacrifice_flies': 0,
+    }
+
+
 class FieldRenderer:
-    """Renders the static components of the baseball field."""
-    
+    """Renders the static components of the baseball field.
+
+    Persists batting aggregates (heatmap + triple-slash counters) under
+    `batting_stats.json`, partitioned by (game_mode, difficulty) so analytics
+    can filter cleanly. The exposed instance attrs (heatmap_data, total_*)
+    are live references to the active bucket so the existing record_*
+    methods don't need to know about bucketing.
+    """
+
+    BUCKET_INT_FIELDS = (
+        'total_swings', 'total_hits', 'total_pitches', 'total_at_bats',
+        'total_singles', 'total_doubles', 'total_triples', 'total_home_runs',
+        'total_walks', 'total_hbp', 'total_sacrifice_flies',
+    )
+    DATA_VERSION = '2.0'
+
     def __init__(self, screen, strikezone_rect=(565, 410, 130, 150)):
         """
         Initialize the field renderer.
-        
+
         Args:
             screen: Pygame surface to draw on
             strikezone_rect: Rectangle defining the strike zone (x, y, width, height)
@@ -20,28 +61,26 @@ class FieldRenderer:
         self.strikezone = pygame.Rect(strikezone_rect)
         self.strikezonedrawn = 1  # 1: Hidden, 2: Outline only, 3: Grid, 4: Heatmap, 5: Heatmap with Averages
         self.show_bases = True  # Disabled in minimal HUD mode (the corner widget shows them).
-        
-        # Heatmap data structure: 9 segments [top_left, top_center, top_right, mid_left, center, mid_right, bot_left, bot_center, bot_right]
-        self.heatmap_data = [0, 0, 0, 0, 0, 0, 0, 0, 0]
-        self.heatmap_attempts = [0, 0, 0, 0, 0, 0, 0, 0, 0]
-        
-        # Additional batting statistics
-        self.total_swings = 0
-        self.total_hits = 0
-        self.total_pitches = 0
-        self.total_at_bats = 0  # At-bats: hits + outs + strikeouts (excludes walks, fouls)
 
-        # Triple slash statistics fields (v1.2)
-        self.total_singles = 0
-        self.total_doubles = 0
-        self.total_triples = 0
-        self.total_home_runs = 0
-        self.total_walks = 0
-        self.total_hbp = 0  # Hit by pitch (not yet implemented in game)
-        self.total_sacrifice_flies = 0  # Sacrifice flies (not yet implemented)
+        # Bucketed batting aggregates: { "mode|difficulty": fresh_bucket() }
+        self._buckets: dict = {}
+        # The bucket that record_* writes into. Game.set_active_bucket(mode,
+        # difficulty) flips this when the user enters a new (mode, difficulty).
+        self._active_key = DEFAULT_BUCKET_KEY
+        # Optional rendering override: None = active bucket, "all" = sum of
+        # all buckets, "{mode}|{difficulty}" = a specific bucket.
+        self._view_override_key = None
 
-        # Data file path
+        # Initialize the default bucket and bind instance attrs as live
+        # references so existing record_* code mutates the bucket directly.
+        self._buckets[DEFAULT_BUCKET_KEY] = _fresh_bucket()
+        self._bind_instance_to_active()
+
+        # Data file paths
         self.data_file = os.path.join(os.path.dirname(__file__), '..', 'data', 'batting_stats.json')
+        self.legacy_archive_path = os.path.join(
+            os.path.dirname(__file__), '..', 'data', 'batting_stats_legacy_v1.json'
+        )
 
         # Lap history file path
         self.lap_history_file = os.path.join(os.path.dirname(__file__), '..', 'data', 'lap_history.json')
@@ -49,49 +88,130 @@ class FieldRenderer:
 
         # Load existing data if available
         self.load_data()
-        
+
+    # ----------------- Bucket management -----------------
+
+    @staticmethod
+    def _key(game_mode: str, difficulty: str) -> str:
+        return f"{game_mode}|{difficulty}"
+
+    def _bind_instance_to_active(self):
+        """Point self.heatmap_data / self.total_* at the active bucket."""
+        b = self._buckets[self._active_key]
+        # Lists: use the same reference so in-place mutations propagate.
+        self.heatmap_data = b['heatmap_data']
+        self.heatmap_attempts = b['heatmap_attempts']
+        # Ints: assign a snapshot; _sync_ints_to_bucket() copies them back
+        # before any save / bucket switch.
+        for f in self.BUCKET_INT_FIELDS:
+            setattr(self, f, b.get(f, 0))
+
+    def _sync_ints_to_bucket(self):
+        """Persist the int instance attrs back into the active bucket dict."""
+        b = self._buckets[self._active_key]
+        for f in self.BUCKET_INT_FIELDS:
+            b[f] = int(getattr(self, f, 0))
+
+    def set_active_bucket(self, game_mode: str, difficulty: str):
+        """Switch the bucket that future record_* writes will land in.
+
+        Called by Game when the user enters a new (mode, difficulty)
+        combination. Safe to call repeatedly with the same args.
+        """
+        new_key = self._key(game_mode, difficulty)
+        if new_key == self._active_key:
+            return
+        # Persist current attrs into the old bucket before swapping.
+        self._sync_ints_to_bucket()
+        # Initialize the destination bucket if it's new.
+        self._buckets.setdefault(new_key, _fresh_bucket())
+        self._active_key = new_key
+        self._bind_instance_to_active()
+
+    def get_active_bucket_key(self) -> str:
+        return self._active_key
+
+    def list_buckets(self) -> list:
+        """Return the keys of all known buckets."""
+        return list(self._buckets.keys())
+
+    def set_view_override(self, key_or_mode: str = None, difficulty: str = None):
+        """Set the bucket that the heatmap renders.
+
+        - None: render the active bucket (default).
+        - "all": render the sum across all buckets.
+        - "{mode}|{difficulty}" or (mode, difficulty): render that bucket.
+        """
+        if key_or_mode is None:
+            self._view_override_key = None
+            return
+        if difficulty is not None:
+            self._view_override_key = self._key(key_or_mode, difficulty)
+            return
+        self._view_override_key = key_or_mode  # may be "all" or a key string
+
+    def _render_view(self) -> dict:
+        """Return the bucket dict that the heatmap should display."""
+        if self._view_override_key is None:
+            # Sync ints into the active bucket so the renderer sees current totals.
+            self._sync_ints_to_bucket()
+            return self._buckets[self._active_key]
+        if self._view_override_key == "all":
+            combined = _fresh_bucket()
+            self._sync_ints_to_bucket()
+            for b in self._buckets.values():
+                for i in range(9):
+                    combined['heatmap_data'][i] += b['heatmap_data'][i]
+                    combined['heatmap_attempts'][i] += b['heatmap_attempts'][i]
+                for f in self.BUCKET_INT_FIELDS:
+                    combined[f] += b.get(f, 0)
+            return combined
+        return self._buckets.get(self._view_override_key, _fresh_bucket())
+
+    # ----------------- Drawing -----------------
+
     def toggle_strikezone_mode(self):
         """Cycle through strike zone display modes."""
         self.strikezonedrawn = self.strikezonedrawn + 1 if self.strikezonedrawn < 5 else 1
         return self.strikezonedrawn
-    
+
     def draw_strikezone(self):
         """Draw the strike zone based on current mode."""
         if self.strikezonedrawn == 1:
             # Hidden, don't draw
             return
-            
+
         # Draw strike zone outline
         pygame.draw.rect(self.screen, "white", self.strikezone, 1)
-        
+
         # Draw strike zone grid lines
         if self.strikezonedrawn == 3:
             x, y, width, height = self.strikezone
-            
+
             # Horizontal dividing lines (divide into thirds)
-            pygame.draw.line(self.screen, "white", 
-                            (x, y + (height/3)), 
+            pygame.draw.line(self.screen, "white",
+                            (x, y + (height/3)),
                             (x + width, y + (height/3)))
-            pygame.draw.line(self.screen, "white", 
-                            (x, y + 2*(height/3)), 
+            pygame.draw.line(self.screen, "white",
+                            (x, y + 2*(height/3)),
                             (x + width, y + 2*(height/3)))
-            
+
             # Vertical dividing lines (divide into thirds)
-            pygame.draw.line(self.screen, "white", 
-                            (x + (width/3), y), 
+            pygame.draw.line(self.screen, "white",
+                            (x + (width/3), y),
                             (x + (width/3), y + height))
-            pygame.draw.line(self.screen, "white", 
-                            (x + 2*(width/3), y), 
+            pygame.draw.line(self.screen, "white",
+                            (x + 2*(width/3), y),
                             (x + 2*(width/3), y + height))
-            
+
         # Draw heatmap
         elif self.strikezonedrawn == 4:
             self._draw_heatmap()
-        
+
         # Draw heatmap with batting averages
         elif self.strikezonedrawn == 5:
             self._draw_heatmap_with_averages()
-    
+
     def draw_homeplate(self):
         """Draw the home plate."""
         x, y = 565, 660
@@ -102,11 +222,11 @@ class FieldRenderer:
             (x + 65, y + 25),        # Bottom
             (x, y + 10)              # Middle left
         ], 0)
-    
+
     def draw_bases(self, bases_status):
         """
         Draw the bases with their current status.
-        
+
         Args:
             bases_status: List of colors for the bases ['white'/'yellow', ...]
         """
@@ -114,21 +234,21 @@ class FieldRenderer:
         pygame.draw.polygon(self.screen, bases_status[0], [
             (1115, 585), (1140, 610), (1115, 635), (1090, 610)
         ], 0 if bases_status[0] == 'yellow' else 1)
-        
+
         # Draw second base (top)
         pygame.draw.polygon(self.screen, bases_status[1], [
             (1080, 550), (1105, 575), (1080, 600), (1055, 575)
         ], 0 if bases_status[1] == 'yellow' else 1)
-        
+
         # Draw third base (bottom left)
         pygame.draw.polygon(self.screen, bases_status[2], [
             (1045, 585), (1070, 610), (1045, 635), (1020, 610)
         ], 0 if bases_status[2] == 'yellow' else 1)
-    
+
     def draw_field(self, bases_status):
         """
         Draw all static field components.
-        
+
         Args:
             bases_status: List of colors for the bases ['white'/'yellow', ...]
         """
@@ -136,25 +256,25 @@ class FieldRenderer:
         self.draw_homeplate()
         if self.show_bases:
             self.draw_bases(bases_status)
-    
+
     def get_zone_segment(self, x, y):
         """
         Get the zone segment (0-8) for a given position.
         9 segments layout (including center):
         0  1  2
-        3  4  5  
+        3  4  5
         6  7  8
         """
         sx, sy, width, height = self.strikezone
-        
+
         # Check if point is within strikezone
         if not (sx <= x <= sx + width and sy <= y <= sy + height):
             return -1  # Outside strikezone
-            
+
         # Calculate relative position within strikezone (0.0 to 1.0)
         rel_x = (x - sx) / width
         rel_y = (y - sy) / height
-        
+
         # Determine segment based on thirds, including center
         if rel_y <= 1/3:  # Top row
             if rel_x <= 1/3:
@@ -177,7 +297,7 @@ class FieldRenderer:
                 return 7  # bot_center
             else:
                 return 8  # bot_right
-    
+
     def record_hit(self, x, y, hit_type=None):
         """
         Record a hit at the given position with type tracking.
@@ -187,7 +307,7 @@ class FieldRenderer:
             y: Y-coordinate of the hit
             hit_type: Type of hit - can be 'SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN' or numeric 1-4
         """
-        print(f">>> record_hit CALLED: x={x:.1f}, y={y:.1f}, hit_type='{hit_type}'", flush=True)
+        print(f">>> record_hit CALLED: x={x:.1f}, y={y:.1f}, hit_type='{hit_type}', bucket={self._active_key}", flush=True)
 
         segment = self.get_zone_segment(x, y)
         print(f"    segment={segment}", flush=True)
@@ -225,16 +345,14 @@ class FieldRenderer:
         # Auto-save data after each hit
         self.save_data()
         print(f"    ✓ Data saved successfully", flush=True)
-    
+
     def record_attempt(self, x, y):
         """Record an attempt (swing) at the given position."""
         segment = self.get_zone_segment(x, y)
-        # print(f"Recording ATTEMPT at ({x:.1f}, {y:.1f}) -> segment {segment}")
         if 0 <= segment <= 8:
             self.heatmap_attempts[segment] += 1
             self.total_swings += 1
-            # print(f"✓ Attempt recorded! Segment {segment} now has {self.heatmap_attempts[segment]} attempts")
-    
+
     def record_pitch(self):
         """Record that a pitch was thrown (for tracking total pitches)."""
         self.total_pitches += 1
@@ -267,22 +385,24 @@ class FieldRenderer:
 
     def get_hit_rate(self, segment):
         """Get the hit rate for a segment (hits/attempts)."""
-        if self.heatmap_attempts[segment] == 0:
+        view = self._render_view()
+        attempts = view['heatmap_attempts'][segment]
+        if attempts == 0:
             return 0.0
-        return self.heatmap_data[segment] / self.heatmap_attempts[segment]
-    
+        return view['heatmap_data'][segment] / attempts
+
     def _get_heatmap_color(self, hit_rate):
         """Convert hit rate to a color (blue = cold/low, red = hot/high)."""
         if hit_rate == 0:
             return (80, 80, 80)  # Darker gray for no data
-            
+
         # Normalize hit rate based on realistic baseball batting averages
         # Excellent: 0.400+ (red), Good: 0.300+ (orange/yellow), Average: 0.200+ (white), Poor: <0.200 (blue)
         # Scale the hit rate so that:
         # - 0.000-0.150 maps to blue (cold)
-        # - 0.150-0.250 maps to white/neutral 
+        # - 0.150-0.250 maps to white/neutral
         # - 0.250-0.350+ maps to red (hot)
-        
+
         if hit_rate <= 0.150:
             # Poor performance - blue range
             intensity = hit_rate / 0.150  # 0 to 1
@@ -303,22 +423,22 @@ class FieldRenderer:
             hue = 0  # Red hue
             saturation = 0.6 + progress * 0.3  # More saturated for better performance
             value = 0.7 + progress * 0.3  # Brighter for better performance
-        
+
         rgb = colorsys.hsv_to_rgb(hue, saturation, value)
         return (int(rgb[0] * 255), int(rgb[1] * 255), int(rgb[2] * 255))
-    
+
     def _draw_heatmap(self):
         """Draw the batting heatmap."""
         x, y, width, height = self.strikezone
-        
+
         # Calculate segment dimensions
         segment_width = width // 3
         segment_height = height // 3
-        
+
         # Draw each segment with its color
         segments = [
             (0, 0, 0),      # top_left
-            (1, 1, 0),      # top_center  
+            (1, 1, 0),      # top_center
             (2, 2, 0),      # top_right
             (3, 0, 1),      # mid_left
             (4, 1, 1),      # center
@@ -327,42 +447,43 @@ class FieldRenderer:
             (7, 1, 2),      # bot_center
             (8, 2, 2),      # bot_right
         ]
-        
+
         for segment_id, col, row in segments:
             hit_rate = self.get_hit_rate(segment_id)
             color = self._get_heatmap_color(hit_rate)
-            
+
             # Calculate segment rectangle
             seg_x = x + col * segment_width
             seg_y = y + row * segment_height
-            
+
             # Fill the segment with the heatmap color
             segment_rect = pygame.Rect(seg_x, seg_y, segment_width, segment_height)
             pygame.draw.rect(self.screen, color, segment_rect)
-            
+
             # Draw segment border
             pygame.draw.rect(self.screen, "white", segment_rect, 1)
-            
+
         # Draw the overall strikezone border
         pygame.draw.rect(self.screen, "white", self.strikezone, 2)
-        
-        # Add a visual indicator that heatmap is active
-        font = pygame.font.Font(None, 24)
-        text = font.render("HEATMAP ON", True, (255, 255, 255))
-        self.screen.blit(text, (self.strikezone.x, self.strikezone.y - 30))
-    
+
+        # Add a visual indicator that heatmap is active, including bucket label.
+        font = pygame.font.Font(None, 20)
+        label = self._heatmap_label()
+        text = font.render(f"HEATMAP — {label}", True, (255, 255, 255))
+        self.screen.blit(text, (self.strikezone.x, self.strikezone.y - 26))
+
     def _draw_heatmap_with_averages(self):
         """Draw the batting heatmap with numerical averages displayed."""
         x, y, width, height = self.strikezone
-        
+
         # Calculate segment dimensions
         segment_width = width // 3
         segment_height = height // 3
-        
+
         # Draw each segment with its color and batting average text
         segments = [
             (0, 0, 0),      # top_left
-            (1, 1, 0),      # top_center  
+            (1, 1, 0),      # top_center
             (2, 2, 0),      # top_right
             (3, 0, 1),      # mid_left
             (4, 1, 1),      # center
@@ -371,173 +492,182 @@ class FieldRenderer:
             (7, 1, 2),      # bot_center
             (8, 2, 2),      # bot_right
         ]
-        
+
         # Font for displaying averages
         font = pygame.font.Font(None, 24)
-        
+        view = self._render_view()
+
         for segment_id, col, row in segments:
             hit_rate = self.get_hit_rate(segment_id)
             color = self._get_heatmap_color(hit_rate)
-            
+
             # Calculate segment rectangle
             seg_x = x + col * segment_width
             seg_y = y + row * segment_height
-            
+
             # Fill the segment with the heatmap color
             segment_rect = pygame.Rect(seg_x, seg_y, segment_width, segment_height)
             pygame.draw.rect(self.screen, color, segment_rect)
-            
+
             # Draw segment border
             pygame.draw.rect(self.screen, "white", segment_rect, 1)
-            
+
             # Display batting average text in the center of each segment
-            if self.heatmap_attempts[segment_id] > 0:
+            if view['heatmap_attempts'][segment_id] > 0:
                 if hit_rate >= 1.0:
-                    # For perfect (1.000) or above, show as "1.00" 
                     avg_text = f"{hit_rate:.2f}"
                 else:
-                    # For averages < 1.0, show as ".333" (remove leading zero)
-                    avg_text = f"{hit_rate:.3f}"[1:]  # Remove leading '0'
-                    if len(avg_text) > 4:  # If more than .XXX, truncate
+                    avg_text = f"{hit_rate:.3f}"[1:]
+                    if len(avg_text) > 4:
                         avg_text = avg_text[:4]
             else:
-                avg_text = "---"  # No data indicator
-            
+                avg_text = "---"
+
             # Render text
             text_surface = font.render(avg_text, True, (255, 255, 255))
             text_rect = text_surface.get_rect()
-            
-            # Center the text in the segment
+
             text_x = seg_x + (segment_width - text_rect.width) // 2
             text_y = seg_y + (segment_height - text_rect.height) // 2
-            
-            # Draw a semi-transparent background for better text readability
+
             bg_rect = pygame.Rect(text_x - 2, text_y - 1, text_rect.width + 4, text_rect.height + 2)
             bg_surface = pygame.Surface((bg_rect.width, bg_rect.height))
-            bg_surface.set_alpha(128)  # 50% transparency
-            bg_surface.fill((0, 0, 0))  # Black background
+            bg_surface.set_alpha(128)
+            bg_surface.fill((0, 0, 0))
             self.screen.blit(bg_surface, bg_rect)
-            
-            # Draw the text
+
             self.screen.blit(text_surface, (text_x, text_y))
-            
-        # Draw the overall strikezone border
+
         pygame.draw.rect(self.screen, "white", self.strikezone, 2)
-        
-        # Add a visual indicator that heatmap with averages is active
-        font = pygame.font.Font(None, 24)
-        text = font.render("HEATMAP + AVERAGES", True, (255, 255, 255))
-        self.screen.blit(text, (self.strikezone.x, self.strikezone.y - 30))
-    
+
+        font = pygame.font.Font(None, 20)
+        label = self._heatmap_label()
+        text = font.render(f"HEATMAP + AVG — {label}", True, (255, 255, 255))
+        self.screen.blit(text, (self.strikezone.x, self.strikezone.y - 26))
+
+    def _heatmap_label(self) -> str:
+        """Human-readable bucket label for the heatmap header."""
+        if self._view_override_key == "all":
+            return "ALL"
+        key = self._view_override_key or self._active_key
+        if "|" in key:
+            mode, diff = key.split("|", 1)
+            return f"{mode.upper()} / {diff.upper()}"
+        return key.upper()
+
     def reset_heatmap_data(self):
-        """Reset all heatmap data and batting statistics."""
-        self.heatmap_data = [0, 0, 0, 0, 0, 0, 0, 0, 0]
-        self.heatmap_attempts = [0, 0, 0, 0, 0, 0, 0, 0, 0]
-        self.total_swings = 0
-        self.total_hits = 0
-        self.total_pitches = 0
-        self.total_at_bats = 0
-
-        # Reset triple slash fields
-        self.total_singles = 0
-        self.total_doubles = 0
-        self.total_triples = 0
-        self.total_home_runs = 0
-        self.total_walks = 0
-        self.total_hbp = 0
-        self.total_sacrifice_flies = 0
-
-        # Save the reset state
+        """Reset the active bucket's heatmap and counters."""
+        b = self._buckets[self._active_key]
+        b['heatmap_data'][:] = [0] * 9
+        b['heatmap_attempts'][:] = [0] * 9
+        for f in self.BUCKET_INT_FIELDS:
+            b[f] = 0
+        # Refresh instance attrs from the cleared bucket.
+        self._bind_instance_to_active()
         self.save_data()
-        print("✓ All batting statistics have been reset")
-    
+        print(f"✓ Bucket {self._active_key} stats reset")
+
+    # ----------------- Persistence -----------------
+
     def save_data(self):
-        """Save heatmap and batting statistics to file."""
+        """Save bucketed batting statistics to file."""
         try:
-            # Ensure data directory exists
+            self._sync_ints_to_bucket()
             os.makedirs(os.path.dirname(self.data_file), exist_ok=True)
-
             data = {
-                'heatmap_data': self.heatmap_data,
-                'heatmap_attempts': self.heatmap_attempts,
-                'total_swings': self.total_swings,
-                'total_hits': self.total_hits,
-                'total_pitches': self.total_pitches,
-                'total_at_bats': self.total_at_bats,
-                # Triple slash statistics (v1.2)
-                'total_singles': self.total_singles,
-                'total_doubles': self.total_doubles,
-                'total_triples': self.total_triples,
-                'total_home_runs': self.total_home_runs,
-                'total_walks': self.total_walks,
-                'total_hbp': self.total_hbp,
-                'total_sacrifice_flies': self.total_sacrifice_flies,
+                'version': self.DATA_VERSION,
                 'last_updated': datetime.now().isoformat(),
-                'version': '1.2'  # Updated version
+                'buckets': self._buckets,
             }
-
             with open(self.data_file, 'w') as f:
                 json.dump(data, f, indent=2)
-
-            # print(f"✓ Batting statistics saved to {self.data_file}")
-
         except Exception as e:
             print(f"✗ Error saving batting statistics: {e}")
-            
+
     def load_data(self):
-        """Load heatmap and batting statistics from file."""
+        """Load bucketed stats. Migrate v1 (flat) to v2 by archiving + wiping."""
         try:
-            if os.path.exists(self.data_file):
-                with open(self.data_file, 'r') as f:
-                    data = json.load(f)
-
-                # Load heatmap data
-                self.heatmap_data = data.get('heatmap_data', [0] * 9)
-                self.heatmap_attempts = data.get('heatmap_attempts', [0] * 9)
-
-                # Load batting statistics
-                self.total_swings = data.get('total_swings', 0)
-                self.total_hits = data.get('total_hits', 0)
-                self.total_pitches = data.get('total_pitches', 0)
-                self.total_at_bats = data.get('total_at_bats', 0)
-
-                # Load v1.2 fields (triple slash statistics)
-                self.total_singles = data.get('total_singles', 0)
-                self.total_doubles = data.get('total_doubles', 0)
-                self.total_triples = data.get('total_triples', 0)
-                self.total_home_runs = data.get('total_home_runs', 0)
-                self.total_walks = data.get('total_walks', 0)
-                self.total_hbp = data.get('total_hbp', 0)
-                self.total_sacrifice_flies = data.get('total_sacrifice_flies', 0)
-
-                # Data validation and migration
-                version = data.get('version', '1.0')
-                if version == '1.1':
-                    print("  Migrating data from v1.1 to v1.2...")
-
-                # Validate data integrity
-                expected_hits = (self.total_singles + self.total_doubles +
-                                 self.total_triples + self.total_home_runs)
-                if expected_hits > 0 and expected_hits != self.total_hits:
-                    print(f"  ⚠ Warning: Hit count mismatch. Expected {expected_hits}, got {self.total_hits}. Recalculating.")
-                    self.total_hits = expected_hits
-                    self.save_data()  # Save corrected data
-
-                print(f"✓ Batting statistics loaded from {self.data_file}")
-                print(f"  Total pitches: {self.total_pitches}, Total at-bats: {self.total_at_bats}, Total hits: {self.total_hits}")
-
-                # Display overall batting average if we have data (BA = H / AB)
-                if self.total_at_bats > 0:
-                    overall_avg = self.total_hits / self.total_at_bats
-                    print(f"  Overall batting average: {overall_avg:.3f}")
-
-            else:
+            if not os.path.exists(self.data_file):
                 print("No saved batting statistics found. Starting fresh.")
+                return
+
+            with open(self.data_file, 'r') as f:
+                data = json.load(f)
+
+            version = str(data.get('version', '1.0'))
+            if not version.startswith('2.'):
+                # v1 schema: flat fields, no bucket partitioning.
+                # Per user directive: archive the legacy file then wipe and
+                # start fresh, so future analytics are mode/difficulty-aware.
+                self._archive_legacy(data)
+                # Discard legacy totals — start with an empty bucket for the
+                # current active key (Game will set it shortly).
+                self._buckets = {self._active_key: _fresh_bucket()}
+                self._bind_instance_to_active()
+                self.save_data()
+                print("  Legacy v1 stats archived to batting_stats_legacy_v1.json; "
+                      "going forward stats are partitioned by (game_mode, difficulty).")
+                return
+
+            # v2.x — load buckets directly. Coerce any missing fields to defaults.
+            buckets = data.get('buckets', {})
+            cleaned = {}
+            for key, b in buckets.items():
+                if not isinstance(b, dict):
+                    continue
+                fresh = _fresh_bucket()
+                fresh['heatmap_data'] = list(b.get('heatmap_data', fresh['heatmap_data']))[:9]
+                if len(fresh['heatmap_data']) < 9:
+                    fresh['heatmap_data'] += [0] * (9 - len(fresh['heatmap_data']))
+                fresh['heatmap_attempts'] = list(b.get('heatmap_attempts', fresh['heatmap_attempts']))[:9]
+                if len(fresh['heatmap_attempts']) < 9:
+                    fresh['heatmap_attempts'] += [0] * (9 - len(fresh['heatmap_attempts']))
+                for f in self.BUCKET_INT_FIELDS:
+                    fresh[f] = int(b.get(f, 0))
+                cleaned[key] = fresh
+            if not cleaned:
+                cleaned[DEFAULT_BUCKET_KEY] = _fresh_bucket()
+            self._buckets = cleaned
+            # If the previous active key isn't in the loaded set, fall back to
+            # the default sentinel (Game will set the real active soon).
+            if self._active_key not in self._buckets:
+                self._active_key = next(iter(self._buckets.keys()))
+            self._bind_instance_to_active()
+            print(f"✓ Batting statistics loaded from {self.data_file} "
+                  f"({len(self._buckets)} bucket{'s' if len(self._buckets) != 1 else ''})")
 
         except Exception as e:
             print(f"✗ Error loading batting statistics: {e}")
             print("Starting with fresh data.")
-            
+            self._buckets = {self._active_key: _fresh_bucket()}
+            self._bind_instance_to_active()
+
+    def _archive_legacy(self, data: dict):
+        """Copy the existing v1 file to *_legacy_v1.json verbatim."""
+        try:
+            # If the legacy archive already exists, append a numeric suffix
+            # so we don't overwrite a previous archive.
+            path = self.legacy_archive_path
+            if os.path.exists(path):
+                base, ext = os.path.splitext(path)
+                i = 2
+                while os.path.exists(f"{base}_{i}{ext}"):
+                    i += 1
+                path = f"{base}_{i}{ext}"
+            # Prefer copying the original file to preserve formatting; fall
+            # back to dumping the parsed dict if the file moved between
+            # exists() and copy().
+            try:
+                shutil.copy2(self.data_file, path)
+            except Exception:
+                with open(path, 'w') as f:
+                    json.dump(data, f, indent=2)
+            print(f"  Archived legacy batting_stats.json to {path}")
+        except Exception as e:
+            print(f"  ⚠ Failed to archive legacy stats: {e}")
+
+    # ----------------- Triple-slash helpers -----------------
+
     def get_overall_batting_average(self):
         """
         Get overall batting average across all zones.
@@ -555,11 +685,6 @@ class FieldRenderer:
         Calculate On-Base Percentage (OBP).
 
         OBP = (H + BB + HBP) / (AB + BB + HBP + SF)
-        - H: Hits
-        - BB: Walks (Base on Balls)
-        - HBP: Hit By Pitch
-        - AB: At-Bats
-        - SF: Sacrifice Flies
         """
         numerator = self.total_hits + self.total_walks + self.total_hbp
         denominator = (self.total_at_bats + self.total_walks +
@@ -588,53 +713,32 @@ class FieldRenderer:
         return total_bases / self.total_at_bats
 
     def get_ops(self):
-        """
-        Calculate OPS (On-Base Plus Slugging).
-
-        OPS = OBP + SLG
-        """
+        """OPS = OBP + SLG."""
         return self.get_on_base_percentage() + self.get_slugging_percentage()
 
     def get_triple_slash_line(self):
-        """
-        Get the triple slash line as a formatted string.
-
-        Returns:
-            str: Formatted as ".AVG/.OBP/.SLG"
-        """
+        """Return triple-slash as ".AVG/.OBP/.SLG"."""
         avg = self.get_overall_batting_average()
         obp = self.get_on_base_percentage()
         slg = self.get_slugging_percentage()
 
-        # Format: Remove leading zero for values < 1.0, show 3 decimal places
         def format_stat(value):
             if value >= 1.0:
-                return f"{value:.3f}"  # Show "1.000" for perfect
-            return f"{value:.3f}"[1:]  # Remove leading 0 for ".333"
+                return f"{value:.3f}"
+            return f"{value:.3f}"[1:]
 
         return f"{format_stat(avg)}/{format_stat(obp)}/{format_stat(slg)}"
 
     # ==================== Lap Feature Methods ====================
 
     def has_stats_to_lap(self) -> bool:
-        """
-        Check if there are any stats to create a lap from.
-
-        Returns:
-            bool: True if there are stats worth saving
-        """
+        """Check if there are any stats to create a lap from."""
         return (self.total_pitches > 0 or
                 self.total_swings > 0 or
                 sum(self.heatmap_attempts) > 0)
 
     def create_lap(self) -> dict:
-        """
-        Create a new lap entry from current session stats.
-        Stores the current stats in lap history and resets current stats.
-
-        Returns:
-            dict: The created lap entry data
-        """
+        """Snapshot active-bucket stats into lap history; reset the bucket."""
         # Calculate batting average before creating lap
         batting_avg = self.get_overall_batting_average()
 
@@ -648,19 +752,20 @@ class FieldRenderer:
         # Determine lap number
         lap_number = len(lap_history.get('laps', [])) + 1
 
-        # Create lap entry
+        # Create lap entry — tag with the bucket so per-(mode, difficulty)
+        # laps don't get mixed in side-by-side comparisons.
         lap_entry = {
             'lap_number': lap_number,
             'timestamp': lap_end_time.isoformat(),
-            'heatmap_data': self.heatmap_data.copy(),
-            'heatmap_attempts': self.heatmap_attempts.copy(),
+            'bucket_key': self._active_key,
+            'heatmap_data': list(self.heatmap_data),
+            'heatmap_attempts': list(self.heatmap_attempts),
             'total_swings': self.total_swings,
             'total_hits': self.total_hits,
             'total_pitches': self.total_pitches,
             'total_at_bats': self.total_at_bats,
             'batting_average': round(batting_avg, 3),
             'duration_seconds': duration,
-            # Triple slash statistics (v1.2)
             'triple_slash': self.get_triple_slash_line(),
             'total_singles': self.total_singles,
             'total_doubles': self.total_doubles,
@@ -675,7 +780,7 @@ class FieldRenderer:
         # Add to history
         if 'laps' not in lap_history:
             lap_history['laps'] = []
-            lap_history['version'] = '1.0'
+            lap_history['version'] = '1.1'
             lap_history['created_date'] = lap_end_time.isoformat()
 
         lap_history['laps'].append(lap_entry)
@@ -695,39 +800,30 @@ class FieldRenderer:
         # Reset lap timer
         self.lap_start_time = datetime.now()
 
-        print(f"✓ Lap {lap_number} created: BA {batting_avg:.3f}, {self.total_hits} hits in {self.total_at_bats} ABs")
+        print(f"✓ Lap {lap_number} created [{self._active_key}]: "
+              f"BA {batting_avg:.3f}, {self.total_hits} hits in {self.total_at_bats} ABs")
 
         return lap_entry
 
     def load_lap_history(self) -> dict:
-        """
-        Load lap history from file.
-
-        Returns:
-            dict: Lap history data or empty structure if file doesn't exist
-        """
+        """Load lap history from file."""
         try:
             if os.path.exists(self.lap_history_file):
                 with open(self.lap_history_file, 'r') as f:
                     return json.load(f)
             else:
                 return {
-                    'version': '1.0',
+                    'version': '1.1',
                     'created_date': datetime.now().isoformat(),
                     'last_updated': datetime.now().isoformat(),
                     'laps': []
                 }
         except Exception as e:
             print(f"✗ Error loading lap history: {e}")
-            return {'version': '1.0', 'laps': []}
+            return {'version': '1.1', 'laps': []}
 
     def save_lap_history(self, lap_history: dict):
-        """
-        Save lap history to file.
-
-        Args:
-            lap_history: The lap history data to save
-        """
+        """Save lap history to file."""
         try:
             os.makedirs(os.path.dirname(self.lap_history_file), exist_ok=True)
             with open(self.lap_history_file, 'w') as f:
@@ -737,11 +833,6 @@ class FieldRenderer:
             print(f"✗ Error saving lap history: {e}")
 
     def get_lap_history(self) -> list:
-        """
-        Get all lap entries.
-
-        Returns:
-            list: List of lap entry dictionaries
-        """
+        """Get all lap entries."""
         history = self.load_lap_history()
         return history.get('laps', [])

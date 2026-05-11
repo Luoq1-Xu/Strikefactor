@@ -1,37 +1,76 @@
 {
-  "heatmap_data": [
-    58,
-    69,
-    49,
-    75,
-    112,
-    97,
-    55,
-    87,
-    57
-  ],
-  "heatmap_attempts": [
-    306,
-    383,
-    302,
-    432,
-    519,
-    432,
-    319,
-    390,
-    336
-  ],
-  "total_swings": 3419,
-  "total_hits": 1029,
-  "total_pitches": 11848,
-  "total_at_bats": 3530,
-  "total_singles": 504,
-  "total_doubles": 266,
-  "total_triples": 90,
-  "total_home_runs": 169,
-  "total_walks": 58,
-  "total_hbp": 0,
-  "total_sacrifice_flies": 0,
-  "last_updated": "2026-05-09T22:28:57.965403",
-  "version": "1.2"
+  "version": "2.0",
+  "last_updated": "2026-05-11T13:14:21.981441",
+  "buckets": {
+    "unknown|unknown": {
+      "heatmap_data": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "heatmap_attempts": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "total_swings": 0,
+      "total_hits": 0,
+      "total_pitches": 0,
+      "total_at_bats": 0,
+      "total_singles": 0,
+      "total_doubles": 0,
+      "total_triples": 0,
+      "total_home_runs": 0,
+      "total_walks": 0,
+      "total_hbp": 0,
+      "total_sacrifice_flies": 0
+    },
+    "arcade|hall_of_fame": {
+      "heatmap_data": [
+        0,
+        0,
+        0,
+        0,
+        2,
+        0,
+        1,
+        0,
+        0
+      ],
+      "heatmap_attempts": [
+        1,
+        3,
+        0,
+        8,
+        5,
+        4,
+        5,
+        6,
+        2
+      ],
+      "total_swings": 34,
+      "total_hits": 8,
+      "total_pitches": 111,
+      "total_at_bats": 37,
+      "total_singles": 3,
+      "total_doubles": 3,
+      "total_triples": 0,
+      "total_home_runs": 2,
+      "total_walks": 0,
+      "total_hbp": 0,
+      "total_sacrifice_flies": 0
+    }
+  }
 }
