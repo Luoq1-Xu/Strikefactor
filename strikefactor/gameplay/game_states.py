@@ -1147,7 +1147,7 @@ class GameDayState(GameState):
         record = GameDayManager.get_career_record()
         if record['total'] > 0:
             record_text = (f"RECORD  {record['wins']}W · "
-                           f"{record['losses']}L · {record['ties']}T")
+                           f"{record['losses']}L")
             rec_surf = f['small'].render(record_text, True, FG)
             screen.blit(rec_surf,
                         (screen_w - margin_x - rec_surf.get_width(), 92))
@@ -1282,9 +1282,7 @@ class GameDayTransitionState(GameState):
         gm.save_game_result(game_id=game_id, session_id=session_id)
 
         # Close the pitch-DB games row with the final score and result.
-        result_str = ("WIN" if gm.player_score > gm.opponent_score
-                      else "LOSS" if gm.opponent_score > gm.player_score
-                      else "TIE")
+        result_str = "WIN" if gm.player_score > gm.opponent_score else "LOSS"
         self.game._db_end_game_if_open(
             player_score=gm.player_score,
             opponent_score=gm.opponent_score,

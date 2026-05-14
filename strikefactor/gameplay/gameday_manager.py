@@ -16,6 +16,40 @@ from helpers import ScoreKeeper
 ALL_PITCHERS = ['sale', 'degrom', 'yamamoto', 'sasaki', 'mcclanahan']
 
 
+# --- Player-team pitcher attributes (roles, caps, quality multipliers) ---
+# Loaded from data/pitcher_attributes.json so designers can tune without
+# editing code. Each entry shapes the simulation in three ways:
+#   role / max_pitches / max_ip → bullpen management & hook timing
+#   k_mult / bb_mult / hit_mult → per-pitcher outcome distribution
+_ATTRS_PATH = os.path.join(os.path.dirname(__file__), '..', 'data',
+                           'pitcher_attributes.json')
+
+NEUTRAL_ATTRS = {
+    "role": "MIDDLE",
+    "max_pitches": 30,
+    "max_ip": 1.0,
+    "k_mult": 1.0,
+    "bb_mult": 1.0,
+    "hit_mult": 1.0,
+}
+
+
+def _load_pitcher_attributes() -> dict:
+    try:
+        with open(_ATTRS_PATH, 'r') as f:
+            return json.load(f)
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+
+
+PITCHER_ATTRS = _load_pitcher_attributes()
+
+
+def get_pitcher_attrs(name: str) -> dict:
+    """Look up attributes for a pitcher, falling back to a neutral default."""
+    return PITCHER_ATTRS.get(name, NEUTRAL_ATTRS)
+
+
 class GameEvent:
     """Represents a single game event (at-bat result)."""
 
@@ -202,11 +236,21 @@ class GameDayManager:
         self.opponent_pitcher_stats[self.current_pitcher_name].is_active = True
         self.available_opponent_relievers = self.opponent_pitcher_preset['relievers'].copy()
 
-        # Player's team pitchers (opponent bats against these - simulated only)
+        # Player's team pitchers (opponent bats against these - simulated only).
+        # Starter/reliever split is derived from pitcher_attributes.json so
+        # changes to roles live in one place. Fall back to the legacy lists if
+        # the attributes file is unavailable.
+        #
+        # Invariant: only one starter is used per game. STARTER-role pitchers
+        # never enter `available_player_relievers`, so the reliever-selection
+        # code can't bring a second starter in for relief.
+        starters_from_attrs = [n for n, a in PITCHER_ATTRS.items()
+                               if a.get('role') == 'STARTER']
+        relievers_from_attrs = [n for n, a in PITCHER_ATTRS.items()
+                                if a.get('role') and a.get('role') != 'STARTER']
         self.player_pitcher_preset = {
-            'starters': ['yesavage', 'scherzer', 'snell'],
-            'relievers': ['hoffman', 'lauer', 'vesia', 'chapman'],
-            'relief_thresholds': [1, 2]  # Relievers pitch 1-2 innings max
+            'starters': starters_from_attrs or ['yesavage', 'scherzer', 'snell'],
+            'relievers': relievers_from_attrs or ['hoffman', 'lauer', 'vesia', 'chapman'],
         }
         self.current_player_pitcher_name = random.choice(self.player_pitcher_preset['starters'])
         self.player_pitcher_stats: Dict[str, PitcherStats] = {}
@@ -228,11 +272,21 @@ class GameDayManager:
     # --- Probability adjustment methods ---
 
     def _get_adjusted_probabilities(self, extra_hit_boost: float = 0.0) -> dict:
-        """Get opponent outcome probabilities adjusted for difficulty and situational modifiers."""
+        """Get opponent outcome probabilities adjusted for difficulty,
+        the active pitcher's quality, and situational modifiers.
+        """
         mods = self.DIFFICULTY_MODIFIERS.get(self.difficulty,
                self.DIFFICULTY_MODIFIERS['amateur'])
+        attrs = get_pitcher_attrs(self.current_player_pitcher_name)
 
         probs = dict(self.BASE_OPPONENT_OUTCOMES)
+
+        # Per-pitcher quality: applied first so it stacks multiplicatively
+        # with difficulty and situational modifiers.
+        for key in ('SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN'):
+            probs[key] *= attrs.get('hit_mult', 1.0)
+        probs['WALK'] *= attrs.get('bb_mult', 1.0)
+        probs['STRIKEOUT'] *= attrs.get('k_mult', 1.0)
 
         # Apply difficulty modifiers
         for key in ['SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN']:
@@ -368,56 +422,84 @@ class GameDayManager:
     def _get_pull_score(self, between_innings: bool = False) -> float:
         """Compute a 0-1 'pull score' for the active player pitcher.
 
-        Factors mirror what a real pitching coach weighs batter-to-batter:
-        pitch count / fatigue, recent trouble (consecutive hits, inning
-        runs), and total workload.  A higher score means the pitcher is
-        more likely to be pulled.  Between innings the threshold is lower
-        (easier to make the change).
-
-        Returns a value roughly in [0, 1]; values >= 1 are an automatic pull.
+        Pulls together what a real pitching coach weighs batter-to-batter:
+        per-role pitch/IP caps, cumulative damage (the *whole outing*, not
+        just this inning), recent trouble, and leverage. A higher score
+        means the pitcher is more likely to be pulled. Values >= 1.0 are
+        automatic.
         """
         stats = self.get_active_player_pitcher_stats()
-        is_reliever = self.current_player_pitcher_name in self.player_pitcher_preset['relievers']
+        attrs = get_pitcher_attrs(self.current_player_pitcher_name)
+        role = attrs.get('role', 'MIDDLE')
+        is_starter = role == 'STARTER'
+        is_mopup = role == 'MOPUP'
+
         pc = stats.pitch_count
         ip = stats.get_innings_pitched()
+        max_pitches = attrs.get('max_pitches', 30)
+        # Starters don't have a hard IP cap; relievers do.
+        max_ip = attrs.get('max_ip', 99.0)
+
+        # --- Hard pulls: any of these returns 1.0 immediately ---
+        if pc >= max_pitches:
+            return 1.0
+        if ip >= max_ip:
+            return 1.0
+        # Cumulative meltdown threshold: standard arms get pulled at 5 ER,
+        # but the mop-up man is *expected* to absorb runs in a blowout, so
+        # we let him soak more before yanking him.
+        meltdown_er = 8 if is_mopup else 5
+        if stats.runs_allowed >= meltdown_er:
+            return 1.0
+
         score = 0.0
 
-        # --- Pitch count fatigue (gradual ramp) ---
-        if is_reliever:
-            # Relievers: ramp starts at 15, strong by 25
-            if pc >= 15:
-                score += min(0.5, (pc - 15) * 0.03)  # 0.3 at 25, 0.45 at 30
-        else:
-            # Starters: ramp starts at 70, strong by 95
-            if pc >= 70:
-                score += min(0.6, (pc - 70) * 0.02)  # 0.2 at 80, 0.4 at 90, 0.5 at 95
-
-        # --- Hard pitch count ceiling ---
-        if pc >= 105:
-            return 1.0  # Automatic pull, no pitcher goes past 105
+        # --- Pitch-count fatigue ramp, scaled to the pitcher's own cap ---
+        # Ramp begins at 70% of max_pitches and saturates at the cap.
+        ramp_start = 0.7 * max_pitches
+        if pc >= ramp_start:
+            denom = max(1.0, 0.3 * max_pitches)
+            score += min(0.6, (pc - ramp_start) / denom * 0.6)
 
         # --- Workload (innings pitched) ---
-        if is_reliever:
-            if ip >= 2.0:
-                score += 0.4
-            elif ip >= 1.0:
-                score += 0.15
-        else:
+        if is_starter:
             if ip >= 7.0:
                 score += 0.5
             elif ip >= 6.0:
                 score += 0.25
             elif ip >= 5.0:
                 score += 0.1
+        else:
+            # Approaching the IP cap is its own pressure on the manager.
+            if ip >= 0.85 * max_ip:
+                score += 0.4
+            elif ip >= 0.5 * max_ip:
+                score += 0.15
+
+        # --- Cumulative damage across the whole outing ---
+        # This is what makes a reliever's full-game ER history matter, not
+        # just whatever fits inside the current half-inning. The mop-up
+        # man's whole job is to eat a bad game, so we don't sweat his ER.
+        cum_er = stats.runs_allowed
+        if not is_mopup:
+            if cum_er >= 4:
+                score += 0.5
+            elif cum_er >= 3:
+                score += 0.3
+            elif cum_er >= 2 and not is_starter:
+                # Relievers wear damage harder than starters do.
+                score += 0.2
 
         # --- Recent trouble (consecutive hits) ---
-        consec = stats.consecutive_hits
-        if consec >= 3:
-            score += 0.5   # Three hits in a row — big trouble
-        elif consec >= 2:
-            score += 0.25  # Back-to-back hits — concerning
+        # Same intuition: don't yank the mop-up arm for in-game trouble.
+        if not is_mopup:
+            consec = stats.consecutive_hits
+            if consec >= 3:
+                score += 0.5
+            elif consec >= 2:
+                score += 0.25
 
-        # --- Inning damage ---
+        # --- This inning's damage (situational on top of cumulative) ---
         if self._current_half_runs >= 3:
             score += 0.45
         elif self._current_half_runs >= 2:
@@ -425,11 +507,22 @@ class GameDayManager:
         elif self._current_half_runs >= 1:
             score += 0.05
 
-        # --- Runs with no outs (meltdown) ---
+        # --- Big inning with no outs (meltdown signature) ---
         if self._current_half_runs >= 2 and self.current_outs == 0:
             score += 0.2
 
-        # --- Between innings: lower threshold (clean break) ---
+        # --- Closer-out-of-context guard ---
+        # The closer belongs in the 9th+ when the game is on the line
+        # (save spot, tied, or trailing by 1). If he ended up in any other
+        # context — early-game blowout, mid-game mop-up — push the hook
+        # hard so he gets pulled the next batter.
+        if role == 'CLOSER':
+            lead = self.player_score - self.opponent_score
+            in_context = (self.current_inning >= 9 and -1 <= lead <= 3)
+            if not in_context:
+                score += 0.6
+
+        # --- Between innings: lower threshold for a clean change ---
         if between_innings:
             score += 0.15
 
@@ -443,6 +536,10 @@ class GameDayManager:
         decisions feel natural rather than mechanical.
         """
         if not self.available_player_relievers:
+            return False
+        # No point pulling if no eligible replacement (e.g. only CLOSER left
+        # outside a save spot). Leaves the current pitcher in.
+        if self._pick_player_reliever() is None:
             return False
 
         score = self._get_pull_score(between_innings)
@@ -461,16 +558,94 @@ class GameDayManager:
         pull_prob = max(0.0, min(1.0, pull_prob))
         return random.random() < pull_prob
 
+    def _pick_player_reliever(self) -> Optional[str]:
+        """Pick a reliever by role + leverage, mirroring how a real bullpen
+        is sequenced. Priorities in order:
+          - Blowout (down 5+) → MOPUP, then LONG (eat innings cheaply).
+          - 9th+ save spot (lead 1-3) → CLOSER.
+          - 9th+ tied / 1-run game → CLOSER (high-leverage tied game).
+          - 7th-8th close game → SETUP > MIDDLE > LONG.
+          - Default mid-game → MIDDLE > LONG > SETUP.
+          - Last-resort fallback if everything else is gone → MOPUP, then
+            CLOSER (only in 8th+, never first-half mop-up duty).
+        Returns None when no eligible replacement exists (caller leaves
+        the current pitcher in).
+        """
+        pool = self.available_player_relievers
+        if not pool:
+            return None
+
+        def role_of(name: str) -> str:
+            return get_pitcher_attrs(name).get('role', 'MIDDLE')
+
+        def first_with_role(target: str) -> Optional[str]:
+            for p in pool:
+                if role_of(p) == target:
+                    return p
+            return None
+
+        lead = self.player_score - self.opponent_score  # >0 means we lead
+        inning = self.current_inning
+
+        # Blowout (down 5+) → mop-up first (designed for this), then long
+        # man. Protects high-leverage arms for closer games.
+        if lead <= -5:
+            for target in ('MOPUP', 'LONG'):
+                cand = first_with_role(target)
+                if cand:
+                    return cand
+
+        # 9th+ save situation (lead by 1-3) → closer.
+        if inning >= 9 and 1 <= lead <= 3:
+            cand = first_with_role('CLOSER')
+            if cand:
+                return cand
+
+        # 9th+ tied or trailing by 1 → closer (high-leverage tied game,
+        # what real managers do on the road).
+        if inning >= 9 and -1 <= lead <= 0:
+            cand = first_with_role('CLOSER')
+            if cand:
+                return cand
+
+        # Late and close (7th-8th, within 3) → setup arms first.
+        if inning >= 7 and abs(lead) <= 3:
+            for target in ('SETUP', 'MIDDLE', 'LONG'):
+                cand = first_with_role(target)
+                if cand:
+                    return cand
+
+        # Default mid-game sequence — CLOSER and MOPUP excluded.
+        for target in ('MIDDLE', 'LONG', 'SETUP'):
+            cand = first_with_role(target)
+            if cand:
+                return cand
+
+        # Last-resort fallback: standard arms exhausted. Try mop-up first
+        # (he's built for this); then closer in late game only. This keeps
+        # us from getting stuck letting one melted-down reliever absorb
+        # an entire inning worth of damage.
+        cand = first_with_role('MOPUP')
+        if cand:
+            return cand
+        cand = first_with_role('CLOSER')
+        if cand and inning >= 8:
+            return cand
+
+        return None
+
     def substitute_player_relief_pitcher(self) -> Optional[str]:
         """Substitute in a relief pitcher for player's team. Returns new pitcher name or None."""
         if not self.available_player_relievers:
             return None
 
+        new_pitcher = self._pick_player_reliever()
+        if new_pitcher is None:
+            return None
+
         # Set current pitcher as inactive
         self.player_pitcher_stats[self.current_player_pitcher_name].is_active = False
 
-        # Choose a random reliever
-        new_pitcher = random.choice(self.available_player_relievers)
         self.available_player_relievers.remove(new_pitcher)
 
         # Initialize stats for new pitcher
@@ -713,10 +888,7 @@ class GameDayManager:
         """Get the winner of the game (call after game is over)."""
         if self.player_score > self.opponent_score:
             return self.player_name
-        elif self.opponent_score > self.player_score:
-            return self.opponent_name
-        else:
-            return "Tie"
+        return self.opponent_name
 
     # --- Persistence methods ---
 
@@ -731,8 +903,7 @@ class GameDayManager:
             return
         self._result_saved = True
 
-        result_str = "WIN" if self.player_score > self.opponent_score else \
-                     "LOSS" if self.opponent_score > self.player_score else "TIE"
+        result_str = "WIN" if self.player_score > self.opponent_score else "LOSS"
         result = {
             'date': datetime.now().isoformat(),
             'game_id': game_id,
@@ -771,16 +942,15 @@ class GameDayManager:
 
     @classmethod
     def get_career_record(cls) -> dict:
-        """Get win/loss/tie record from saved history."""
+        """Get win/loss record from saved history."""
         history = cls._load_history()
         wins = sum(1 for g in history['games'] if g.get('result') == 'WIN')
         losses = sum(1 for g in history['games'] if g.get('result') == 'LOSS')
-        ties = sum(1 for g in history['games'] if g.get('result') == 'TIE')
-        return {'wins': wins, 'losses': losses, 'ties': ties, 'total': len(history['games'])}
+        return {'wins': wins, 'losses': losses, 'total': wins + losses}
 
     @classmethod
     def load_history_record_vs(cls, pitcher_name: str) -> dict:
-        """Get win/loss/tie record from saved history, filtered to games where
+        """Get win/loss record from saved history, filtered to games where
         the given pitcher was the opponent starter. Callable without an instance
         because the pitcher carousel renders before a GameDayManager exists."""
         target = (pitcher_name or '').lower()
@@ -789,5 +959,4 @@ class GameDayManager:
                  if (g.get('opponent_starter') or '').lower() == target]
         wins = sum(1 for g in games if g.get('result') == 'WIN')
         losses = sum(1 for g in games if g.get('result') == 'LOSS')
-        ties = sum(1 for g in games if g.get('result') == 'TIE')
-        return {'wins': wins, 'losses': losses, 'ties': ties, 'total': len(games)}
+        return {'wins': wins, 'losses': losses, 'total': wins + losses}

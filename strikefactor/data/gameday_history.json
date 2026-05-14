@@ -921,7 +921,197 @@
         2
       ],
       "opponent_starter": "degrom"
+    },
+    {
+      "date": "2026-05-11T14:01:13.169198",
+      "game_id": "97c646fd-5faa-4b91-8741-b69d3045e520",
+      "session_id": "6025cfb6-d3a7-4fc7-b440-d6c11ebe8827",
+      "player_score": 7,
+      "opponent_score": 4,
+      "result": "WIN",
+      "difficulty": "hall_of_fame",
+      "player_inning_scores": [
+        0,
+        0,
+        0,
+        1,
+        0,
+        4,
+        1,
+        1
+      ],
+      "opponent_inning_scores": [
+        2,
+        0,
+        0,
+        0,
+        0,
+        1,
+        1,
+        0,
+        0
+      ],
+      "opponent_starter": "degrom"
+    },
+    {
+      "date": "2026-05-13T15:43:46.020614",
+      "game_id": "015fbe56-aede-4a26-a665-1f2fff704380",
+      "session_id": "830deaf8-fe66-40f9-b6b1-cf72e414efe3",
+      "player_score": 2,
+      "opponent_score": 25,
+      "result": "LOSS",
+      "difficulty": "hall_of_fame",
+      "player_inning_scores": [
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        1
+      ],
+      "opponent_inning_scores": [
+        1,
+        1,
+        1,
+        3,
+        9,
+        5,
+        4,
+        1,
+        0
+      ],
+      "opponent_starter": "mcclanahan"
+    },
+    {
+      "date": "2026-05-13T16:08:09.368092",
+      "game_id": "197c3b9e-d554-4279-80bb-454bc91de795",
+      "session_id": "2e33a477-f18f-4536-b173-cfae015064c7",
+      "player_score": 8,
+      "opponent_score": 17,
+      "result": "LOSS",
+      "difficulty": "hall_of_fame",
+      "player_inning_scores": [
+        0,
+        0,
+        0,
+        1,
+        0,
+        2,
+        3,
+        0,
+        2
+      ],
+      "opponent_inning_scores": [
+        1,
+        0,
+        7,
+        0,
+        0,
+        0,
+        0,
+        6,
+        3
+      ],
+      "opponent_starter": "yamamoto"
+    },
+    {
+      "date": "2026-05-13T23:13:03.515114",
+      "game_id": "4fd4ee03-6481-4cad-bf6d-795711ce4054",
+      "session_id": "42f4a58b-b30a-4060-9b37-113c6a9e6e13",
+      "player_score": 1,
+      "opponent_score": 2,
+      "result": "LOSS",
+      "difficulty": "hall_of_fame",
+      "player_inning_scores": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0
+      ],
+      "opponent_inning_scores": [
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        1,
+        0
+      ],
+      "opponent_starter": "yamamoto"
+    },
+    {
+      "date": "2026-05-13T23:23:41.461065",
+      "game_id": "272a1ec1-68b1-4a93-9a3f-ffec2a32009a",
+      "session_id": "42f4a58b-b30a-4060-9b37-113c6a9e6e13",
+      "player_score": 6,
+      "opponent_score": 2,
+      "result": "WIN",
+      "difficulty": "hall_of_fame",
+      "player_inning_scores": [
+        1,
+        0,
+        1,
+        2,
+        2,
+        0,
+        0,
+        0
+      ],
+      "opponent_inning_scores": [
+        0,
+        0,
+        1,
+        0,
+        0,
+        1,
+        0,
+        0,
+        0
+      ],
+      "opponent_starter": "mcclanahan"
+    },
+    {
+      "date": "2026-05-14T08:48:29.797000",
+      "game_id": "68a9997c-02d1-46b1-ac8f-1b7e3a4e18b4",
+      "session_id": "25243a01-7d9a-48ad-80cf-40cb236fb058",
+      "player_score": 4,
+      "opponent_score": 8,
+      "result": "LOSS",
+      "difficulty": "hall_of_fame",
+      "player_inning_scores": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        1,
+        1,
+        1
+      ],
+      "opponent_inning_scores": [
+        0,
+        1,
+        3,
+        0,
+        0,
+        0,
+        3,
+        1,
+        0
+      ],
+      "opponent_starter": "yamamoto"
     }
   ],
-  "last_updated": "2026-05-10T12:20:29.421844"
+  "last_updated": "2026-05-14T08:48:29.797305"
 }

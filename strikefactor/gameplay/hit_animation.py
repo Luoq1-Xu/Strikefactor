@@ -31,39 +31,52 @@ from dataclasses import dataclass
 import pygame
 
 
-HOME = (640, 620)
+HOME = (640, 670)
 
-# Field scale — picked so a real 400 ft CF wall fits on a 720-tall screen with
-# home plate near the bottom. At 1.4 px/ft, infield bases (90 ft) come out
-# slightly compressed compared to a real-scale infield, but the proportions
-# (wall vs. bases vs. fielder depth) match real MLB averages, which is what
-# makes the field feel right under a top-down camera.
-FT_TO_PX = 1.4
+# Anisotropic feet→pixels projection. The MLB Gameday "live view" the field is
+# styled after is wide and y-foreshortened: home plate near the bottom edge,
+# foul lines spreading almost to the bottom corners, wall arc flat across the
+# top. We achieve the same look by giving the horizontal axis more pixels per
+# foot than the vertical. A real MLB layout in feet (90 ft bases, 330/400 ft
+# wall) flows through these scales and ends up rendered wide and shallow.
+FT_TO_PX_X = 1.85
+FT_TO_PX_Y = 1.10
 
-# Bases — 90 ft path. 1B and 3B sit on the foul lines (45°), so |dx| == dy.
-BASE_DIST = 89   # per-axis offset from home; 89·√2 ≈ 126 px ≈ 90 ft
-MOUND_DIST = 85  # 60.5 ft from home plate, straight out toward CF
+
+def _to_screen(x_ft, y_ft):
+    """Project a real-field point (feet, math convention +y toward CF) to
+    pygame screen coordinates. Single source of truth for the perspective.
+    """
+    return (HOME[0] + x_ft * FT_TO_PX_X, HOME[1] - y_ft * FT_TO_PX_Y)
+
+
+# Bases — 90 ft path. 1B/3B sit at ±90/√2 ft on both axes (the 45° real-field
+# foul-line direction); the anisotropic projection then puts them on the
+# wider-than-tall *rendered* foul lines.
+_BASE_AXIS_FT = 90.0 / math.sqrt(2)   # ≈ 63.64 ft on each axis
 
 BASES = {
-    "1B": (HOME[0] + BASE_DIST, HOME[1] - BASE_DIST),
-    "2B": (HOME[0],             HOME[1] - 2 * BASE_DIST),
-    "3B": (HOME[0] - BASE_DIST, HOME[1] - BASE_DIST),
+    "1B": _to_screen(+_BASE_AXIS_FT, _BASE_AXIS_FT),
+    "2B": _to_screen(0.0,            127.0),
+    "3B": _to_screen(-_BASE_AXIS_FT, _BASE_AXIS_FT),
 }
-PITCHERS_MOUND = (HOME[0], HOME[1] - MOUND_DIST)
+PITCHERS_MOUND = _to_screen(0.0, 60.5)
 
-# Default standing positions for all 9 defenders (top-down). Distances tuned
-# to typical MLB positioning: corner IFs ~95 ft, middle IFs ~145 ft, corner
-# OFs ~290 ft, CF ~310 ft.
+# Default standing positions for all 9 defenders, in real feet. Distances are
+# typical MLB positioning: corner IFs ~95 ft, middle IFs ~145 ft, corner OFs
+# ~290 ft, CF ~310 ft. The anisotropic projection then stretches the layout
+# horizontally on screen — fielders end up "wider apart" than they would be
+# under a square top-down camera.
 FIELDER_HOMES = {
     "P":  PITCHERS_MOUND,
-    "C":  (HOME[0],         HOME[1] + 30),        # behind plate (foul territory, OK)
-    "1B": (HOME[0] +  85,   HOME[1] - 100),       # ~95 ft, off bag toward 2B
-    "2B": (HOME[0] +  70,   HOME[1] - 190),       # ~145 ft, between 1B and 2B
-    "SS": (HOME[0] -  70,   HOME[1] - 190),       # ~145 ft, between 2B and 3B
-    "3B": (HOME[0] -  85,   HOME[1] - 100),       # ~95 ft, off bag toward home
-    "LF": (HOME[0] - 152,   HOME[1] - 376),       # ~290 ft
-    "CF": (HOME[0],         HOME[1] - 434),       # ~310 ft (deepest)
-    "RF": (HOME[0] + 152,   HOME[1] - 376),       # ~290 ft
+    "C":  _to_screen(0.0,   -20.0),     # behind plate (slight foul-territory offset)
+    "1B": _to_screen(+61.0,  71.0),     # ~95 ft, off bag toward 2B
+    "2B": _to_screen(+50.0, 136.0),     # ~145 ft, between 1B and 2B
+    "SS": _to_screen(-50.0, 136.0),     # ~145 ft, between 2B and 3B
+    "3B": _to_screen(-61.0,  71.0),     # ~95 ft, off bag toward home
+    "LF": _to_screen(-99.0, 273.0),     # ~290 ft
+    "CF": _to_screen(0.0,   310.0),     # ~310 ft (deepest)
+    "RF": _to_screen(+99.0, 273.0),     # ~290 ft
 }
 ROLES = list(FIELDER_HOMES.keys())
 INFIELD_ROLES = ["1B", "2B", "SS", "3B"]
@@ -71,17 +84,36 @@ OUTFIELD_ROLES = ["LF", "CF", "RF"]
 # Groundout primary candidates — 1B excluded so we keep the throw-to-first beat.
 GROUNDOUT_PRIMARY_ROLES = ["SS", "2B", "3B"]
 
-# Outfield wall — elliptical, not circular. Real MLB walls are deeper in CF
-# (~400 ft) than along the foul lines (~330 ft); a single radius makes the
-# outfield feel cramped at center and too long down the lines. The polar
-# wall radius at angle θ (from +x axis) is then
-#   r(θ) = a·b / √((b·cosθ)² + (a·sinθ)²)
-# which evaluates to ~330 ft along the foul lines and 400 ft straight out.
-WALL_SEMI_X = 402   # gives ~330 ft along the 45° foul-line direction
-WALL_SEMI_Y = 560   # CF wall at ~400 ft
+# Outfield wall — elliptical in real feet (330 ft along foul lines, 400 ft to
+# CF), then projected anisotropically. The render semi-axes inherit the same
+# x-stretch / y-foreshortening as everything else, so the wall ends up ~1220
+# px wide × 440 px tall — a flat arc spanning most of the screen width, sitting
+# just inside the 1280 px frame. The polar render radius at screen-angle θ
+# (from +x axis) is r(θ) = a·b / √((b·cosθ)² + (a·sinθ)²), evaluated against
+# the rendered semi-axes below.
+WALL_FT_X = 330.0
+WALL_FT_Y = 400.0
+WALL_SEMI_X = WALL_FT_X * FT_TO_PX_X   # ≈ 611 px
+WALL_SEMI_Y = WALL_FT_Y * FT_TO_PX_Y   # ≈ 440 px
 
-# Foul lines drawn out to where they meet the wall (along the 45° direction).
-FOUL_LINE_LENGTH = 327
+# Foul lines drawn from home out to where they meet the elliptical wall
+# (the 45° real-field direction, anisotropically projected). For an ellipse
+# (x/a)² + (y/b)² = 1 with x = y on the foul line, the intersection is at
+# a·b / √(a² + b²) per axis — NOT a/√2 (which would only be right for a
+# circular wall). Under our 330·400 wall this is ≈ 254.6 ft, not 233 ft.
+FOUL_LINE_END_FT = WALL_FT_X * WALL_FT_Y / math.sqrt(WALL_FT_X**2 + WALL_FT_Y**2)
+
+# Visible "depth" of the outfield wall in pygame pixels. The wall is drawn as
+# a thin elliptical band rather than a single line so the field reads as a 3D
+# structure under the camera-tilt projection. The strip between the outer
+# (camera-far / top of wall) and inner (camera-near / wall meets field) arcs
+# is the visible wall face. Tuned to roughly match how a 10–12 ft real wall
+# would project under our y-foreshortening.
+WALL_FACE_HEIGHT_PX = 11
+
+# Foul pole vertical pixel height above the wall corner. Bright accent
+# against the dark field — reads unambiguously as "foul pole."
+FOUL_POLE_HEIGHT_PX = 28
 
 # Phase timings (ms). Lengthened for more cinematic pacing — fast translation
 # of small circles read as "gliding"; slower timings give the eye time to
@@ -128,12 +160,27 @@ HIT_LANDING_FT = {
 # Calibrated against a fielder's natural run-up time on routine plays —
 # even an OF charging in on a shallow fly takes ~2.5–3 s from landing to
 # the ball, so the SINGLE cutoff has to sit above that or every routine
-# play classifies as a single. Wall-bouncers bypass these thresholds
-# entirely (see WALL_HIT classification override).
+# play classifies as a single. The TRIPLE cutoff is set against the
+# deepest geometrically-possible chase (CF home → wall ≈ 100 px ≈ 2.5 s
+# sprint, plus reaction + accel ramp ≈ ~3 s), so it sits just above that
+# natural ceiling — too high and no chase reaches it (5000 ms produced
+# zero triples in practice). Wall-bouncers use a lower cutoff (see
+# RETRIEVE_TIME_WALL_TRIPLE_MS) since a ball off the wall is physically
+# at minimum a double and a large fraction should be triples.
 RETRIEVE_TIME_SINGLE_MAX_MS = 2800
-RETRIEVE_TIME_DOUBLE_MAX_MS = 5000
-# Pop-up landing — shallow, regardless of underlying outcome (px depth).
-POPUP_LANDING = {"depth": (150, 220), "lateral_frac": 0.5}
+RETRIEVE_TIME_DOUBLE_MAX_MS = 3800
+RETRIEVE_TIME_WALL_TRIPLE_MS = 3300
+# Separate, much lower triple threshold for in-flight wall hits. Retrieve
+# time on these is measured from the moment of wall impact (the helper
+# truncates duration_ms there), and the fielder is typically near the
+# wall already because they paced themselves toward the past-the-wall
+# landing during flight. Empirically retrieve times cluster in
+# 400–1500 ms; ~1050 ms picks out the longest chases (gap shots where
+# the closest OF still had ground to cover) as triples while keeping
+# the routine corner-OF caroms as doubles.
+RETRIEVE_TIME_INFLIGHT_WALL_TRIPLE_MS = 1050
+# Pop-up landing — shallow, regardless of underlying outcome (real-feet depth).
+POPUP_LANDING = {"depth_ft": (105, 155), "lateral_frac": 0.5}
 
 # Hard grounder single — lands inside the IF (between/just past the IFs)
 # and rolls out into the OF for the OF to retrieve. Models the real-life
@@ -216,12 +263,70 @@ BALL_WALL_MARGIN_PX     = 8
 # essentially dies there; a fielder still has to run all the way out.
 WALL_BOUNCE_RESTITUTION = 0.20
 
+# In-flight wall hits — a subset of high-quality FLY/LINER contacts are
+# routed past the wall so they strike the wall face on the fly rather
+# than landing in the OF and rolling. Real MLB has lots of these (gappers
+# off the wall, line drives that clang the corner) and they're a major
+# source of doubles and triples — without this branch, the only way a
+# ball reaches the wall is by rolling there post-landing, which dampens
+# the variance and produces too many "long-route singles".
+#
+# Quality-gated: ramps from 0 probability at q=0.5 up to WALL_HIT_PROB_MAX
+# at q=1.0. GROUNDER never reaches the wall in the air; POP_UP is shallow
+# by definition — both shapes are excluded.
+WALL_HIT_QUALITY_THRESHOLD = 0.50
+WALL_HIT_PROB_MAX          = 0.40
+# Carry past the wall (ft) for wall-candidate landings — picks where the
+# ball *would have* landed if the wall weren't there. The arc is computed
+# all the way to that point, but in-flight detection (see
+# _maybe_trigger_in_flight_wall_impact) ends the flight when the shadow
+# crosses the wall ellipse. Squared bias keeps most carries small (impact
+# low on the wall face) with the occasional deep one (impact higher up).
+WALL_HIT_CARRY_FT_MIN    = 5.0
+WALL_HIT_CARRY_FT_MAX    = 35.0
+WALL_HIT_CARRY_BIAS_EXP  = 2.0
+# Peak scale for wall-candidate FLYs. The standard FLY peak (60–130 px)
+# would put the ball *over* the wall at the crossing point — i.e., HR
+# territory, not "off the wall." Scaling down to ~0.6 of the standard
+# peak keeps the ball low enough at the wall to strike the face.
+WALL_HIT_FLY_PEAK_SCALE  = 0.60
+# Restitution on the post-impact rolling velocity. Lower than the
+# ground-phase WALL_BOUNCE_RESTITUTION because a ball striking the wall
+# in flight loses more energy than one already on the ground grazing it.
+# The velocity is also flipped inward so the ball rebounds toward the
+# fielder rather than continuing outward (and clipping further into
+# the on-ground wall-containment logic).
+WALL_HIT_FLIGHT_RESTITUTION = 0.15
+
 # Squibbler landing — weak grounder, very short travel (~70–125 ft).
-SQUIBBLER_LANDING = {"depth": (100, 175), "lateral_frac": 0.5}
+SQUIBBLER_LANDING = {"depth_ft": (70, 125), "lateral_frac": 0.5}
 
 # Quality thresholds for grounder bounce profile (see _grounder_peaks).
 SQUIBBLER_QUALITY_THRESHOLD = 0.32
 SHARP_QUALITY_THRESHOLD     = 0.55
+
+# Grounder bounce profile — first-hop peak (px above ground at apex) and
+# per-bounce spacing (px of travel covered by one hop) keyed by quality
+# band. Sharp contact short-hops to roughly chest height (~12 px ≈ 4 ft at
+# the field render scale where a 16-px-tall fielder represents ~6 ft) and
+# travels ~40 px between impacts; squibblers barely lift the ball and take
+# short, frequent hops. Per-bounce height decay is GROUNDER_BOUNCE_COR_SQ
+# (~real grass COR² of 0.35–0.45), so each hop retains ~40% of the previous
+# peak; a 2-px floor keeps the last hops visible as hops instead of
+# flattening into a roll prematurely. Bounce count is derived from travel
+# distance ÷ spacing so the ball touches grass between every hop regardless
+# of how far it goes — without distance scaling, a long sharp grounder
+# rendered as a single 32-px arc spanning the full flight and read as a
+# low fly ball clearing the infielders.
+GROUNDER_BOUNCE_PROFILE = {
+    "squibbler": {"first_peak_px": 5.0,  "spacing_px": 24.0},
+    "medium":    {"first_peak_px": 8.0,  "spacing_px": 32.0},
+    "sharp":     {"first_peak_px": 11.0, "spacing_px": 40.0},
+}
+GROUNDER_BOUNCE_COR_SQ      = 0.40
+GROUNDER_BOUNCE_MIN_PEAK_PX = 2.0
+GROUNDER_BOUNCE_MIN_COUNT   = 3
+GROUNDER_BOUNCE_MAX_COUNT   = 8
 
 THROW_PEAK_H = 30     # low arc on infield throw
 LINER_PEAK_RANGE = (25, 40)
@@ -309,8 +414,11 @@ def _arc_liner(a, b, peak, t):
 
 
 def _arc_grounder(a, b, peaks, t):
-    """Variable-bounce arc; one bounce per entry in `peaks`. Most grounders
-    use a single bounce; squibblers use 2-3 weak bounces.
+    """Variable-bounce arc; one parabolic hop per entry in `peaks`, with the
+    ball touching ground at every segment boundary. Splits the flight into
+    len(peaks) equal-duration segments — combined with linear x,y motion
+    from _lerp, each segment also covers an equal fraction of the path, so
+    bounces are evenly spaced along the trajectory.
     """
     t = max(0.0, min(1.0, t))
     x, y = _lerp(a, b, t)
@@ -321,17 +429,42 @@ def _arc_grounder(a, b, peaks, t):
     return (x, y - lift)
 
 
-def _grounder_peaks(quality):
-    """Pick bounce profile from contact quality.
+def _grounder_peaks(quality, distance_px=None):
+    """Pick bounce profile from contact quality and travel distance.
 
-    Sharp grounders (good contact) take one solid hop and travel.
-    Squibblers (low quality) bounce weakly multiple times.
+    Real grounders take many short hops as they travel — each bounce loses
+    ~60% of its height (COR² ≈ 0.4). The ball touches grass between every
+    hop, so a sharp grounder that travels into the OF visibly rolls through
+    the IF rather than arcing over it. Without distance-scaled bounce count,
+    a long sharp-grounder hit used a single 32-px arc spanning the full
+    flight, which read as a low fly clearing the infielders — defeating the
+    point of classifying the contact as a grounder.
+
+    `_arc_grounder` plays one hop per peak entry, so scaling the count with
+    distance keeps each hop ~spacing_px wide regardless of how far the ball
+    goes. Peaks are clamped to GROUNDER_BOUNCE_MIN_PEAK_PX so the final
+    hops still render as hops instead of flattening into a roll.
     """
     if quality < SQUIBBLER_QUALITY_THRESHOLD:
-        return (16, 11, 7)        # squibbler: 3 weak bounces
-    if quality < SHARP_QUALITY_THRESHOLD:
-        return (24, 13)           # medium: 2 bounces
-    return (32,)                  # sharp: 1 solid bounce
+        profile = GROUNDER_BOUNCE_PROFILE["squibbler"]
+    elif quality < SHARP_QUALITY_THRESHOLD:
+        profile = GROUNDER_BOUNCE_PROFILE["medium"]
+    else:
+        profile = GROUNDER_BOUNCE_PROFILE["sharp"]
+
+    if distance_px is None:
+        n_bounces = GROUNDER_BOUNCE_MIN_COUNT
+    else:
+        n_bounces = max(GROUNDER_BOUNCE_MIN_COUNT,
+                        min(GROUNDER_BOUNCE_MAX_COUNT,
+                            int(round(distance_px / profile["spacing_px"]))))
+
+    peaks = []
+    h = profile["first_peak_px"]
+    for _ in range(n_bounces):
+        peaks.append(max(GROUNDER_BOUNCE_MIN_PEAK_PX, h))
+        h *= GROUNDER_BOUNCE_COR_SQ
+    return tuple(peaks)
 
 
 def _shadow_t(shape, t):
@@ -368,12 +501,25 @@ def _clamp_inside_wall(point, margin):
 
 
 def _polar_point(angle, dist_px):
-    """(x, y) in pygame coords for a polar (angle, dist) sampled from home.
+    """(x, y) in pygame coords for a polar (angle, dist) sampled from home,
+    interpreted in *screen-space* pixels. Used for HR landings that overshoot
+    the wall by a literal pixel carry. For real-foot hit landings, use
+    `_polar_point_ft` instead.
+
     `angle` is the standard math angle (radians) measured from +x axis CCW;
     90° points straight out toward CF.
     """
     return (HOME[0] + dist_px * math.cos(angle),
             HOME[1] - dist_px * math.sin(angle))
+
+
+def _polar_point_ft(angle, dist_ft):
+    """(x, y) in pygame coords for a polar landing in the *real* field — angle
+    is the real-field bearing (90° = straight to CF), distance is in real
+    feet. The anisotropic projection then renders the same physical landing
+    point wide-and-shallow on screen.
+    """
+    return _to_screen(dist_ft * math.cos(angle), dist_ft * math.sin(angle))
 
 
 def _pick_hit_landing(outcome, shape, quality=1.0):
@@ -394,21 +540,20 @@ def _pick_hit_landing(outcome, shape, quality=1.0):
     # Shape overrides — POP_UP and squibblers ignore outcome distance.
     if shape == "POP_UP":
         spec = POPUP_LANDING
-        depth = random.uniform(*spec["depth"])
-        lat = random.uniform(-1, 1) * depth * spec["lateral_frac"]
-        return _clamp_inside_wall((HOME[0] + lat, HOME[1] - depth),
+        depth_ft = random.uniform(*spec["depth_ft"])
+        lat_ft = random.uniform(-1, 1) * depth_ft * spec["lateral_frac"]
+        return _clamp_inside_wall(_to_screen(lat_ft, depth_ft),
                                   LANDING_WALL_MARGIN_PX)
     # Grounder hits — squibbler vs hard contact split. Both apply to the
     # generic HIT outcome and to legacy SINGLE callers.
     if shape == "GROUNDER" and outcome in ("SINGLE", "HIT"):
         if quality < SQUIBBLER_QUALITY_THRESHOLD:
             spec = SQUIBBLER_LANDING
-            depth = random.uniform(*spec["depth"])
         else:
             spec = GROUNDER_SINGLE_LANDING
-            depth = random.uniform(*spec["depth_ft"]) * FT_TO_PX
-        lat = random.uniform(-1, 1) * depth * spec["lateral_frac"]
-        return _clamp_inside_wall((HOME[0] + lat, HOME[1] - depth),
+        depth_ft = random.uniform(*spec["depth_ft"])
+        lat_ft = random.uniform(-1, 1) * depth_ft * spec["lateral_frac"]
+        return _clamp_inside_wall(_to_screen(lat_ft, depth_ft),
                                   LANDING_WALL_MARGIN_PX)
 
     # Generic HIT — quality-driven distance and a layered angle bias for
@@ -449,8 +594,8 @@ def _pick_hit_landing(outcome, shape, quality=1.0):
             angle = gap + random.uniform(-0.10, 0.10)
         else:
             angle = random.uniform(math.radians(50), math.radians(130))
-        point = _polar_point(angle, dist_ft * FT_TO_PX)
-        return _clamp_inside_wall(point, LANDING_WALL_MARGIN_PX)
+        return _clamp_inside_wall(_polar_point_ft(angle, dist_ft),
+                                  LANDING_WALL_MARGIN_PX)
 
     if outcome == "HOME RUN":
         # HRs land past the wall. Direction biased toward the pull/center
@@ -460,7 +605,13 @@ def _pick_hit_landing(outcome, shape, quality=1.0):
         # Quality enlarges the *range* of possible carries, not the
         # likelihood of large ones — so even on max-quality contact, most
         # HRs still barely clear, with the occasional moonshot.
-        angle = random.gauss(math.radians(90), math.radians(22))
+        #
+        # Note: the gauss is sampled in screen-angle space because the wall
+        # ellipse and carry distance are both in screen-space pixels. The
+        # std-dev is tighter than the original 22° because the anisotropic
+        # projection makes the fair cone span a narrower range of *screen*
+        # angles (~59°–121°) than it did under the old isotropic projection.
+        angle = random.gauss(math.radians(90), math.radians(15))
         angle = max(math.radians(50), min(math.radians(130), angle))
         wall_r = _wall_r_at(angle)
         q = max(0.0, min(1.0, quality))
@@ -476,27 +627,28 @@ def _pick_hit_landing(outcome, shape, quality=1.0):
     dist_min, dist_max = HIT_LANDING_FT.get(shape, HIT_LANDING_FT["LINER"])
     dist_ft = random.uniform(dist_min, dist_min + (dist_max - dist_min) * (0.4 + 0.4 * q))
     angle = random.uniform(math.radians(50), math.radians(130))
-    point = _polar_point(angle, dist_ft * FT_TO_PX)
-    return _clamp_inside_wall(point, LANDING_WALL_MARGIN_PX)
+    return _clamp_inside_wall(_polar_point_ft(angle, dist_ft),
+                              LANDING_WALL_MARGIN_PX)
 
 
-def _pick_shape(outcome, vertical_offset):
+def _pick_shape(outcome, vertical_offset, batted_ball_type=None):
     """Pick a trajectory shape from outcome + bat-vs-ball alignment.
 
-    Outs are deterministic; HIT (the generic non-HR hit) is fully driven by
-    vertical_offset so the visual matches how the bat met the ball; HOME
-    RUN and any legacy outcomes fall back to weighted random.
+    When batted_ball_type is supplied (by hit_outcome_manager — the canonical
+    source), use it directly so the visual matches the resolved type. HOME
+    RUN always animates as FLY regardless of underlying type (a line-drive
+    HR clearing the wall would read poorly with a low arc). Legacy callers
+    without a type fall back to the old vertical_offset bucketing.
     """
+    if outcome == "HOME RUN":
+        return "FLY"
+    if batted_ball_type in ("LINER", "FLY", "GROUNDER", "POP_UP"):
+        return batted_ball_type
     if outcome == "GROUNDOUT":
         return "GROUNDER"
     if outcome == "FLYOUT":
-        # Bat way under the ball -> infield pop-up.
         return "POP_UP" if vertical_offset < -25 else "FLY"
     if outcome == "HIT":
-        # Vertical-offset thresholds match the FLYOUT pop-up cutoff (-25)
-        # for consistency with the existing convention. Magnitudes outside
-        # ±8 reliably skew flight: bat clearly above ball -> grounder, bat
-        # clearly under ball -> fly; near zero -> liner.
         if vertical_offset < -25:
             return "POP_UP"
         if vertical_offset < -8:
@@ -549,12 +701,13 @@ class HitAnimation:
     idle sway when at rest.
     """
 
-    def __init__(self, game, outcome, on_complete, vertical_offset=0.0, quality=0.0):
+    def __init__(self, game, outcome, on_complete, vertical_offset=0.0, quality=0.0, batted_ball_type=None):
         self.game = game
         self.outcome = outcome
         self.on_complete = on_complete
         self.vertical_offset = vertical_offset
         self.quality = quality
+        self.batted_ball_type = batted_ball_type
 
         self.start_time = None
         self.banner_fired = False
@@ -613,8 +766,11 @@ class HitAnimation:
         # tracking the live ball position via _update_lean_targets.
         self._lean_excluded: set = set()
 
-        # Trajectory shape (decoupled from outcome resolution).
-        self.shape = _pick_shape(outcome, vertical_offset)
+        # Trajectory shape (decoupled from outcome resolution). When
+        # batted_ball_type is provided by hit_outcome_manager, it's the
+        # canonical source — vertical_offset is only a fallback for
+        # legacy callers.
+        self.shape = _pick_shape(outcome, vertical_offset, batted_ball_type)
 
         # Per-frame ball state.
         self._ball = HOME
@@ -640,11 +796,11 @@ class HitAnimation:
         # quality-driven mapping could show 480 ft on a HR that visibly
         # landed just past the wall (or vice versa).
         if outcome == "HOME RUN":
-            landing_ft = math.hypot(
-                self._hit_end[0] - HOME[0],
-                HOME[1] - self._hit_end[1],
-            ) / FT_TO_PX
-            self.hr_distance_ft = round(landing_ft)
+            # Invert the anisotropic projection so the displayed distance is
+            # the real-field distance, not a stretched screen-space distance.
+            dx_ft = (self._hit_end[0] - HOME[0]) / FT_TO_PX_X
+            dy_ft = (HOME[1] - self._hit_end[1]) / FT_TO_PX_Y
+            self.hr_distance_ft = round(math.hypot(dx_ft, dy_ft))
 
         # Lazy-init fonts on first draw that needs them.
         self._font = None
@@ -663,8 +819,12 @@ class HitAnimation:
         self._fielder_at = (primary_home[0] + hop[0], primary_home[1] + hop[1])
         self.fielders[self._primary_role].target = self._fielder_at
 
-        # Bounce profile — weak contact bounces multiple times.
-        self._grounder_peaks = _grounder_peaks(self.quality)
+        # Bounce profile — weak contact bounces multiple times. Distance
+        # to the fielder scales the bounce count so each hop covers
+        # spacing_px and the ball touches grass between every hop.
+        groundout_dist_px = math.hypot(self._fielder_at[0] - HOME[0],
+                                       self._fielder_at[1] - HOME[1])
+        self._grounder_peaks = _grounder_peaks(self.quality, groundout_dist_px)
 
         # 1B covers the bag; throw destination follows them so the ball
         # arrives where the fielder actually is.
@@ -686,13 +846,22 @@ class HitAnimation:
 
     def _setup_flyout(self):
         # POP_UP — caught by an infielder near the diamond.
-        # FLY — caught by the closest outfielder.
+        # LINER  — line-drive caught by the closest OF/IF on a flat arc.
+        # FLY    — caught by the closest outfielder on a high arc.
         if self.shape == "POP_UP":
             base = self.fielders[random.choice(INFIELD_ROLES)].home_pos
             target = (base[0] + random.uniform(-25, 25),
                       base[1] + random.uniform(-15, 15))
             self._flyout_peak = random.uniform(*POPUP_PEAK_RANGE)
             pool = INFIELD_ROLES
+        elif self.shape == "LINER":
+            # Liner outs are line drives right at someone — usually an OF
+            # but occasionally an IF snags one. Flat arc per LINER_PEAK_RANGE.
+            pool = OUTFIELD_ROLES if random.random() < 0.80 else INFIELD_ROLES
+            base = self.fielders[random.choice(pool)].home_pos
+            target = (base[0] + random.uniform(-30, 30),
+                      base[1] + random.uniform(-20, 20))
+            self._flyout_peak = random.uniform(*LINER_PEAK_RANGE)
         else:
             base = self.fielders[random.choice(OUTFIELD_ROLES)].home_pos
             target = (base[0] + random.uniform(-50, 50),
@@ -730,7 +899,63 @@ class HitAnimation:
         self._lean_excluded = excluded
 
     def _setup_hit(self, outcome):
-        self._hit_end = _pick_hit_landing(outcome, self.shape, self.quality)
+        # Wall-candidate selection. A subset of high-quality FLY/LINER HITs
+        # are routed past the wall so they strike the wall face on the fly
+        # (see WALL_HIT_* constants and _maybe_trigger_in_flight_wall_impact).
+        # Default off; flipped on only when all the gates pass.
+        self._is_wall_candidate = False
+        if (
+            outcome == "HIT"
+            and self.shape in ("FLY", "LINER")
+            and self.quality >= WALL_HIT_QUALITY_THRESHOLD
+        ):
+            q = max(0.0, min(1.0, self.quality))
+            prob = WALL_HIT_PROB_MAX * (q - WALL_HIT_QUALITY_THRESHOLD) / (
+                1.0 - WALL_HIT_QUALITY_THRESHOLD
+            )
+            if random.random() < prob:
+                self._is_wall_candidate = True
+
+        if self._is_wall_candidate:
+            # Aim past the wall along a realistic angle (down-the-line or
+            # gap shot — same distribution _pick_hit_landing uses for high-
+            # quality HITs, since those are the angles where real wall
+            # caroms originate). Distance is wall_r + carry, with squared
+            # bias so most carries are small (impact low on the face).
+            q = max(0.0, min(1.0, self.quality))
+            line_prob = 0.20 + 0.30 * q
+            gap_prob  = 0.40 + 0.30 * q
+            roll = random.random()
+            if roll < line_prob:
+                side = random.choice((-1, 1))
+                base = math.radians(53) if side > 0 else math.radians(127)
+                angle = base + random.uniform(-0.05, 0.05)
+            elif roll < line_prob + gap_prob:
+                side = random.choice((-1, 1))
+                gap = math.radians(79) if side > 0 else math.radians(101)
+                angle = gap + random.uniform(-0.10, 0.10)
+            else:
+                angle = random.uniform(math.radians(50), math.radians(130))
+            bias = random.random() ** WALL_HIT_CARRY_BIAS_EXP
+            carry_ft = WALL_HIT_CARRY_FT_MIN + bias * (
+                WALL_HIT_CARRY_FT_MAX - WALL_HIT_CARRY_FT_MIN
+            )
+            # Convert the polar wall-radius (px) at this angle back into
+            # the equivalent screen distance, then add carry. We pick the
+            # landing point directly in screen pixels (no foot-space
+            # _polar_point_ft) because the wall is defined in screen-
+            # space and the in-flight check uses screen-space too.
+            wall_px = _wall_r_at(angle)
+            dist_px = wall_px + carry_ft * FT_TO_PX_Y  # use y-scale as
+            # a rough px-per-ft for radial carry; exact value is not
+            # critical — the in-flight detector kills the arc at the
+            # wall regardless of how far past the landing was aimed.
+            self._hit_end = (
+                HOME[0] + dist_px * math.cos(angle),
+                HOME[1] - dist_px * math.sin(angle),
+            )
+        else:
+            self._hit_end = _pick_hit_landing(outcome, self.shape, self.quality)
 
         # Peak chosen per shape. HOME RUN uses its scripted peak; HIT uses
         # a quality-scaled FLY peak so soft flies arc lower than screamers.
@@ -741,13 +966,23 @@ class HitAnimation:
                 q = max(0.0, min(1.0, self.quality))
                 lo, hi = FLY_HIT_PEAK_RANGE
                 self._hit_peak = lo + q * (hi - lo)
+                # Wall candidates need a lower peak so the ball is *below*
+                # the wall top at the crossing point — otherwise the
+                # trajectory would clear the wall (HR territory).
+                if self._is_wall_candidate:
+                    self._hit_peak *= WALL_HIT_FLY_PEAK_SCALE
         elif self.shape == "LINER":
             self._hit_peak = random.uniform(*LINER_PEAK_RANGE)
         elif self.shape == "POP_UP":
             self._hit_peak = random.uniform(*POPUP_PEAK_RANGE)
-        else:  # GROUNDER — peaks vary with contact quality
+        else:  # GROUNDER — peaks vary with contact quality. Distance to
+            # the landing point scales the bounce count (one hop per
+            # spacing_px of travel) so the ball touches grass between every
+            # hop instead of arcing once over the entire infield.
             self._hit_peak = 0
-            self._grounder_peaks = _grounder_peaks(self.quality)
+            grounder_dist_px = math.hypot(self._hit_end[0] - HOME[0],
+                                          self._hit_end[1] - HOME[1])
+            self._grounder_peaks = _grounder_peaks(self.quality, grounder_dist_px)
 
         # Duration. HOME RUN keeps its scripted hang time. HIT (across all
         # shapes) is quality-scaled: harder contact zips visually, weaker
@@ -1108,6 +1343,66 @@ class HitAnimation:
             self._ball_pos[0] = HOME[0] + dx * s
             self._ball_pos[1] = HOME[1] + dy_pyg * s
 
+    def _maybe_trigger_in_flight_wall_impact(self):
+        """Check whether the ball's shadow has crossed outside the wall
+        ellipse during flight. If yes, fire the wall-impact transition:
+        plant the ball at the wall edge, kill most of its velocity (and
+        flip inward so it rebounds toward the fielder rather than
+        continuing radially outward), set self._wall_hit so the
+        classifier upgrades the outcome, and truncate self.duration_ms so
+        the next frame's in_flight check is false and ball-on-ground
+        physics takes over.
+
+        Only called for wall-candidate hits. The hit-end was aimed past
+        the wall in _setup_hit; this function is what actually stops the
+        ball when it strikes the wall, instead of letting the arc
+        continue all the way to its (past-the-wall) landing point.
+        """
+        sx = self._ball_shadow[0]
+        sy = self._ball_shadow[1]
+        dx = sx - HOME[0]
+        dy_math = HOME[1] - sy   # math convention (+y outward)
+        if dx == 0 and dy_math == 0:
+            return
+        angle = math.atan2(dy_math, dx)
+        wall_r = _wall_r_at(angle)
+        shadow_r = math.hypot(dx, dy_math)
+        if shadow_r < wall_r:
+            return
+
+        # Impact point: the wall edge along this angle, pulled in by
+        # BALL_WALL_MARGIN_PX so the ball renders flush with the wall
+        # face rather than embedded in it.
+        impact_r = wall_r - BALL_WALL_MARGIN_PX
+        impact_x = HOME[0] + impact_r * math.cos(angle)
+        impact_y = HOME[1] - impact_r * math.sin(angle)
+        self._hit_end = (impact_x, impact_y)
+
+        # Initialize the on-ground physics with the original duration_ms
+        # so the rolling velocity matches the ball's flight pace, then
+        # scale by the wall-impact restitution and flip inward. The
+        # inward flip is what makes the carom rebound back toward the
+        # field; without it, ROLLING_DECEL takes the ball outward right
+        # back into the rolling-phase wall-containment code, which
+        # double-applies the reflection and reads as jittery.
+        self._init_ball_on_ground()
+        self._ball_v[0] = -self._ball_v[0] * WALL_HIT_FLIGHT_RESTITUTION
+        self._ball_v[1] = -self._ball_v[1] * WALL_HIT_FLIGHT_RESTITUTION
+
+        self._wall_hit = True
+
+        # Render ball at the wall this frame too (otherwise the impact
+        # frame briefly shows the ball past the wall before the next
+        # frame snaps it back).
+        self._ball = (impact_x, impact_y)
+        self._ball_shadow = (impact_x, impact_y)
+
+        # End the flight phase now. Next frame's `in_flight` check is
+        # `elapsed <= self.duration_ms`; setting duration_ms to the
+        # current elapsed makes that false, and the elif branch picks
+        # up with self._ball_pos already set (skipping re-init).
+        self.duration_ms = self._elapsed
+
     # ---- Update ---------------------------------------------------------
 
     def update(self, current_time):
@@ -1194,6 +1489,11 @@ class HitAnimation:
             else:
                 self._ball = _arc_fly(HOME, self._hit_end, self._hit_peak, t)
             self._ball_shadow = _lerp(HOME, self._hit_end, _shadow_t(self.shape, t))
+            # Wall-candidate trajectories aim past the wall; this is what
+            # actually stops the ball at the wall and routes it through
+            # the wall-hit classifier. No-op for non-wall-candidates.
+            if self._is_wall_candidate and not self._wall_hit:
+                self._maybe_trigger_in_flight_wall_impact()
         elif self._needs_secure:
             # SINGLE/DOUBLE/TRIPLE: stateful ball-on-ground physics — linear
             # friction + radial reflection off the wall, lazy-initialized
@@ -1282,7 +1582,15 @@ class HitAnimation:
                 if self.outcome == "HIT" and self.classified_outcome is None:
                     retrieve_ms = self._secured_at_ms - self.duration_ms
                     if self._wall_hit:
-                        if retrieve_ms >= RETRIEVE_TIME_DOUBLE_MAX_MS:
+                        # In-flight wall hits use a much lower triple
+                        # threshold than rolling wall hits because retrieve
+                        # time is measured from the moment of impact (no
+                        # rolling phase eating clock first).
+                        if self._is_wall_candidate:
+                            triple_threshold = RETRIEVE_TIME_INFLIGHT_WALL_TRIPLE_MS
+                        else:
+                            triple_threshold = RETRIEVE_TIME_WALL_TRIPLE_MS
+                        if retrieve_ms >= triple_threshold:
                             self.classified_outcome = "TRIPLE"
                         else:
                             self.classified_outcome = "DOUBLE"
@@ -1378,26 +1686,56 @@ class HitAnimation:
     def _draw_field(self, screen):
         hx, hy = HOME
 
-        # Foul lines (45°)
-        line_color = (90, 90, 90)
-        pygame.draw.line(screen, line_color, (hx, hy),
-                         (hx - FOUL_LINE_LENGTH, hy - FOUL_LINE_LENGTH), 1)
-        pygame.draw.line(screen, line_color, (hx, hy),
-                         (hx + FOUL_LINE_LENGTH, hy - FOUL_LINE_LENGTH), 1)
+        # Outfield wall — sampled-arc band rather than a single pygame.draw.arc.
+        # The arc spans from one foul-pole corner across CF to the other,
+        # forming a continuous boundary. The parametric ellipse angle at the
+        # foul corners is `atan2(WALL_FT_X, WALL_FT_Y)` — using the *real-foot*
+        # semi-axes, since the parametric angle is invariant under axis-aligned
+        # scaling. (Using the screen-pixel semi-axes was the previous bug that
+        # left a gap between the foul lines and the wall.)
+        foul_t = math.atan2(WALL_FT_X, WALL_FT_Y)
+        samples = 96
+        wall_top_pts = []
+        wall_bot_pts = []
+        for i in range(samples + 1):
+            t = foul_t + (math.pi - 2 * foul_t) * i / samples
+            x = hx + WALL_SEMI_X * math.cos(t)
+            y_top = hy - WALL_SEMI_Y * math.sin(t)
+            wall_top_pts.append((x, y_top))
+            wall_bot_pts.append((x, y_top + WALL_FACE_HEIGHT_PX))
 
-        # Outfield wall — elliptical arc spanning the fair-territory cone.
-        # pygame.draw.arc is parameterized by ellipse parametric angle (not
-        # polar), so the foul-line intersection is at atan(a/b), not 45°.
-        wall_rect = pygame.Rect(hx - WALL_SEMI_X, hy - WALL_SEMI_Y,
-                                2 * WALL_SEMI_X, 2 * WALL_SEMI_Y)
-        foul_t = math.atan2(WALL_SEMI_X, WALL_SEMI_Y)
-        pygame.draw.arc(screen, (110, 110, 110), wall_rect,
-                        foul_t, math.pi - foul_t, 2)
+        # Wall face — filled band so the wall reads as a 3D structure.
+        face_poly = wall_top_pts + list(reversed(wall_bot_pts))
+        pygame.draw.polygon(screen, (60, 60, 60), face_poly, 0)
+        # Bright top edge (outer rim of the wall, where it meets the sky/black
+        # background) and a softer inner edge where it meets the field.
+        pygame.draw.lines(screen, (200, 200, 200), False, wall_top_pts, 2)
+        pygame.draw.lines(screen, (115, 115, 115), False, wall_bot_pts, 1)
 
-        # Infield diamond fill
+        # Foul lines — terminate at the inner-wall edge (where the field
+        # meets the wall face), not at the outer rim. wall_bot_pts[0] is the
+        # right foul-pole base, wall_bot_pts[-1] is the left.
+        foul_right_base = wall_bot_pts[0]
+        foul_left_base  = wall_bot_pts[-1]
+        line_color = (150, 150, 150)
+        pygame.draw.line(screen, line_color, (hx, hy), foul_right_base, 1)
+        pygame.draw.line(screen, line_color, (hx, hy), foul_left_base, 1)
+
+        # Foul poles — short vertical bars rising from the wall corners. Match
+        # the glove yellow so the only non-gray elements are the two play-
+        # critical accents (poles + glove).
+        foul_right_top = wall_top_pts[0]
+        foul_left_top  = wall_top_pts[-1]
+        pole_color = (245, 215, 90)
+        pygame.draw.line(screen, pole_color, foul_right_top,
+                         (foul_right_top[0], foul_right_top[1] - FOUL_POLE_HEIGHT_PX), 2)
+        pygame.draw.line(screen, pole_color, foul_left_top,
+                         (foul_left_top[0], foul_left_top[1] - FOUL_POLE_HEIGHT_PX), 2)
+
+        # Infield diamond — minimalist grayscale (was brown).
         diamond = [HOME, BASES["1B"], BASES["2B"], BASES["3B"]]
-        pygame.draw.polygon(screen, (80, 60, 45), diamond, 0)
-        pygame.draw.polygon(screen, (130, 100, 70), diamond, 2)
+        pygame.draw.polygon(screen, (35, 35, 35), diamond, 0)
+        pygame.draw.polygon(screen, (180, 180, 180), diamond, 2)
 
         # Bases
         for bp in BASES.values():
@@ -1405,9 +1743,9 @@ class HitAnimation:
             pygame.draw.rect(screen, (220, 220, 220),
                              pygame.Rect(bx - 5, by - 5, 10, 10))
 
-        # Pitcher's mound
-        pygame.draw.circle(screen, (80, 60, 45), PITCHERS_MOUND, 14)
-        pygame.draw.circle(screen, (130, 100, 70), PITCHERS_MOUND, 14, 1)
+        # Pitcher's mound — grayscale to match the diamond.
+        pygame.draw.circle(screen, (35, 35, 35), PITCHERS_MOUND, 14)
+        pygame.draw.circle(screen, (180, 180, 180), PITCHERS_MOUND, 14, 1)
 
         # Home plate
         pygame.draw.polygon(screen, (220, 220, 220), [

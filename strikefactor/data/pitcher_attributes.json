@@ -1,0 +1,20 @@
+{
+  "yesavage": {"role": "STARTER", "max_pitches": 100, "k_mult": 1.05, "bb_mult": 1.00, "hit_mult": 0.95},
+  "scherzer": {"role": "STARTER", "max_pitches": 105, "k_mult": 1.20, "bb_mult": 0.90, "hit_mult": 0.82},
+  "snell":    {"role": "STARTER", "max_pitches":  95, "k_mult": 1.15, "bb_mult": 1.15, "hit_mult": 0.85},
+  "kershaw":  {"role": "STARTER", "max_pitches": 100, "k_mult": 1.25, "bb_mult": 0.85, "hit_mult": 0.80},
+  "glasnow":  {"role": "STARTER", "max_pitches":  95, "k_mult": 1.20, "bb_mult": 1.05, "hit_mult": 0.86},
+
+  "hoffman":  {"role": "LONG",    "max_pitches":  55, "max_ip": 3.0, "k_mult": 1.00, "bb_mult": 1.05, "hit_mult": 0.98},
+
+  "lauer":    {"role": "MIDDLE",  "max_pitches":  35, "max_ip": 1.2, "k_mult": 0.95, "bb_mult": 1.00, "hit_mult": 0.98},
+  "woo":      {"role": "MIDDLE",  "max_pitches":  35, "max_ip": 1.2, "k_mult": 1.10, "bb_mult": 0.95, "hit_mult": 0.90},
+  "miller":   {"role": "MIDDLE",  "max_pitches":  30, "max_ip": 1.0, "k_mult": 1.05, "bb_mult": 1.00, "hit_mult": 0.93},
+
+  "vesia":    {"role": "SETUP",   "max_pitches":  25, "max_ip": 1.0, "k_mult": 1.10, "bb_mult": 1.10, "hit_mult": 0.90},
+  "kahnle":   {"role": "SETUP",   "max_pitches":  25, "max_ip": 1.0, "k_mult": 1.20, "bb_mult": 1.00, "hit_mult": 0.86},
+
+  "chapman":  {"role": "CLOSER",  "max_pitches":  22, "max_ip": 1.0, "k_mult": 1.30, "bb_mult": 1.10, "hit_mult": 0.80},
+
+  "garcia":   {"role": "MOPUP",   "max_pitches":  75, "max_ip": 4.0, "k_mult": 0.85, "bb_mult": 1.15, "hit_mult": 1.10}
+}

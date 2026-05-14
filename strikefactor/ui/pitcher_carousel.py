@@ -140,7 +140,7 @@ class PitcherCarousel:
         record = GameDayManager.load_history_record_vs(pitcher_name)
         if record['total'] > 0:
             record_text = (f"Your record: {record['wins']}W - "
-                           f"{record['losses']}L - {record['ties']}T")
+                           f"{record['losses']}L")
             record_color = self.ACCENT
         else:
             record_text = "Your record: (never faced)"

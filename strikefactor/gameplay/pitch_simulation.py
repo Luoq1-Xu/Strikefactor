@@ -387,7 +387,8 @@ class PitchSimulation:
             )
 
         # DEBUG: Log hit_string from hit_outcome_manager
-        print(f">>> _handle_successful_hit: hit_string='{hit_string}', swing_type={self.swing_type}", flush=True)
+        bbt = self.game.hit_outcome_manager.last_batted_ball_type
+        print(f">>> _handle_successful_hit: hit_string='{hit_string}', batted_ball='{bbt}', swing_type={self.swing_type}", flush=True)
 
         # Snapshot contact metrics for the hit animation (shape + HR distance).
         contact_quality = self.game.hit_outcome_manager.last_quality
@@ -809,6 +810,7 @@ class PitchSimulation:
             on_complete=on_complete,
             vertical_offset=vertical_offset,
             quality=quality,
+            batted_ball_type=self.game.hit_outcome_manager.last_batted_ball_type,
         )
 
     def _handle_hit_animation_phase(self, current_time, time_delta):
