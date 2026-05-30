@@ -9,6 +9,7 @@ import random
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional
 from helpers import ScoreKeeper
+from utils.io import atomic_write_json
 
 
 # Single source of truth for the pitchers that can appear in GameDay mode
@@ -932,9 +933,9 @@ class GameDayManager:
         if len(history['games']) > 100:
             history['games'] = history['games'][-100:]
 
-        os.makedirs(os.path.dirname(self.HISTORY_FILE), exist_ok=True)
-        with open(self.HISTORY_FILE, 'w') as f:
-            json.dump(history, f, indent=2)
+        # Atomic write so a crash mid-save can't truncate the history file and
+        # silently wipe the entire career record on the next load.
+        atomic_write_json(self.HISTORY_FILE, history)
 
     @classmethod
     def _load_history(cls) -> dict:
@@ -943,8 +944,10 @@ class GameDayManager:
             if os.path.exists(cls.HISTORY_FILE):
                 with open(cls.HISTORY_FILE, 'r') as f:
                     return json.load(f)
-        except (json.JSONDecodeError, FileNotFoundError):
-            pass
+        except (json.JSONDecodeError, FileNotFoundError) as e:
+            if isinstance(e, json.JSONDecodeError):
+                print(f"Warning: GameDay history file {cls.HISTORY_FILE} is corrupt "
+                      f"({e}); starting from an empty record.")
         return {'version': '1.0', 'games': [], 'last_updated': None}
 
     @classmethod

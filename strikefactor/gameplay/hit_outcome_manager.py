@@ -4,9 +4,15 @@ from utils.physics import collision_angled
 
 
 # Batted-ball type model. Classified at contact from (quality, vertical_offset);
-# drives both the hit/out split and the trajectory shape passed to the
-# animation. Convention follows _pick_shape in hit_animation.py: negative
-# vertical_offset is the fly direction, positive is the grounder direction.
+# drives the trajectory shape passed to the animation. The hit/out split is
+# no longer rolled here — it emerges from fielder routing + interception
+# inside HitAnimation. We still classify the type up front because the
+# trajectory shape (high arc vs. line drive vs. bouncing grounder) is a
+# property of how the bat met the ball, not of who fielded it.
+# Convention (pygame y-down): vertical_offset = swing_y - ball_y, so positive
+# means the bat sat below the ball at contact — catching the underside sends
+# the ball up (POP_UP / FLY). Negative means the bat was above the ball,
+# scraping the top down into the ground (GROUNDER).
 #
 # Marginals target 2025 MLB league split — GB 42% / FB 27% / LD 24% / PU 7%
 # — integrated over the natural quality/offset distribution the game produces.
@@ -18,10 +24,10 @@ _BATTED_BALL_TYPES = ("POP_UP", "FLY", "LINER", "GROUNDER")
 # Anchors are inside the contact-zone reach (~±25 px) so each type has a
 # realistic shot at being selected by a typical swing.
 _TYPE_OFFSET_ANCHORS = {
-    "POP_UP":   -22.0,
-    "FLY":      -11.0,
+    "POP_UP":    22.0,
+    "FLY":       11.0,
     "LINER":      0.0,
-    "GROUNDER":  11.0,
+    "GROUNDER": -11.0,
 }
 _TYPE_OFFSET_SIGMA = {
     "POP_UP":     8.5,
@@ -44,33 +50,11 @@ _TYPE_QUALITY_BIAS = {
 # overall mix near the MLB marginal even before geometry pulls each
 # contact toward a specific type.
 _TYPE_BASE_PRIOR = {
-    "POP_UP":   0.34,
+    "POP_UP":   0.15,
     "FLY":      0.22,
     "LINER":    0.20,
     "GROUNDER": 0.40,
 }
-
-# Per-type base out rate at neutral quality (q=0.5). Matches MLB 2025
-# ratios. Quality fully drives deviation: at q=1 a screaming liner is
-# almost always a hit; at q=0 even a "liner" type contact is mostly an
-# out. out_rate = base * (1 - QUALITY_SCALE * (2q - 1)), clamped [0, 1].
-# Typical in-game mean quality is ~0.9, so total hit rate sits well above
-# MLB's .289 BABIP — the game intentionally rewards skilled contact.
-_BBT_BASE_OUT_RATE = {
-    "POP_UP":   0.98,
-    "FLY":      0.89,
-    "GROUNDER": 0.77,
-    "LINER":    0.34,
-}
-_BBT_QUALITY_OUT_SCALE = {
-    "POP_UP":   0.30,
-    "FLY":      0.85,
-    "GROUNDER": 0.65,
-    "LINER":    0.95,
-}
-# Power swing applies a small reduction to the type-driven out rate
-# (the existing "power swings are slightly safer" bias, now type-aware).
-_POWER_OUT_RATE_BONUS = 0.06
 
 # Per-type HR probability on a hit. POP_UP / GROUNDER never become HRs
 # (physically impossible — popups are caught, grounders never clear a
@@ -105,6 +89,13 @@ class HitOutcomeManager:
         # Last contact metrics — read by HitAnimation for trajectory + HR distance.
         self.last_quality = 0.0
         self.last_vertical_offset = 0.0
+        # Signed horizontal offset of the ball at contact, in screen pixels,
+        # relative to the *batter's* inside/outside. Positive = inside the
+        # batter (drives pull-direction HRs); negative = outside (drives
+        # opposite-field HRs). Computed from ball_x vs the strike zone
+        # center, sign-flipped by handedness so a single sign convention
+        # works for both RHB and LHB downstream.
+        self.last_horizontal_inside = 0.0
         # Last batted-ball type — drives the animation shape and is the
         # canonical record of what kind of contact was made.
         self.last_batted_ball_type = None
@@ -169,74 +160,100 @@ class HitOutcomeManager:
         return "LINER"
 
     def _resolve_outcome(self, quality, vertical_offset, swing_type):
-        """Common outcome resolution: classify type, then roll out/HR/hit."""
+        """Classify batted-ball type and roll HR. Everything else is deferred.
+
+        Out vs hit is no longer decided here — that emerges from the
+        animation's fielder routing and interception detection. HR is a
+        contact-time property (the ball is aimed past the wall by
+        definition) so we still roll it here; downstream the result is
+        either "HOME RUN" with runners already advanced, or "HIT" (the
+        generic in-play outcome) whose final classification — FLYOUT,
+        GROUNDOUT, SINGLE, DOUBLE, or TRIPLE — is set by the animation
+        and applied via apply_classified_outcome().
+        """
         batted_ball_type = self._classify_batted_ball_type(quality, vertical_offset)
         self.last_batted_ball_type = batted_ball_type
 
-        multipliers = self._get_difficulty_multipliers()
-        out_modifier = multipliers["out_probability_modifier"]
-
-        # Per-type out rate at q=0.5 matches MLB; quality scales it
-        # multiplicatively (q=1 -> base * (1 - scale), q=0 -> base * (1 + scale)).
-        base = _BBT_BASE_OUT_RATE[batted_ball_type]
-        qscale = _BBT_QUALITY_OUT_SCALE[batted_ball_type]
-        out_rate = base * max(0.0, 1.0 - qscale * (2.0 * quality - 1.0))
-        if swing_type == "power":
-            out_rate = max(0.0, out_rate - _POWER_OUT_RATE_BONUS)
-        out_rate = max(0.0, min(1.0, out_rate * out_modifier * (1.0 - self.momentum_bonus)))
-
-        if random.random() < out_rate:
-            if batted_ball_type == "GROUNDER":
-                return "GROUNDOUT"
-            return "FLYOUT"
-
-        # Hit branch — only FLY/LINER can be HRs. HR roll fires before
-        # the generic "HIT" so the runners can be advanced at contact.
+        # HR roll — only FLY/LINER can clear the wall. Difficulty/momentum
+        # modulate the rate: harder difficulty (out_modifier > 1) suppresses
+        # HRs, hot-streak momentum amplifies them.
         hr_base = _BBT_HR_RATE_BASE[batted_ball_type]
         hr_qscale = _BBT_HR_QUALITY_SCALE[batted_ball_type]
         hr_rate = hr_base + hr_qscale * max(0.0, (2.0 * quality - 1.0))
         if swing_type == "power" and batted_ball_type in ("FLY", "LINER"):
             hr_rate += _POWER_HR_RATE_BONUS
+        multipliers = self._get_difficulty_multipliers()
+        out_modifier = multipliers["out_probability_modifier"]
+        hr_rate = hr_rate / max(0.01, out_modifier)
+        hr_rate = hr_rate * (1.0 + self.momentum_bonus)
+        hr_rate = max(0.0, min(1.0, hr_rate))
         if hr_rate > 0.0 and random.random() < hr_rate:
             self.hit_type = 4
             self.update_runners_and_score()
             return "HOME RUN"
-        return "HIT"
+        return "IN_PLAY"
 
-    def get_contact_hit_outcome(self, swing_location_y=None, ball_location_y=None, timing_diff=None):
+    def _compute_horizontal_inside(self, ball_location_x, batter_handedness):
+        """Signed inside/outside offset (px) relative to the batter's body.
+
+        Positive = pitch was inside (close to the batter); negative = outside.
+        Strike zone is centered at x=630 (ABS_ZONE). RHB stands at low x,
+        so inside is ball_x < 630; LHB stands at high x, so inside is
+        ball_x > 630. The sign flip here lets downstream consumers use a
+        single convention (positive = pull, negative = oppo) regardless of
+        handedness.
+        """
+        if ball_location_x is None:
+            return 0.0
+        zone_center_x = 630.0
+        if batter_handedness == 'L':
+            return ball_location_x - zone_center_x
+        return zone_center_x - ball_location_x
+
+    def get_contact_hit_outcome(self, swing_location_y=None, ball_location_y=None, timing_diff=None,
+                                ball_location_x=None, batter_handedness='R'):
         """Coarse outcome at contact. Returns one of:
-            "FLYOUT", "GROUNDOUT" — out paths.
-            "HOME RUN"            — predetermined; runners advance now.
-            "HIT"                 — generic non-HR hit; the HitAnimation will
-                                    classify SINGLE/DOUBLE/TRIPLE by retrieve
-                                    time and pitch_simulation will then call
-                                    apply_classified_outcome() to advance the
-                                    runners.
+            "HOME RUN" — predetermined; runners advance now.
+            "IN_PLAY"  — ball is live. The HitAnimation classifies the
+                         final result (FLYOUT, GROUNDOUT, SINGLE, DOUBLE,
+                         TRIPLE) from fielder routing + interception and
+                         pitch_simulation then calls
+                         apply_classified_outcome() to settle stats and
+                         runners.
 
         The batted-ball type is classified first (and stored on
-        self.last_batted_ball_type) — it drives the out vs hit roll, the HR
-        gate, and the trajectory shape used by the animation.
+        self.last_batted_ball_type) — it drives the HR gate and the
+        trajectory shape used by the animation.
         """
         quality, vertical_offset = self._compute_contact_quality(
             swing_location_y, ball_location_y, timing_diff
         )
         self.last_quality = quality
         self.last_vertical_offset = vertical_offset
+        self.last_horizontal_inside = self._compute_horizontal_inside(
+            ball_location_x, batter_handedness
+        )
         return self._resolve_outcome(quality, vertical_offset, swing_type="contact")
 
-    def get_power_hit_outcome(self, swing_location_y=None, ball_location_y=None, timing_diff=None):
+    def get_power_hit_outcome(self, swing_location_y=None, ball_location_y=None, timing_diff=None,
+                              ball_location_x=None, batter_handedness='R'):
         quality, vertical_offset = self._compute_contact_quality(
             swing_location_y, ball_location_y, timing_diff
         )
         self.last_quality = quality
         self.last_vertical_offset = vertical_offset
+        self.last_horizontal_inside = self._compute_horizontal_inside(
+            ball_location_x, batter_handedness
+        )
         return self._resolve_outcome(quality, vertical_offset, swing_type="power")
 
     def apply_classified_outcome(self, outcome_str):
-        """Called by pitch_simulation once the animation has classified a
-        non-HR HIT into SINGLE / DOUBLE / TRIPLE based on retrieve time.
-        Sets hit_type and advances runners accordingly.
+        """Called by pitch_simulation once the animation has classified an
+        IN_PLAY contact into its final outcome. Hits advance runners; outs
+        do not (the game doesn't model sac flies / productive outs yet).
         """
+        if outcome_str in ("GROUNDOUT", "FLYOUT", "LINEOUT"):
+            return
         mapping = {"SINGLE": 1, "DOUBLE": 2, "TRIPLE": 3}
         self.hit_type = mapping.get(outcome_str, 1)
         self.update_runners_and_score()
@@ -313,38 +330,22 @@ class HitOutcomeManager:
                 self.ishomerun = 'GRAND SLAM'
     
     def play_hit_sound(self, outcome=None):
-        if outcome == "FLYOUT":
-            # Flyouts play random batting sounds: foul, double, or homerun
-            flyout_sounds = ['foul', 'double', 'homerun']
-            sound_choice = random.choice(flyout_sounds)
-            self.sound_manager.play(sound_choice)
-        elif outcome == "GROUNDOUT":
-            # Groundouts play either foul or single sounds
-            groundout_sounds = ['foul', 'single']
-            sound_choice = random.choice(groundout_sounds)
-            self.sound_manager.play(sound_choice)
-        elif outcome == "HIT":
-            # Generic HIT plays at contact, before the SINGLE/DOUBLE/TRIPLE
-            # classification is known. Pick a sound from contact quality so
-            # weak contact sounds weak and a hard-hit ball gets a satisfying
-            # crack — the actual outcome banner / classification arrives
-            # after the animation, the sound is just immediate feedback.
-            q = self.last_quality
-            if q < 0.4:
-                sound_choice = random.choice(['single', 'foul'])
-            elif q < 0.7:
-                sound_choice = random.choice(['single', 'double'])
-            else:
-                sound_choice = random.choice(['double', 'triple'])
-            self.sound_manager.play(sound_choice)
-        elif self.hit_type == 1:
-            self.sound_manager.play('single')
-        elif self.hit_type == 2:
-            self.sound_manager.play('double')
-        elif self.hit_type == 3:
-            self.sound_manager.play('triple')
-        elif self.hit_type == 4:
+        if outcome == "HOME RUN" or self.hit_type == 4:
             self.sound_manager.play('homerun')
+            return
+        # All other contacts: the outcome isn't known yet (FLYOUT vs
+        # GROUNDOUT vs SINGLE/DOUBLE/TRIPLE emerges from the animation).
+        # Pick a sound from contact quality so weak contact sounds weak
+        # and a hard-hit ball gets a satisfying crack — the actual
+        # outcome banner arrives after the animation.
+        q = self.last_quality
+        if q < 0.4:
+            sound_choice = random.choice(['single', 'foul'])
+        elif q < 0.7:
+            sound_choice = random.choice(['single', 'double'])
+        else:
+            sound_choice = random.choice(['double', 'triple'])
+        self.sound_manager.play(sound_choice)
     
     def get_homerun_text(self):
         return self.ishomerun

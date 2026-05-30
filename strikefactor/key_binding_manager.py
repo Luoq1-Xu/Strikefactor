@@ -2,6 +2,7 @@ import pygame
 import json
 from enum import Enum
 from config import get_path
+from utils.io import atomic_write_json
 from typing import Dict, Callable, Optional, Set
 
 class KeyAction(Enum):
@@ -48,16 +49,16 @@ class KeyBindingManager:
                     if key not in bindings:
                         bindings[key] = value
                 return bindings
-        except (json.JSONDecodeError, FileNotFoundError):
+        except (json.JSONDecodeError, FileNotFoundError) as e:
+            if isinstance(e, json.JSONDecodeError):
+                print(f"Warning: key bindings file {self.settings_file} is corrupt "
+                      f"({e}); falling back to defaults.")
             return self.default_bindings.copy()
 
     def save_bindings(self):
-        """Save current key bindings to file."""
-        try:
-            with open(self.settings_file, 'w') as f:
-                json.dump(self.current_bindings, f, indent=2)
-        except Exception as e:
-            print(f"Failed to save key bindings: {e}")
+        """Save current key bindings to file (atomically, so a mid-write crash
+        can't truncate the file and silently reset all bindings)."""
+        atomic_write_json(self.settings_file, self.current_bindings)
 
     def bind_key(self, action: KeyAction, key_code: int):
         """Bind a key to an action."""

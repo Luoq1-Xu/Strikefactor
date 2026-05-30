@@ -2,6 +2,7 @@ import json
 import os
 from enum import Enum
 from config import get_path
+from utils.io import atomic_write_json
 
 class DifficultyLevel(Enum):
     ROOKIE = "rookie"
@@ -50,17 +51,16 @@ class SettingsManager:
                 return settings
             else:
                 return self.default_settings.copy()
-        except (json.JSONDecodeError, FileNotFoundError):
+        except (json.JSONDecodeError, FileNotFoundError) as e:
+            if isinstance(e, json.JSONDecodeError):
+                print(f"Warning: settings file {self.settings_file} is corrupt "
+                      f"({e}); falling back to defaults.")
             return self.default_settings.copy()
 
     def save_settings(self):
-        """Save current settings to file."""
-        try:
-            os.makedirs(os.path.dirname(self.settings_file), exist_ok=True)
-            with open(self.settings_file, 'w') as f:
-                json.dump(self.current_settings, f, indent=2)
-        except Exception as e:
-            print(f"Failed to save settings: {e}")
+        """Save current settings to file (atomically, so a mid-write crash
+        can't truncate the file and silently reset all preferences)."""
+        atomic_write_json(self.settings_file, self.current_settings)
 
     def get_setting(self, key):
         """Get a specific setting value."""

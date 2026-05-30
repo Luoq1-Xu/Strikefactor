@@ -196,7 +196,7 @@ class GameStats:
         self.outcome_value = {
             'strike': 0.5, 'ball': -0.25, 'foul': 0.3, 'strikeout': 2, 'walk': -1,
             'SINGLE': -1.5, 'DOUBLE': -2, 'TRIPLE': -2.5, 'HOME RUN': -3,
-            'FLYOUT': 1.5, 'GROUNDOUT': 1.5
+            'FLYOUT': 1.5, 'GROUNDOUT': 1.5, 'LINEOUT': 1.5
         }
         
     def reset_game_stats(self):

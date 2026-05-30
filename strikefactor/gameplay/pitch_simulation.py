@@ -187,7 +187,7 @@ class PitchSimulation:
 
         if elapsed_time >= 10 and current_time - self.starttime > self.windup or (current_time - self.starttime > self.windup and not self.pitch_results_done):
             self.last_time = current_time
-            if current_time > self.starttime + self.traveltime + self.windup and hasattr(self, 'outcome') and self.outcome in ['FLYOUT', 'GROUNDOUT']:
+            if current_time > self.starttime + self.traveltime + self.windup and hasattr(self, 'outcome') and self.outcome in ['FLYOUT', 'GROUNDOUT', 'LINEOUT']:
                 entry = [self.game.ball[0], self.game.ball[1], self.game.fourseamballsize, (198, 169, 251), "out"]  # Purple for outs
             elif current_time > self.starttime + self.traveltime + self.windup and self.is_hit:
                 entry = [self.game.ball[0], self.game.ball[1], self.game.fourseamballsize, (71, 204, 252), "hit"]
@@ -484,7 +484,7 @@ class PitchSimulation:
         score_before = getattr(self, '_pending_hit_score_before', 0)
         pitches_thrown = getattr(self, '_pending_hit_pitchnumber', 0)
 
-        is_out = classified in ("FLYOUT", "GROUNDOUT")
+        is_out = classified in ("FLYOUT", "GROUNDOUT", "LINEOUT")
         if is_out:
             self.is_hit = False
             self.game.currentouts += 1
@@ -945,7 +945,7 @@ class PitchSimulation:
             score_diff=self.game.scoreKeeper.get_score(),
         )
         self.game.current_pitcher.get_ai().update(self.previous_state, self.game.pitch_chosen,
-                                                 new_state, self.game.outcome_value[self.outcome])
+                                                 new_state, self.game.outcome_value.get(self.outcome, 0))
         self.game.current_state = new_state
         self.game.pitch_trajectories.append(self.game.last_pitch_information)
         self.game.pitches_display.append((self.game.ball[0], self.game.ball[1]))

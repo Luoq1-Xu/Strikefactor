@@ -5,10 +5,16 @@ AI_VERSION = 2
 
 class ERAI():
 
-    def __init__(self, actions: list, alpha=0.5, epsilon=0.1):
+    # Discount factor for future reward. Defined at class level so instances
+    # unpickled from models trained before gamma existed fall back to this
+    # value instead of raising AttributeError in update_q_value().
+    gamma = 0.9
+
+    def __init__(self, actions: list, alpha=0.5, epsilon=0.1, gamma=0.9):
         """
         Initialize AI with an empty Q-learning dictionary,
-        an alpha (learning) rate, and an epsilon rate.
+        an alpha (learning) rate, an epsilon rate, and a gamma
+        (discount) rate.
 
         The Q-learning dictionary maps `(state, action)`
         pairs to a Q-value (a number).
@@ -18,6 +24,7 @@ class ERAI():
         self.q = dict()
         self.alpha = alpha
         self.epsilon = epsilon
+        self.gamma = gamma
         self.actions = actions
         self.version = AI_VERSION
 
@@ -79,9 +86,12 @@ class ERAI():
 
         where `old value estimate` is the previous Q-value,
         `alpha` is the learning rate, and `new value estimate`
-        is the sum of the current reward and estimated future rewards.
+        is the sum of the current reward and the gamma-discounted
+        estimate of future rewards. Discounting future_rewards by
+        gamma (< 1) keeps the values from diverging in the continuing
+        per-pitch update loop.
         """
-        self.q[(tuple(state), action)] = old_q + (self.alpha * (reward + future_rewards - old_q))
+        self.q[(tuple(state), action)] = old_q + (self.alpha * (reward + self.gamma * future_rewards - old_q))
 
     def best_future_reward(self, state):
         """
