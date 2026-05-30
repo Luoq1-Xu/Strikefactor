@@ -1567,6 +1567,10 @@ class Game:
                     # while a challenge overlay is on screen.
                     self.abs_overlay.dismiss()
                     pygame.event.post(event)
+                elif event.type in (pygame.VIDEORESIZE, pygame.WINDOWRESIZED):
+                    self._update_scaling()
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
+                    self.toggle_fullscreen()
                 elif (event.type == pygame.KEYDOWN
                       and self.abs_overlay.is_waiting_for_dismiss()
                       and event.key in (pygame.K_SPACE, pygame.K_RETURN,

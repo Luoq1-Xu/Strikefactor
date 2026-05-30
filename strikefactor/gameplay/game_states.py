@@ -1289,8 +1289,15 @@ class GameDayTransitionState(GameState):
         pass
 
     def _save_result_once(self):
-        """Save game result exactly once when entering FINAL phase."""
+        """Save game result exactly once when entering FINAL phase.
+
+        Called from several call sites; gm._result_saved is the authoritative
+        per-game flag (reset in GameDayManager.__init__), so honor it here to
+        guarantee the DB close and profile save also run only once.
+        """
         gm = self.game.gameday_manager
+        if gm._result_saved:
+            return
 
         # Grab the open pitch-DB ids BEFORE end_game closes them so we can
         # write them into gameday_history.json as foreign keys.
@@ -1302,7 +1309,12 @@ class GameDayTransitionState(GameState):
         gm.save_game_result(game_id=game_id, session_id=session_id)
 
         # Close the pitch-DB games row with the final score and result.
-        result_str = "WIN" if gm.player_score > gm.opponent_score else "LOSS"
+        if gm.player_score > gm.opponent_score:
+            result_str = "WIN"
+        elif gm.player_score < gm.opponent_score:
+            result_str = "LOSS"
+        else:
+            result_str = "TIE"
         self.game._db_end_game_if_open(
             player_score=gm.player_score,
             opponent_score=gm.opponent_score,
