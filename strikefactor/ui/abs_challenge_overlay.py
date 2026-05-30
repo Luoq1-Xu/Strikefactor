@@ -457,8 +457,8 @@ class ABSChallengeOverlay:
         zx, zy, zw, zh = ABS_ZONE
         sx = zone_rect.width / zw
         sy = zone_rect.height / zh
-        if self._trajectory:
-            entry = self._trajectory[-1]
+        entry = self._trajectory[-1] if self._trajectory else None
+        if entry and len(entry) >= 2:
             gx, gy = entry[0], entry[1]
         else:
             gx, gy = self._final_ball_xy
@@ -478,6 +478,8 @@ class ABSChallengeOverlay:
         sx = zone_rect.width / zw
         sy = zone_rect.height / zh
         entry = self._trajectory[cutoff - 1]
+        if not entry or len(entry) < 2:
+            return self._scene_pos_for_final(zone_rect)
         return (zone_rect.centerx + (entry[0] - zx) * sx,
                 zone_rect.centery + (entry[1] - zy) * sy)
 

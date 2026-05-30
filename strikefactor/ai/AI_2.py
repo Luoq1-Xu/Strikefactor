@@ -135,6 +135,10 @@ class ERAI():
         actions = self.actions
         action_value = {}
 
+        # Normalize the state key the same way get_q_value/update do, so a
+        # list state can't silently miss every Q-entry (or raise on hashing).
+        state = tuple(state)
+
         # Base Q-values
         for action in actions:
             if (state, action) in self.q:

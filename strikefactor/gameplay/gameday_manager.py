@@ -47,8 +47,12 @@ PITCHER_ATTRS = _load_pitcher_attributes()
 
 
 def get_pitcher_attrs(name: str) -> dict:
-    """Look up attributes for a pitcher, falling back to a neutral default."""
-    return PITCHER_ATTRS.get(name, NEUTRAL_ATTRS)
+    """Look up attributes for a pitcher, falling back to a neutral default.
+
+    Returns a fresh copy of the neutral default so a caller mutating the
+    result can't corrupt NEUTRAL_ATTRS for every other attr-less pitcher.
+    """
+    return PITCHER_ATTRS.get(name, dict(NEUTRAL_ATTRS))
 
 
 class GameEvent:
@@ -911,7 +915,12 @@ class GameDayManager:
             return
         self._result_saved = True
 
-        result_str = "WIN" if self.player_score > self.opponent_score else "LOSS"
+        if self.player_score > self.opponent_score:
+            result_str = "WIN"
+        elif self.player_score < self.opponent_score:
+            result_str = "LOSS"
+        else:
+            result_str = "TIE"
         result = {
             'date': datetime.now().isoformat(),
             'game_id': game_id,

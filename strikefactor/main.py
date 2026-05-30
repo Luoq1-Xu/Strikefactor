@@ -1562,7 +1562,11 @@ class Game:
 
             for event in pygame.event.get():
                 if event.type == pygame.QUIT:
+                    # Close the overlay AND re-post the quit so the main loop
+                    # actually exits — otherwise the window can't be closed
+                    # while a challenge overlay is on screen.
                     self.abs_overlay.dismiss()
+                    pygame.event.post(event)
                 elif (event.type == pygame.KEYDOWN
                       and self.abs_overlay.is_waiting_for_dismiss()
                       and event.key in (pygame.K_SPACE, pygame.K_RETURN,

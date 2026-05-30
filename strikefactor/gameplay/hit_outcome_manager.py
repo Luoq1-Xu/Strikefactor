@@ -100,9 +100,12 @@ class HitOutcomeManager:
         # canonical record of what kind of contact was made.
         self.last_batted_ball_type = None
 
-        # Right-handed batter's hand position
-        # Used to determine the contact zone for the bat
+        # Batter hand/pivot position used to angle the contact zone.
+        # The left-handed pivot is the right-handed one mirrored across the
+        # plate center (x=630, the strike-zone center), so a LHB's contact
+        # zone is angled symmetrically rather than reusing the RHB pivot.
         self.rhpos = (490, 453)
+        self.lhpos = (770, 453)
 
     def _compute_contact_quality(self, swing_location_y, ball_location_y, timing_diff):
         """Compute a continuous contact quality score from 0.0 (terrible) to 1.0 (perfect).
@@ -297,7 +300,8 @@ class HitOutcomeManager:
     # Check for contact based on mouse cursor position when self.ball impacts bat
     def get_ball_to_bat_contact_outcome(self, batpos, ballpos, swing_type, ballsize=11, batter_handedness='R'):
         x = 1 if batter_handedness == "R" else -1
-        angle = math.atan2(batpos[1] - self.rhpos[1], batpos[0] - self.rhpos[0])
+        pivot = self.rhpos if batter_handedness == "R" else self.lhpos
+        angle = math.atan2(batpos[1] - pivot[1], batpos[0] - pivot[0])
 
         # Get difficulty multipliers
         multipliers = self._get_difficulty_multipliers()

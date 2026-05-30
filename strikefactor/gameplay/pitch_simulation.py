@@ -1,5 +1,6 @@
 from typing import TYPE_CHECKING
 
+import random
 import pygame
 import pygame.gfxdraw
 import pandas as pd
@@ -41,9 +42,8 @@ class PitchSimulation:
         effective_pfx_z = pfx_z * move_mult
 
         # Mistake pitch: drift target toward center zone
-        import random as _rng
         self.mistake_pitch = False
-        if mistake_chance > 0 and _rng.random() < mistake_chance:
+        if mistake_chance > 0 and random.random() < mistake_chance:
             # Center zone in feet: roughly x=0, z=2.8 (mid-zone height)
             self.target_x_ft = self.target_x_ft * 0.3  # Pull 70% toward center
             self.target_z_ft = self.target_z_ft * 0.3 + 2.8 * 0.7
