@@ -261,6 +261,14 @@ class PitchSimulation:
 
     def _handle_swing_input(self, event, current_time):
         """Handle swing input from player."""
+        # Only the first contact/power keypress of a pitch registers a swing.
+        # Later keypresses (the flight phase keeps draining events until
+        # contact) must be ignored, otherwise they re-stamp swing_starttime /
+        # contact_time and shift the contact window of an already-committed
+        # swing, corrupting its recorded timing and quality.
+        if self.game.swing_started != 0 or event.key not in (pygame.K_w, pygame.K_e):
+            return
+
         mousepos = self.game.get_mouse_pos()
         self.swing_starttime = pygame.time.get_ticks()
         self.contact_time = self.swing_starttime + 150
@@ -272,20 +280,19 @@ class PitchSimulation:
             (self.swing_starttime + 150) - (self.starttime + self.windup + self.traveltime)
         )
 
-        if event.key == pygame.K_w and self.game.swing_started == 0:
+        if event.key == pygame.K_w:
             # Contact swing
             self.swing_type = 1
             self.on_time = self.game.hit_outcome_manager.contact_timing_quality(
                 self.swing_starttime, self.starttime, self.traveltime, self.windup
             )
-            self.game.swing_started = 1 if mousepos[1] > 500 else 2
-        elif event.key == pygame.K_e and self.game.swing_started == 0:
+        else:  # pygame.K_e
             # Power swing
             self.swing_type = 2
             self.on_time = self.game.hit_outcome_manager.power_timing_quality(
                 self.swing_starttime, self.starttime, self.traveltime, self.windup
             )
-            self.game.swing_started = 1 if mousepos[1] > 500 else 2
+        self.game.swing_started = 1 if mousepos[1] > 500 else 2
 
     def _is_contact_time(self, current_time):
         """Check if it's contact evaluation time."""
@@ -372,23 +379,23 @@ class PitchSimulation:
         # Get swing and ball positions for more realistic outcomes
         mousepos = self.game.get_mouse_pos()
         swing_y = mousepos[1]
+        ball_x = self.game.ball[0]
         ball_y = self.game.ball[1]
+        batter_handedness = self.game.batter.get_handedness()
 
         # Calculate timing difference for more realistic outcomes
         timing_diff = abs((self.swing_starttime + 150) - (self.starttime + self.windup + self.traveltime))
 
         if self.swing_type == 1:
             hit_string = self.game.hit_outcome_manager.get_contact_hit_outcome(
-                swing_location_y=swing_y, ball_location_y=ball_y, timing_diff=timing_diff
+                swing_location_y=swing_y, ball_location_y=ball_y, timing_diff=timing_diff,
+                ball_location_x=ball_x, batter_handedness=batter_handedness,
             )
         elif self.swing_type == 2:
             hit_string = self.game.hit_outcome_manager.get_power_hit_outcome(
-                swing_location_y=swing_y, ball_location_y=ball_y, timing_diff=timing_diff
+                swing_location_y=swing_y, ball_location_y=ball_y, timing_diff=timing_diff,
+                ball_location_x=ball_x, batter_handedness=batter_handedness,
             )
-
-        # DEBUG: Log hit_string from hit_outcome_manager
-        bbt = self.game.hit_outcome_manager.last_batted_ball_type
-        print(f">>> _handle_successful_hit: hit_string='{hit_string}', batted_ball='{bbt}', swing_type={self.swing_type}", flush=True)
 
         # Snapshot contact metrics for the hit animation (shape + HR distance).
         contact_quality = self.game.hit_outcome_manager.last_quality
@@ -399,56 +406,35 @@ class PitchSimulation:
         self.contact_quality = contact_quality
         self.vertical_offset_in = contact_vertical_offset
 
-        # Handle different outcomes
-        if hit_string in ["FLYOUT", "GROUNDOUT"]:
-            self._handle_out_result(hit_string, contact_vertical_offset, contact_quality)
-        else:
-            self._handle_hit_result(hit_string, score_before, contact_vertical_offset, contact_quality)
+        # Unified contact result. HOME RUN is decided at contact (the ball
+        # is aimed past the wall); everything else is deferred to the
+        # animation, which resolves FLYOUT / GROUNDOUT / SINGLE / DOUBLE /
+        # TRIPLE from fielder routing + interception.
+        self._handle_contact_result(hit_string, score_before, contact_vertical_offset, contact_quality)
 
-    def _handle_out_result(self, out_type, vertical_offset=0.0, quality=0.0):
-        """Handle flyout or groundout results."""
-        self.is_hit = False  # This is an out, not a hit
-        self.game.currentouts += 1
-        self.outcome = out_type
+    def _handle_contact_result(self, hit_string, score_before=0, vertical_offset=0.0, quality=0.0):
+        """Unified ball-in-play path.
 
-        # Record at-bat (outs count as at-bats in baseball)
-        self.game.field_renderer.record_at_bat()
+        For HOME RUN, the outcome is fully known at contact (the ball
+        carries past the wall by definition) and the inline path advances
+        runners, records stats, and fires the banner once the HR animation
+        completes.
 
-        # Banner is deferred — fires once the hit animation finishes.
-        self._start_hit_animation(out_type, out_type, vertical_offset, quality)
-        self.game._display_pitch_results(out_type, self.pitchtype, self.speed_mph)
-        self.new_entry['isHit'] = out_type
-
-        # Record in gameday mode
-        if self.game.in_gameday_mode:
-            self.game.gameday_manager.record_player_at_bat(out_type, runs_scored=0, pitches_thrown=self.game.pitchnumber)
-
-        # Reset counts after out (similar to strikeout)
-        self.game.pitchnumber = 0
-        self.game.currentstrikes = 0
-        self.game.currentballs = 0
-
-    def _handle_hit_result(self, hit_string, score_before=0, vertical_offset=0.0, quality=0.0):
-        """Handle a successful hit result.
-
-        For HOME RUN, the hit_outcome_manager has already advanced runners
-        and the downstream effects (banner, stats, gameday record) fire
-        inline as before — the outcome is fully known at contact.
-
-        For "HIT" (the generic non-HR result), the SINGLE / DOUBLE / TRIPLE
-        classification is decided by the animation from how long the
-        fielder takes to retrieve the ball. We do the unconditional
-        bookkeeping here (at-bat, count reset) and stash the inputs needed
-        at finalize time; the rest is applied by _finalize_classified_hit
-        once HitAnimation.classified_outcome is set.
+        For IN_PLAY — the generic ball-in-play outcome — the final result
+        is whatever the animation resolves to: FLYOUT or GROUNDOUT if a
+        fielder intercepts; SINGLE/DOUBLE/TRIPLE if the ball gets past
+        them. We record the at-bat and reset counts here (those fire
+        regardless of resolution) and stash the inputs needed at finalize
+        time; the rest is applied by _finalize_batted_ball once
+        HitAnimation.classified_outcome is set.
         """
-        self.is_hit = True
-        self.game.hits += 1
-
-        # Record at-bat — fires at contact regardless of classification.
+        # At-bat is recorded unconditionally — every contact counts as an
+        # AB regardless of how it resolves.
         self.game.field_renderer.record_at_bat()
 
         if hit_string == "HOME RUN":
+            self.is_hit = True
+            self.game.hits += 1
             homerun_text = self.game.hit_outcome_manager.get_homerun_text()
             self.game.field_renderer.record_hit(
                 self.game.ball[0], self.game.ball[1], hit_type=hit_string
@@ -468,10 +454,10 @@ class PitchSimulation:
                 )
                 self._check_walkoff()
         else:
-            # HIT — defer scoring, banner, stats. Snapshot the things we
-            # need at finalize since pitchnumber and friends get reset
-            # below; runs_scored derives from score_before vs. the score
-            # AFTER apply_classified_outcome runs at finalize.
+            # IN_PLAY — defer everything that depends on the final outcome.
+            # is_hit / hits / currentouts are NOT touched here;
+            # _finalize_batted_ball sets them based on the animation's
+            # resolution.
             self._pending_hit_score_before = score_before
             self._pending_hit_pitchnumber = self.game.pitchnumber
             # Placeholder; replaced with the classified outcome at finalize.
@@ -479,40 +465,67 @@ class PitchSimulation:
             self.new_entry['isHit'] = hit_string
             self._start_hit_animation(hit_string, banner_text=None,
                                       vertical_offset=vertical_offset, quality=quality)
-            self.game._display_pitch_results("HIT", self.pitchtype, self.speed_mph)
+            self.game._display_pitch_results("IN PLAY", self.pitchtype, self.speed_mph)
 
-        # Reset counts after hit
+        # Reset pitch counts after contact (same as strikeout / walk).
         self.game.pitchnumber = 0
         self.game.currentstrikes = 0
         self.game.currentballs = 0
 
-    def _finalize_classified_hit(self):
-        """Apply deferred score / banner / stats once the animation has
-        classified a HIT into SINGLE / DOUBLE / TRIPLE based on retrieve
-        time. Wired as the on_complete callback for HIT animations.
+    def _finalize_batted_ball(self):
+        """Apply deferred state once the animation has classified the
+        contact into its final outcome — FLYOUT, GROUNDOUT, SINGLE,
+        DOUBLE, or TRIPLE. Wired as the on_complete callback for the
+        unified IN_PLAY animation.
         """
         # Safety fallback in case classification didn't run (animation
-        # ended without securing — shouldn't happen, but treat as SINGLE).
+        # ended without resolving — shouldn't happen, but treat as SINGLE).
         classified = getattr(self.hit_animation, 'classified_outcome', None) or "SINGLE"
         score_before = getattr(self, '_pending_hit_score_before', 0)
         pitches_thrown = getattr(self, '_pending_hit_pitchnumber', 0)
 
-        # Advance runners + score now that the type is known.
+        is_out = classified in ("FLYOUT", "GROUNDOUT")
+        if is_out:
+            self.is_hit = False
+            self.game.currentouts += 1
+        else:
+            self.is_hit = True
+            self.game.hits += 1
+
+        # Recolor the trail dot now that we know whether contact resolved
+        # as a hit or an out. _start_hit_animation appended a placeholder
+        # blue marker because resolution is deferred until the ball is
+        # fielded; track-mode keys off pitch[-1][3], so update it here.
+        # _finish_pitch later propagates this color to any in-flight entries
+        # sharing the same plate coordinates.
+        out_color = (119, 86, 179)
+        hit_color = (71, 204, 252)
+        new_trail_color = out_color if is_out else hit_color
+        if self.game.last_pitch_information:
+            last_entry = self.game.last_pitch_information[-1]
+            if len(last_entry) >= 5 and last_entry[4] == "hit":
+                last_entry[3] = new_trail_color
+
+        # Advance runners + score for hits (no-op for outs).
         self.game.hit_outcome_manager.apply_classified_outcome(classified)
 
-        # Stats and gameday record use the resolved type.
-        self.game.field_renderer.record_hit(
-            self.game.ball[0], self.game.ball[1], hit_type=classified
-        )
+        # Hit-location stats only record actual hits — outs don't contribute
+        # to the batting-zone heatmap.
+        if not is_out:
+            self.game.field_renderer.record_hit(
+                self.game.ball[0], self.game.ball[1], hit_type=classified
+            )
+
         if self.game.in_gameday_mode:
             runs_scored = self.game.scoreKeeper.get_score() - score_before
             self.game.gameday_manager.record_player_at_bat(
                 classified, runs_scored=runs_scored, pitches_thrown=pitches_thrown
             )
-            self._check_walkoff()
+            if not is_out:
+                self._check_walkoff()
 
         # No sound here — the contact sound already played at impact via
-        # play_hit_sound("HIT"), with selection driven by contact quality.
+        # play_hit_sound(), with selection driven by contact quality.
         # Playing again at the banner reveal would double-trigger the SFX.
 
         self.new_entry['isHit'] = classified
@@ -779,26 +792,27 @@ class PitchSimulation:
     def _start_hit_animation(self, outcome, banner_text, vertical_offset=0.0, quality=0.0):
         """Begin the post-contact animation; defers the outcome banner until it ends.
 
-        For HIT, the resolved classification isn't known until the animation
-        secures the ball, so on_complete routes through _finalize_classified_hit
-        which reads HitAnimation.classified_outcome and applies all deferred
-        effects. For everything else (HOME RUN, FLYOUT, GROUNDOUT) the
-        banner_text is fully known up front and the callback just shows it.
+        For IN_PLAY (the unified ball-in-play outcome), the resolved
+        classification isn't known until the animation fields the ball,
+        so on_complete routes through _finalize_batted_ball which reads
+        HitAnimation.classified_outcome and applies all deferred effects.
+        HOME RUN is fully known up front so its callback just shows the
+        banner.
         """
         from gameplay.hit_animation import HitAnimation
-        if outcome == "HIT":
-            on_complete = self._finalize_classified_hit
+        if outcome == "IN_PLAY":
+            on_complete = self._finalize_batted_ball
         else:
             on_complete = lambda: self.game.ui_manager.show_banner(banner_text)
 
         # Append a labeled trail entry now — once hit_animation owns the frame,
         # _update_pitch_trajectory stops running, so the contact-point marker
         # the track-mode visualizer keys off (entry[4]) would otherwise never
-        # be written and the ball would render grey.
-        if outcome in ("FLYOUT", "GROUNDOUT"):
-            trail_color, trail_label = (198, 169, 251), "out"
-        else:  # HIT or HOME RUN
-            trail_color, trail_label = (71, 204, 252), "hit"
+        # be written and the ball would render grey. We don't know yet
+        # whether this contact will resolve as a hit or out, so the marker
+        # uses the generic "in-play" hit color; the visualizer treats both
+        # the same.
+        trail_color, trail_label = (71, 204, 252), "hit"
         self.game.last_pitch_information.append([
             self.game.ball[0], self.game.ball[1],
             self.game.fourseamballsize, trail_color, trail_label,
@@ -811,6 +825,7 @@ class PitchSimulation:
             vertical_offset=vertical_offset,
             quality=quality,
             batted_ball_type=self.game.hit_outcome_manager.last_batted_ball_type,
+            horizontal_inside=self.game.hit_outcome_manager.last_horizontal_inside,
         )
 
     def _handle_hit_animation_phase(self, current_time, time_delta):

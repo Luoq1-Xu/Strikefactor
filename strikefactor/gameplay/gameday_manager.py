@@ -778,6 +778,13 @@ class GameDayManager:
                 and not self.is_top_inning
                 and not self.game_over
                 and self.player_score > self.opponent_score):
+            # Commit the walk-off half-inning's runs before ending the game.
+            # end_half_inning() won't run on a walk-off, so without this the
+            # persisted player_inning_scores would omit this inning and fail
+            # to sum to player_score. The not-game_over guard above keeps this
+            # idempotent if check_walkoff() is called again.
+            self.player_inning_scores.append(self._current_half_runs)
+            self._current_half_runs = 0
             self.game_over = True
             self.is_walkoff = True
             return True

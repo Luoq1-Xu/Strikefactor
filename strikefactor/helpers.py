@@ -103,21 +103,28 @@ class ScoreKeeper:
     def update_hit_event(self, hit_type):
         batter = Runner(hit_type)
         self.runners.append(batter)
-        basesFilled = ['white', 'white', 'white']
         scored = 0
+        # Advance every existing runner (the batter is already placed by
+        # Runner(hit_type)), tallying anyone who comes around to score.
         for runner in self.runners[:]:
             if runner != batter:
-                self.basesfilled[runner.base] = 0
                 runner.advance(hit_type)
             if runner.scored:
                 self.runners.remove(runner)
                 scored += 1
-            else:
-                basesFilled[runner.base - 1] = 'yellow'
-                self.basesfilled[runner.base] = runner
         self.score += scored
+        # Rebuild base occupancy from scratch from the surviving runners.
+        # Mutating basesfilled in place during the advance loop could clobber
+        # a runner just placed on a base that another runner is vacating
+        # (e.g. runners on 1st+2nd, batter singles), so the dict and the
+        # display list are both recomputed here from the post-advance state.
+        self.basesfilled = {1: 0, 2: 0, 3: 0}
+        basesFilled = ['white', 'white', 'white']
+        for runner in self.runners:
+            if 1 <= runner.base <= 3:
+                self.basesfilled[runner.base] = runner
+                basesFilled[runner.base - 1] = 'yellow'
         self.bases = basesFilled
-        self.basesfilled[batter.base] = batter
         return (basesFilled, scored)
 
     def updateScored(self):

@@ -68,6 +68,7 @@ class ModeSelectState(GameState):
         self.messages_finished = 0
         self.done = False
         self.running = True
+        self._message_pause_until = 0
 
     def exit(self):
         """Clean up mode select state."""
@@ -86,14 +87,18 @@ class ModeSelectState(GameState):
         elif self.counter >= self.game.speed * len(message):
             self.done = True
 
-        # Handle message progression
+        # Handle message progression (non-blocking 500ms pause between messages)
         if (self.active_message < len(self.messages) - 1) and self.done:
-            pygame.time.delay(500)
-            self.active_message += 1
-            self.done = False
-            self.textoffset += 100
-            self.counter = 0
-            self.messages_finished += 1
+            now = pygame.time.get_ticks()
+            if getattr(self, '_message_pause_until', 0) == 0:
+                self._message_pause_until = now + 500
+            elif now >= self._message_pause_until:
+                self.active_message += 1
+                self.done = False
+                self.textoffset += 100
+                self.counter = 0
+                self.messages_finished += 1
+                self._message_pause_until = 0
 
     def handle_event(self, event):
         """Handle mode select events."""
@@ -162,6 +167,7 @@ class MenuState(GameState):
             self.messages_finished = 0
             self.done = False
             self.running = True
+            self._message_pause_until = 0
         
     def exit(self):
         """Clean up menu state."""
@@ -182,14 +188,18 @@ class MenuState(GameState):
             elif self.counter >= self.game.speed * len(message):
                 self.done = True
 
-            # Handle message progression
+            # Handle message progression (non-blocking 500ms pause between messages)
             if (self.active_message < len(self.messages) - 1) and self.done:
-                pygame.time.delay(500)
-                self.active_message += 1
-                self.done = False
-                self.textoffset += 100
-                self.counter = 0
-                self.messages_finished += 1
+                now = pygame.time.get_ticks()
+                if getattr(self, '_message_pause_until', 0) == 0:
+                    self._message_pause_until = now + 500
+                elif now >= self._message_pause_until:
+                    self.active_message += 1
+                    self.done = False
+                    self.textoffset += 100
+                    self.counter = 0
+                    self.messages_finished += 1
+                    self._message_pause_until = 0
             
     def handle_event(self, event):
         """Handle menu events."""
@@ -386,6 +396,7 @@ class SummaryState(GameState):
         self.messages_finished = 0
         self.done = False
         self.running = True
+        self._message_pause_until = 0
         
     def exit(self):
         """Clean up summary state."""
@@ -446,14 +457,18 @@ class SummaryState(GameState):
         elif self.counter >= self.game.speed * len(message):
             self.done = True
             
-        # Handle message progression
+        # Handle message progression (non-blocking 500ms pause between messages)
         if (self.active_message < len(self.messages) - 1) and self.done:
-            pygame.time.delay(500)
-            self.active_message += 1
-            self.done = False
-            self.textoffset += 70
-            self.counter = 0
-            self.messages_finished += 1
+            now = pygame.time.get_ticks()
+            if getattr(self, '_message_pause_until', 0) == 0:
+                self._message_pause_until = now + 500
+            elif now >= self._message_pause_until:
+                self.active_message += 1
+                self.done = False
+                self.textoffset += 70
+                self.counter = 0
+                self.messages_finished += 1
+                self._message_pause_until = 0
             
     def handle_event(self, event):
         """Handle summary events."""
@@ -869,6 +884,7 @@ class SandboxMenuState(GameState):
         self.messages_finished = 0
         self.done = False
         self.running = True
+        self._message_pause_until = 0
 
     def exit(self):
         """Clean up sandbox menu state."""
@@ -887,14 +903,18 @@ class SandboxMenuState(GameState):
         elif self.counter >= self.game.speed * len(message):
             self.done = True
 
-        # Handle message progression
+        # Handle message progression (non-blocking 500ms pause between messages)
         if (self.active_message < len(self.messages) - 1) and self.done:
-            pygame.time.delay(500)
-            self.active_message += 1
-            self.done = False
-            self.textoffset += 100
-            self.counter = 0
-            self.messages_finished += 1
+            now = pygame.time.get_ticks()
+            if getattr(self, '_message_pause_until', 0) == 0:
+                self._message_pause_until = now + 500
+            elif now >= self._message_pause_until:
+                self.active_message += 1
+                self.done = False
+                self.textoffset += 100
+                self.counter = 0
+                self.messages_finished += 1
+                self._message_pause_until = 0
 
     def handle_event(self, event):
         """Handle sandbox menu events."""
