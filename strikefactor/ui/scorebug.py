@@ -1,6 +1,8 @@
 import pygame
 import os
 
+from config import ABS_PINK
+
 
 class Scorebug:
     """TV-style scorebug overlay rendered with pygame primitives."""
@@ -23,6 +25,7 @@ class Scorebug:
     BASE_OFF_COLOR = (50, 50, 50)
     DIVIDER_COLOR = (90, 90, 90)
     FLASH_COLOR = (30, 30, 30, 220)
+    FLASH_DURATION_MS = 500
 
     # Section X positions
     BASES_X = 12
@@ -47,7 +50,9 @@ class Scorebug:
         self.last_pitch_type = ""
         self.last_pitch_speed = 0.0
         self.last_pitch_outcome = ""
-        self._flash_timer = 0
+        # Flash highlight is time-based (ms) so its duration is independent of
+        # the configurable display FPS.
+        self._flash_until = 0
 
         # Pre-render background surface
         self._bg_surface = pygame.Surface((self.BAR_WIDTH, self.BAR_HEIGHT), pygame.SRCALPHA)
@@ -62,7 +67,7 @@ class Scorebug:
         self.last_pitch_type = pitch_type
         self.last_pitch_speed = speed_mph
         self.last_pitch_outcome = outcome
-        self._flash_timer = 30  # ~0.5s at 60fps
+        self._flash_until = pygame.time.get_ticks() + self.FLASH_DURATION_MS
 
     def draw(self, screen):
         """Draw the scorebug overlay."""
@@ -92,10 +97,6 @@ class Scorebug:
         self._draw_triple_slash(screen, y_center)
         self._draw_divider(screen, 1002, y)
         self._draw_stats(screen, y_center)
-
-        # Tick flash timer
-        if self._flash_timer > 0:
-            self._flash_timer -= 1
 
     def _draw_divider(self, screen, x, y):
         """Draw a thin vertical divider."""
@@ -216,8 +217,6 @@ class Scorebug:
         else:
             side = "home"
 
-        from config import ABS_PINK
-
         label = self.label_font.render("ABS", True, self.LABEL_COLOR)
         screen.blit(label, (x, y_center - 17))
 
@@ -250,9 +249,10 @@ class Scorebug:
         """Draw last pitch type + speed + outcome with brief highlight."""
         x = self.LAST_PITCH_X
 
-        # Flash highlight background
-        if self._flash_timer > 0:
-            alpha = int(220 * (self._flash_timer / 30))
+        # Flash highlight background (fades out over FLASH_DURATION_MS)
+        remaining = self._flash_until - pygame.time.get_ticks()
+        if remaining > 0:
+            alpha = int(220 * (remaining / self.FLASH_DURATION_MS))
             flash = pygame.Surface((245, self.BAR_HEIGHT), pygame.SRCALPHA)
             flash.fill((60, 60, 60, alpha))
             screen.blit(flash, (x - 5, y))
@@ -288,7 +288,9 @@ class Scorebug:
 
         runs = self.game.scoreKeeper.get_score()
         ops = self.game.field_renderer.get_ops()
-        ops_str = f"{ops:.3f}" if ops < 1 else f"{ops:.3f}"
+        # Drop the leading zero for sub-1.000 OPS (baseball convention),
+        # keep it for 1.000+.
+        ops_str = f"{ops:.3f}"[1:] if ops < 1 else f"{ops:.3f}"
 
         stats_text = (
             f"R:{runs}  "

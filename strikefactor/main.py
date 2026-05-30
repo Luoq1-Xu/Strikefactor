@@ -1078,6 +1078,7 @@ class Game:
         state_name = self.state_manager.current_state_name
         visibility_map = {
             'gameplay': 'in_game',
+            'sandbox_gameplay': 'sandbox_gameplay',
             'view_pitches': 'view_pitches',
             'visualization': 'visualise',
             'inning_end': 'inning_end',
@@ -1205,13 +1206,14 @@ class Game:
             self.ui_manager.set_ui_visibility(False)
 
     def quick_pitch(self):
-        """Quick pitch action via key binding."""
+        """Quick pitch action via key binding (Arcade/GameDay + Sandbox)."""
         if not hasattr(self, 'state_manager'):
             return
         state = self.state_manager.current_state
-        if state is None or state.__class__.__name__ != 'GameplayState':
+        if state is None or state.__class__.__name__ not in (
+                'GameplayState', 'SandboxGameplayState'):
             return
-        if state.pitch_simulation is None:
+        if getattr(state, 'pitch_simulation', None) is None:
             state._initiate_pitch()
 
     def complete_key_rebind(self, new_key):
@@ -1660,8 +1662,13 @@ class Game:
                     # Check if we're waiting for a key rebind
                     if hasattr(self, 'key_rebind_action') and self.key_rebind_action is not None:
                         self.complete_key_rebind(event.key)
+                        continue
                     elif self.state_manager.current_state_name in _hotkey_states:
-                        self.key_binding_manager.handle_key_down(event.key)
+                        # If a bound hotkey consumed the key (it may also have
+                        # changed state), don't also forward the same keypress
+                        # to the now-current state's handle_event.
+                        if self.key_binding_manager.handle_key_down(event.key):
+                            continue
                 elif event.type == pygame.KEYUP:
                     if self.state_manager.current_state_name in _hotkey_states:
                         self.key_binding_manager.handle_key_up(event.key)

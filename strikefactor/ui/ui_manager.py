@@ -634,6 +634,7 @@ class UIManager:
             self.view_window.hide()
             self.scouting_panel.hide()
             self.box_score_panel.hide()
+            self.lap_log_panel.hide()
             return
 
         # Hide all buttons initially

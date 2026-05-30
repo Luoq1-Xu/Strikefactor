@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 from datetime import datetime
+from utils.io import atomic_write_json
 
 
 # Bucket key sentinel used until the Game tells us which (mode, difficulty)
@@ -61,6 +62,11 @@ class FieldRenderer:
         self.strikezone = pygame.Rect(strikezone_rect)
         self.strikezonedrawn = 1  # 1: Hidden, 2: Outline only, 3: Grid, 4: Heatmap, 5: Heatmap with Averages
         self.show_bases = True  # Disabled in minimal HUD mode (the corner widget shows them).
+
+        # Heatmap fonts are reused every frame the heatmap is active; build
+        # them once here rather than reallocating a Font object per frame.
+        self._heatmap_header_font = pygame.font.Font(None, 20)
+        self._heatmap_avg_font = pygame.font.Font(None, 24)
 
         # Bucketed batting aggregates: { "mode|difficulty": fresh_bucket() }
         self._buckets: dict = {}
@@ -307,17 +313,11 @@ class FieldRenderer:
             y: Y-coordinate of the hit
             hit_type: Type of hit - can be 'SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN' or numeric 1-4
         """
-        print(f">>> record_hit CALLED: x={x:.1f}, y={y:.1f}, hit_type='{hit_type}', bucket={self._active_key}", flush=True)
-
         segment = self.get_zone_segment(x, y)
-        print(f"    segment={segment}", flush=True)
 
         # Record heatmap data only if within strike zone (segment 0-8)
         if 0 <= segment <= 8:
             self.heatmap_data[segment] += 1
-            print(f"    Heatmap updated for segment {segment}", flush=True)
-        else:
-            print(f"    Hit outside strike zone - not added to heatmap", flush=True)
 
         # ALWAYS record the hit for overall batting statistics (regardless of zone)
         self.total_hits += 1
@@ -325,26 +325,16 @@ class FieldRenderer:
         # Track hit type breakdown
         if hit_type == 'SINGLE' or hit_type == 1:
             self.total_singles += 1
-            print(f"✓ SINGLE recorded (total: {self.total_singles})", flush=True)
         elif hit_type == 'DOUBLE' or hit_type == 2:
             self.total_doubles += 1
-            print(f"✓ DOUBLE recorded (total: {self.total_doubles})", flush=True)
         elif hit_type == 'TRIPLE' or hit_type == 3:
             self.total_triples += 1
-            print(f"✓ TRIPLE recorded (total: {self.total_triples})", flush=True)
         elif hit_type == 'HOME RUN' or hit_type == 4:
             self.total_home_runs += 1
-            print(f"✓ HOME RUN recorded (total: {self.total_home_runs})", flush=True)
-        else:
-            # Debug: Log unrecognized hit types
-            print(f"⚠ Unknown hit_type: '{hit_type}' (type: {type(hit_type).__name__})", flush=True)
 
-        # Debug: Print current triple slash after each hit
-        print(f"  Triple Slash: {self.get_triple_slash_line()} | AB:{self.total_at_bats} H:{self.total_hits} (1B:{self.total_singles} 2B:{self.total_doubles} 3B:{self.total_triples} HR:{self.total_home_runs})", flush=True)
-
-        # Auto-save data after each hit
+        # Persist after each hit. Hits are infrequent (a few per game), so the
+        # synchronous write is not a per-frame cost.
         self.save_data()
-        print(f"    ✓ Data saved successfully", flush=True)
 
     def record_attempt(self, x, y):
         """Record an attempt (swing) at the given position."""
@@ -364,8 +354,6 @@ class FieldRenderer:
         Note: Walks do NOT count as at-bats in baseball.
         """
         self.total_walks += 1
-        print(f"✓ WALK recorded (total: {self.total_walks})")
-        print(f"  OBP now includes walk: {self.get_triple_slash_line()}")
 
     def record_at_bat(self):
         """
@@ -467,9 +455,8 @@ class FieldRenderer:
         pygame.draw.rect(self.screen, "white", self.strikezone, 2)
 
         # Add a visual indicator that heatmap is active, including bucket label.
-        font = pygame.font.Font(None, 20)
         label = self._heatmap_label()
-        text = font.render(f"HEATMAP — {label}", True, (255, 255, 255))
+        text = self._heatmap_header_font.render(f"HEATMAP — {label}", True, (255, 255, 255))
         self.screen.blit(text, (self.strikezone.x, self.strikezone.y - 26))
 
     def _draw_heatmap_with_averages(self):
@@ -493,8 +480,8 @@ class FieldRenderer:
             (8, 2, 2),      # bot_right
         ]
 
-        # Font for displaying averages
-        font = pygame.font.Font(None, 24)
+        # Font for displaying averages (cached in __init__)
+        font = self._heatmap_avg_font
         view = self._render_view()
 
         for segment_id, col, row in segments:
@@ -540,9 +527,8 @@ class FieldRenderer:
 
         pygame.draw.rect(self.screen, "white", self.strikezone, 2)
 
-        font = pygame.font.Font(None, 20)
         label = self._heatmap_label()
-        text = font.render(f"HEATMAP + AVG — {label}", True, (255, 255, 255))
+        text = self._heatmap_header_font.render(f"HEATMAP + AVG — {label}", True, (255, 255, 255))
         self.screen.blit(text, (self.strikezone.x, self.strikezone.y - 26))
 
     def _heatmap_label(self) -> str:
@@ -565,24 +551,19 @@ class FieldRenderer:
         # Refresh instance attrs from the cleared bucket.
         self._bind_instance_to_active()
         self.save_data()
-        print(f"✓ Bucket {self._active_key} stats reset")
 
     # ----------------- Persistence -----------------
 
     def save_data(self):
-        """Save bucketed batting statistics to file."""
-        try:
-            self._sync_ints_to_bucket()
-            os.makedirs(os.path.dirname(self.data_file), exist_ok=True)
-            data = {
-                'version': self.DATA_VERSION,
-                'last_updated': datetime.now().isoformat(),
-                'buckets': self._buckets,
-            }
-            with open(self.data_file, 'w') as f:
-                json.dump(data, f, indent=2)
-        except Exception as e:
-            print(f"✗ Error saving batting statistics: {e}")
+        """Save bucketed batting statistics to file (atomically, so a crash
+        mid-write can't truncate the file and lose all batting history)."""
+        self._sync_ints_to_bucket()
+        data = {
+            'version': self.DATA_VERSION,
+            'last_updated': datetime.now().isoformat(),
+            'buckets': self._buckets,
+        }
+        atomic_write_json(self.data_file, data)
 
     def load_data(self):
         """Load bucketed stats. Migrate v1 (flat) to v2 by archiving + wiping."""
@@ -823,14 +804,8 @@ class FieldRenderer:
             return {'version': '1.1', 'laps': []}
 
     def save_lap_history(self, lap_history: dict):
-        """Save lap history to file."""
-        try:
-            os.makedirs(os.path.dirname(self.lap_history_file), exist_ok=True)
-            with open(self.lap_history_file, 'w') as f:
-                json.dump(lap_history, f, indent=2)
-            print(f"✓ Lap history saved to {self.lap_history_file}")
-        except Exception as e:
-            print(f"✗ Error saving lap history: {e}")
+        """Save lap history to file (atomically)."""
+        atomic_write_json(self.lap_history_file, lap_history)
 
     def get_lap_history(self) -> list:
         """Get all lap entries."""

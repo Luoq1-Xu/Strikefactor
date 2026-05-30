@@ -786,6 +786,39 @@ def _pick_shape(outcome, vertical_offset, batted_ball_type=None):
     return weights[-1][0]
 
 
+_WALL_GEOMETRY = None
+
+
+def _wall_geometry():
+    """Compute and cache the static outfield-wall geometry.
+
+    Every point here is anchored to module constants (HOME and the WALL_*
+    semi-axes), so it never changes frame-to-frame. Recomputing the ~97
+    sin/cos samples and the point lists every frame was pure waste; build
+    them once and reuse the same lists (pygame.draw does not mutate them).
+    """
+    global _WALL_GEOMETRY
+    if _WALL_GEOMETRY is not None:
+        return _WALL_GEOMETRY
+    hx, hy = HOME
+    foul_t = math.atan2(WALL_FT_X, WALL_FT_Y)
+    samples = 96
+    wall_top_pts = []
+    wall_bot_pts = []
+    for i in range(samples + 1):
+        t = foul_t + (math.pi - 2 * foul_t) * i / samples
+        x = hx + WALL_SEMI_X * math.cos(t)
+        y_top = hy - WALL_SEMI_Y * math.sin(t)
+        wall_top_pts.append((x, y_top))
+        wall_bot_pts.append((x, y_top + WALL_FACE_HEIGHT_PX))
+    _WALL_GEOMETRY = {
+        'top': wall_top_pts,
+        'bot': wall_bot_pts,
+        'face_poly': wall_top_pts + list(reversed(wall_bot_pts)),
+    }
+    return _WALL_GEOMETRY
+
+
 @dataclass
 class Fielder:
     """One defender. `pos` is mutated each frame.
@@ -2270,20 +2303,14 @@ class HitAnimation:
         # foul corners is `atan2(WALL_FT_X, WALL_FT_Y)` — using the *real-foot*
         # semi-axes, since the parametric angle is invariant under axis-aligned
         # scaling. (Using the screen-pixel semi-axes was the previous bug that
-        # left a gap between the foul lines and the wall.)
-        foul_t = math.atan2(WALL_FT_X, WALL_FT_Y)
-        samples = 96
-        wall_top_pts = []
-        wall_bot_pts = []
-        for i in range(samples + 1):
-            t = foul_t + (math.pi - 2 * foul_t) * i / samples
-            x = hx + WALL_SEMI_X * math.cos(t)
-            y_top = hy - WALL_SEMI_Y * math.sin(t)
-            wall_top_pts.append((x, y_top))
-            wall_bot_pts.append((x, y_top + WALL_FACE_HEIGHT_PX))
+        # left a gap between the foul lines and the wall.) The geometry is
+        # static, so it's computed once and cached in _wall_geometry().
+        geo = _wall_geometry()
+        wall_top_pts = geo['top']
+        wall_bot_pts = geo['bot']
+        face_poly = geo['face_poly']
 
         # Wall face — filled band so the wall reads as a 3D structure.
-        face_poly = wall_top_pts + list(reversed(wall_bot_pts))
         pygame.draw.polygon(screen, (60, 60, 60), face_poly, 0)
         # Bright top edge (outer rim of the wall, where it meets the sky/black
         # background) and a softer inner edge where it meets the field.

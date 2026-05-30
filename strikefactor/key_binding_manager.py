@@ -116,8 +116,14 @@ class KeyBindingManager:
         """Register a callback function for an action."""
         self.action_callbacks[action] = callback
 
-    def handle_key_down(self, key_code: int):
-        """Handle key press events."""
+    def handle_key_down(self, key_code: int) -> bool:
+        """Handle key press events.
+
+        Returns True if the key was bound to an action (and was therefore
+        consumed), so the caller can avoid dispatching the same keypress to
+        the active game state as well. Stops at the first matching action so a
+        duplicate binding can't fire several callbacks on one press.
+        """
         self.pressed_keys.add(key_code)
 
         for action in KeyAction:
@@ -126,6 +132,8 @@ class KeyBindingManager:
                     self.action_callbacks[action]()
                 else:
                     self._handle_default_action(action)
+                return True
+        return False
 
     def handle_key_up(self, key_code: int):
         """Handle key release events."""
