@@ -6,12 +6,14 @@ Generates random game situations with different pitchers, counts, runners, and o
 import random
 from typing import Dict, List
 
+from config import ALL_PITCHERS
+
 
 class RandomScenarioGenerator:
     """Generates random game scenarios for the baseball simulator."""
-    
+
     def __init__(self):
-        self.pitcher_list = ['sale', 'degrom', 'yamamoto', 'sasaki', 'mcclanahan']
+        self.pitcher_list = list(ALL_PITCHERS)
         self.scenario_types = [
             'clutch_hitting',      # High pressure situations
             'early_game',          # Early in at-bat scenarios

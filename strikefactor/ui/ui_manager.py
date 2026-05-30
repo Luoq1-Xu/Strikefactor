@@ -588,6 +588,10 @@ class UIManager:
             self.buttons[btn_key].hide()
 
         # Show and configure buttons for available pitches
+        if len(pitch_names) > len(pitch_buttons):
+            print(f"Warning: pitcher has {len(pitch_names)} pitches but only "
+                  f"{len(pitch_buttons)} Sandbox buttons; "
+                  f"{pitch_names[len(pitch_buttons):]} will be unselectable.")
         for i, pitch_name in enumerate(pitch_names):
             if i < len(pitch_buttons):
                 btn = self.buttons[pitch_buttons[i]]

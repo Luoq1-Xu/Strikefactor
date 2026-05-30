@@ -682,7 +682,7 @@ class PitchSimulation:
         """Handle strike call."""
         self.game.strikes += 1
         self.is_strike = True
-        if collision(self.game.ball[0], self.game.ball[1], 11, 630, 482.5, 130, 150):
+        if collision(self.game.ball[0], self.game.ball[1], ABS_BALL_RADIUS, *ABS_ZONE):
             self.new_entry['in_zone'] = True
         self.game.pitchnumber += 1
         self.game.currentstrikes += 1

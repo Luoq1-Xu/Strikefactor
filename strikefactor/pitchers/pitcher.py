@@ -1,5 +1,6 @@
 import random
 from utils.pitch_physics import DEFAULT_CAMERA
+import config
 
 # ANSI color codes for terminal output
 class Colors:
@@ -18,13 +19,13 @@ def colorize(text, color):
 
 class Pitcher:
 
-    # Strike zone boundaries (from config.py STRIKEZONE_RECT)
-    ZONE_LEFT = 565
-    ZONE_RIGHT = 695
-    ZONE_TOP = 410
-    ZONE_BOTTOM = 560
-    ZONE_CENTER_X = 630
-    ZONE_CENTER_Y = 485
+    # Strike zone boundaries — single source in config.py.
+    ZONE_LEFT = config.ZONE_LEFT
+    ZONE_RIGHT = config.ZONE_RIGHT
+    ZONE_TOP = config.ZONE_TOP
+    ZONE_BOTTOM = config.ZONE_BOTTOM
+    ZONE_CENTER_X = config.ZONE_CENTER_X
+    ZONE_CENTER_Y = config.ZONE_CENTER_Y
 
     # Intent probabilities: [zone, edge, chase, ball]
     INTENT_TABLE = {

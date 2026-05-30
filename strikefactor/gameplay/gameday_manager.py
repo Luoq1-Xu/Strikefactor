@@ -10,11 +10,10 @@ from datetime import datetime
 from typing import List, Dict, Tuple, Optional
 from helpers import ScoreKeeper
 from utils.io import atomic_write_json
-
-
-# Single source of truth for the pitchers that can appear in GameDay mode
-# (as the opponent's pitching staff). Order matches the UI / carousel order.
-ALL_PITCHERS = ['sale', 'degrom', 'yamamoto', 'sasaki', 'mcclanahan']
+# Single source of truth for the pitcher roster lives in config; re-exported
+# here so existing `from gameplay.gameday_manager import ALL_PITCHERS` imports
+# keep working.
+from config import ALL_PITCHERS
 
 
 # --- Player-team pitcher attributes (roles, caps, quality multipliers) ---

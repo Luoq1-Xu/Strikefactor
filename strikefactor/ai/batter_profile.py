@@ -5,19 +5,19 @@ Records swing decisions by zone quadrant, pitch type, and count to help
 the AI exploit patterns in the player's behavior.
 """
 
+import config
+
 
 class BatterProfile:
     """Tracks batter swing tendencies during a game session."""
 
-    # Zone quadrants relative to strike zone center (630, 485)
-    ZONE_CENTER_X = 630
-    ZONE_CENTER_Y = 485
-
-    # Strike zone boundaries
-    ZONE_LEFT = 565
-    ZONE_RIGHT = 695
-    ZONE_TOP = 410
-    ZONE_BOTTOM = 560
+    # Strike zone geometry — single source in config.py.
+    ZONE_CENTER_X = config.ZONE_CENTER_X
+    ZONE_CENTER_Y = config.ZONE_CENTER_Y
+    ZONE_LEFT = config.ZONE_LEFT
+    ZONE_RIGHT = config.ZONE_RIGHT
+    ZONE_TOP = config.ZONE_TOP
+    ZONE_BOTTOM = config.ZONE_BOTTOM
 
     def __init__(self):
         self.reset()
