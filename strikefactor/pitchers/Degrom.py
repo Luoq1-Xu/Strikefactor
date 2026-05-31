@@ -50,7 +50,7 @@ class Degrom(Pitcher):
         simulation_func(self.release_point, 'jacobdegrom', speed_mph, pfx_x, pfx_z, target_x, target_y, 'CB')
 
     def FF(self, simulation_func):
-        speed_mph = random.gauss(99.0, 1.0)
+        speed_mph = random.gauss(100.0, 1.0)
         pfx_x = random.gauss(8.0, 1.0)
         pfx_z = random.gauss(16.0, 1.0)
         target_x, target_y = self.get_pitch_target('FF')

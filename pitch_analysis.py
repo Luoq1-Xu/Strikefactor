@@ -47,12 +47,20 @@ DIFFICULTY_LABEL = {
 class Filter:
     modes: tuple        # subset of MODE_CHOICES; () = all
     difficulties: tuple # subset of DIFFICULTY_CHOICES; () = all
+    hands: tuple = ()   # subset of ("L", "R"); () = both
 
     @property
     def label(self):
         m = ", ".join(MODE_LABEL[x] for x in self.modes) if self.modes else "All modes"
         d = ", ".join(DIFFICULTY_LABEL[x] for x in self.difficulties) if self.difficulties else "All difficulties"
-        return f"{m} · {d}"
+        h = ", ".join(f"{x}HB" for x in self.hands) if self.hands else "Both hands"
+        return f"{m} · {d} · {h}"
+
+    @property
+    def slug(self):
+        """Filesystem-safe key — one output subfolder per filter slice."""
+        parts = list(self.modes) + list(self.difficulties) + [f"{x}HB" for x in self.hands]
+        return "__".join(parts) if parts else "all"
 
 
 def parse_args():
@@ -62,6 +70,9 @@ def parse_args():
     p.add_argument("--difficulty", choices=list(DIFFICULTY_CHOICES) + ["all"],
                    default="hall_of_fame",
                    help="Difficulty to include (default: hall_of_fame). 'all' = no difficulty filter.")
+    p.add_argument("--handedness", choices=["L", "R", "all"], default="all",
+                   help="Batter handedness to include (default: all). Split L/R to avoid "
+                        "smearing inside/outside in location plots.")
     return p.parse_args()
 
 
@@ -79,6 +90,9 @@ def pitches_where(filt, alias=""):
     if filt.difficulties:
         clauses.append(f"{a}difficulty IN ({','.join('?' * len(filt.difficulties))})")
         params.extend(filt.difficulties)
+    if filt.hands:
+        clauses.append(f"{a}batter_hand IN ({','.join('?' * len(filt.hands))})")
+        params.extend(filt.hands)
     return (" AND " + " AND ".join(clauses) if clauses else "", params)
 
 
@@ -125,6 +139,7 @@ PITCH_COLORS = {
     "CB": "#2ecc71",  # Curveball - green
     "CH": "#9b59b6",  # Changeup - purple
     "FS": "#f39c12",  # Splitter - gold
+    "FC": "#1abc9c",  # Cutter - teal (was silently dropped from movement/trajectory plots)
 }
 
 PITCH_NAMES = {
@@ -234,8 +249,10 @@ def pitcher_pitch_metrics(pname):
             SUM(CASE WHEN swing_type > 0 THEN 1 ELSE 0 END) AS swings,
             SUM(CASE WHEN swing_type > 0 AND {IN_ZONE_SQL} THEN 1 ELSE 0 END) AS z_swings,
             SUM(CASE WHEN swing_type > 0 AND NOT {IN_ZONE_SQL} THEN 1 ELSE 0 END) AS o_swings,
-            SUM(CASE WHEN swing_type > 0
-                       AND outcome IN ('strike','strikeout') THEN 1 ELSE 0 END) AS whiffs,
+            -- whiff = swing-and-miss. on_time==0 is the canonical miss signal;
+            -- the old outcome-based test also swept in fouls/contact rows whose
+            -- outcome happened to read 'strike'/'strikeout', inflating Whiff%/CSW%.
+            SUM(CASE WHEN swing_type > 0 AND on_time = 0 THEN 1 ELSE 0 END) AS whiffs,
             SUM(CASE WHEN swing_type = 0
                        AND outcome IN ('strike','strikeout') THEN 1 ELSE 0 END) AS called_strikes,
             SUM(CASE WHEN outcome IN ('ball','walk') THEN 1 ELSE 0 END) AS balls_thrown,
@@ -859,7 +876,10 @@ def fig7_dashboard():
             labels_e.append(PITCHER_DISPLAY.get(pn, pn).split()[-1])  # Last name only
 
     if speed_data:
-        bp = ax_e.boxplot(speed_data, patch_artist=True, labels=labels_e)
+        try:
+            bp = ax_e.boxplot(speed_data, patch_artist=True, tick_labels=labels_e)
+        except TypeError:  # matplotlib < 3.9 still uses the old 'labels' kwarg
+            bp = ax_e.boxplot(speed_data, patch_artist=True, labels=labels_e)
         palette = ["#e74c3c", "#3498db", "#2ecc71", "#f39c12", "#9b59b6"]
         for patch, color in zip(bp["boxes"], palette):
             patch.set_facecolor(color)
@@ -1103,8 +1123,7 @@ def fig9_pitch_type_performance():
             SELECT
                 COUNT(*) AS np,
                 SUM(CASE WHEN swing_type > 0 THEN 1 ELSE 0 END) AS swings,
-                SUM(CASE WHEN swing_type > 0 AND outcome IN ('strike','strikeout')
-                         THEN 1 ELSE 0 END) AS whiffs,
+                SUM(CASE WHEN swing_type > 0 AND on_time = 0 THEN 1 ELSE 0 END) AS whiffs,
                 SUM(CASE WHEN swing_type = 0 AND outcome IN ('strike','strikeout')
                          THEN 1 ELSE 0 END) AS called_strikes,
                 SUM(CASE WHEN {IN_ZONE_SQL} THEN 1 ELSE 0 END) AS zone,
@@ -1200,18 +1219,75 @@ def fig9_pitch_type_performance():
 
 # ═══════════════════════════════════════════════════════════════════════
 def _apply_cli_filter():
-    """Replace the module-level FILTER from parsed CLI args."""
-    global FILTER
+    """Replace the module-level FILTER from parsed CLI args; set per-filter OUT_DIR."""
+    global FILTER, OUT_DIR
     args = parse_args()
     FILTER = Filter(
         modes=() if args.mode == "all" else (args.mode,),
         difficulties=() if args.difficulty == "all" else (args.difficulty,),
+        hands=() if args.handedness == "all" else (args.handedness,),
     )
+    # Per-filter output subfolder so different slices don't overwrite each
+    # other's PNGs (previously every run clobbered analysis_output/ directly).
+    OUT_DIR = os.path.join(OUT_DIR, FILTER.slug)
+    os.makedirs(OUT_DIR, exist_ok=True)
+
+
+# (figure filename, caption) in render order — drives the combined HTML report.
+REPORT_FIGURES = [
+    ("01_speed_distributions.png", "Pitch speed distribution by pitcher and pitch type."),
+    ("02_pitch_locations.png", "Pitch locations at the plate (catcher's view), per pitcher."),
+    ("03_pitch_movement.png", "Movement profile: horizontal vs induced-vertical break."),
+    ("04_outcome_breakdown.png", "At-bat outcomes by pitcher."),
+    ("05_pitch_by_count.png", "Pitch-type usage by ball-strike count."),
+    ("06_trajectories.png", "Sampled 3-D pitch trajectories (side & top view)."),
+    ("07_dashboard.png", "Session dashboard: pitching line, mix, and batting results."),
+    ("08_plate_discipline.png", "Per-pitcher plate-discipline & rate-stat summary."),
+    ("09_pitch_type_performance.png", "Pitch-type scouting card vs MLB benchmarks."),
+]
+
+
+def write_html_report():
+    """Combine the generated PNGs into a single self-contained report.html."""
+    imgs = [(fn, cap) for fn, cap in REPORT_FIGURES
+            if os.path.exists(os.path.join(OUT_DIR, fn))]
+    parts = [
+        "<!doctype html><html><head><meta charset='utf-8'>",
+        "<title>StrikeFactor Pitch Analysis</title><style>",
+        "body{background:#1a1a2e;color:#e0e0e0;font-family:Menlo,monospace;margin:0;}",
+        ".wrap{max-width:1200px;margin:0 auto;padding:28px 20px;}",
+        "h1{margin:0 0 4px;} .sub{color:#9aa;margin:0 0 22px;}",
+        ".card{background:#16213e;border:1px solid #2a2a4a;border-radius:10px;",
+        "padding:16px;margin:0 0 22px;} .card h2{margin:0 0 10px;font-size:15px;color:#9aa;}",
+        "img{max-width:100%;height:auto;border-radius:6px;}",
+        ".cap{color:#9aa;font-size:13px;margin-top:8px;}",
+        ".nav{margin:0 0 20px;} .nav a{color:#3498db;margin-right:14px;",
+        "text-decoration:none;font-size:13px;}",
+        "</style></head><body><div class='wrap'>",
+        "<h1>StrikeFactor — Pitch Analysis</h1>",
+        f"<p class='sub'>{FILTER.label}</p>",
+    ]
+    parts.append("<div class='nav'>" + " ".join(
+        f"<a href='#f{i}'>{fn.split('_', 1)[0]}</a>" for i, (fn, _) in enumerate(imgs)
+    ) + "</div>")
+    for i, (fn, cap) in enumerate(imgs):
+        parts.append(
+            f"<div class='card' id='f{i}'><h2>{fn}</h2>"
+            f"<img src='{fn}' alt='{fn}'><div class='cap'>{cap}</div></div>"
+        )
+    parts.append("</div></body></html>")
+    path = os.path.join(OUT_DIR, "report.html")
+    with open(path, "w", encoding="utf-8") as f:
+        f.write("".join(parts))
+    return path
 
 
 if __name__ == "__main__":
     _apply_cli_filter()
     print(f"Generating StrikeFactor pitch analysis ({FILTER.label})...")
+    if FILTER.modes or FILTER.difficulties or FILTER.hands:
+        print("  (filtered view — pass --mode all --difficulty all --handedness all "
+              "to include every pitch)")
     fig1_speed_distributions()
     fig2_pitch_locations()
     fig3_movement_plot()
@@ -1221,5 +1297,7 @@ if __name__ == "__main__":
     fig7_dashboard()
     fig8_plate_discipline()
     fig9_pitch_type_performance()
+    report = write_html_report()
     conn.close()
     print(f"\nAll figures saved to {OUT_DIR}/")
+    print(f"Open the combined report: {report}")
