@@ -297,6 +297,30 @@ class UIManager:
                 text='NEXT GAME  >', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
 
+            # GameDay setup-screen secondary entries (resume / browse history).
+            'gameday_resume': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((490, 634, 145, 36)),
+                text='RESUME', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
+            'gameday_past_games': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((645, 634, 145, 36)),
+                text='PAST GAMES', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
+
+            # Shared nav for the GameDay list screens (resume / history).
+            'gd_list_back': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((40, 640, 150, 40)),
+                text='<  BACK', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
+            'gd_page_prev': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((900, 640, 150, 40)),
+                text='<  PREV', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
+            'gd_page_next': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((1090, 640, 150, 40)),
+                text='NEXT  >', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
+
             # Mode selection buttons (for top-level menu)
             'arcade_mode': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((490, 450), (300, 70)),
@@ -619,7 +643,8 @@ class UIManager:
         # States that should always show their UI regardless of H-toggle
         ui_toggle_exempt = {
             'gameday_start', 'gameday_transition', 'gameday_simulation',
-            'gameday_final', 'main_menu', 'mode_select', 'settings',
+            'gameday_final', 'gameday_resume', 'gameday_history',
+            'gameday_history_detail', 'main_menu', 'mode_select', 'settings',
             'key_bindings', 'summary', 'sandbox_menu',
         }
 
@@ -767,6 +792,42 @@ class UIManager:
             self.buttons['gameday_prev_pitcher'].show()
             self.buttons['gameday_next_pitcher'].show()
             self.buttons['gameday_main_menu'].show()
+            self.buttons['gameday_past_games'].show()
+            # RESUME only appears when there's an in-progress game to resume.
+            try:
+                from data import gameday_sessions
+                if gameday_sessions.load_sessions():
+                    self.buttons['gameday_resume'].show()
+            except Exception as e:
+                print(f"[gameday] resume-button visibility check failed: {e}")
+            self.scoreboard.hide()
+            self.pitch_result.hide()
+            self.scouting_panel.hide()
+            self.lap_log_panel.hide()
+            self.box_score_panel.hide()
+        elif state == 'gameday_resume':
+            # Resumable-sessions list
+            self.buttons['gd_list_back'].show()
+            self.buttons['gd_page_prev'].show()
+            self.buttons['gd_page_next'].show()
+            self.scoreboard.hide()
+            self.pitch_result.hide()
+            self.scouting_panel.hide()
+            self.lap_log_panel.hide()
+            self.box_score_panel.hide()
+        elif state == 'gameday_history':
+            # Completed-games list
+            self.buttons['gd_list_back'].show()
+            self.buttons['gd_page_prev'].show()
+            self.buttons['gd_page_next'].show()
+            self.scoreboard.hide()
+            self.pitch_result.hide()
+            self.scouting_panel.hide()
+            self.lap_log_panel.hide()
+            self.box_score_panel.hide()
+        elif state == 'gameday_history_detail':
+            # Single completed-game detail (linescore) — back only
+            self.buttons['gd_list_back'].show()
             self.scoreboard.hide()
             self.pitch_result.hide()
             self.scouting_panel.hide()

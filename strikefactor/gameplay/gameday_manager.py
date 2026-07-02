@@ -6,6 +6,7 @@ Manages opponent at-bats, pitcher substitutions, and event logging.
 import json
 import os
 import random
+import uuid
 from datetime import datetime
 from typing import List, Dict, Tuple, Optional
 from helpers import ScoreKeeper
@@ -45,6 +46,12 @@ def _load_pitcher_attributes() -> dict:
 PITCHER_ATTRS = _load_pitcher_attributes()
 
 
+DEFAULT_OPPONENT_LINEUP = [
+    "J. Smith", "A. Johnson", "M. Davis", "R. Wilson",
+    "K. Brown", "T. Martinez", "C. Garcia", "D. Rodriguez", "S. Lee",
+]
+
+
 def get_pitcher_attrs(name: str) -> dict:
     """Look up attributes for a pitcher, falling back to a neutral default.
 
@@ -73,6 +80,28 @@ class GameEvent:
             return f"[{half} {self.inning}] {self.result}"
         runs_str = f" ({self.runs_scored} run{'s' if self.runs_scored != 1 else ''})" if self.runs_scored > 0 else ""
         return f"[{half} {self.inning}] {self.batter_name} - {self.result}{runs_str} (vs {self.pitcher_name})"
+
+    def to_dict(self) -> dict:
+        """Serialize to a JSON-safe dict (used by GameDayManager.to_dict)."""
+        return {
+            'inning': self.inning,
+            'is_top': self.is_top,
+            'batter_name': self.batter_name,
+            'pitcher_name': self.pitcher_name,
+            'result': self.result,
+            'runs_scored': self.runs_scored,
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> 'GameEvent':
+        return cls(
+            inning=d['inning'],
+            is_top=d['is_top'],
+            batter_name=d['batter_name'],
+            pitcher_name=d['pitcher_name'],
+            result=d['result'],
+            runs_scored=d.get('runs_scored', 0),
+        )
 
 
 class PitcherStats:
@@ -133,7 +162,7 @@ class PitcherStats:
 
     def record_outcome(self, outcome: str, runs: int = 0):
         """Record the result of an at-bat."""
-        if outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT']:
+        if outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP_UP']:
             self.outs_recorded += 1
             if outcome == 'STRIKEOUT':
                 self.strikeouts += 1
@@ -165,6 +194,24 @@ class PitcherStats:
         return (f"{self.name}: {ip} IP, {self.hits_allowed} H, "
                 f"{self.runs_allowed} R, {self.strikeouts} K, "
                 f"{self.walks} BB, {self.pitch_count} pitches")
+
+    # All PitcherStats fields are flat primitives, so (de)serialization is a
+    # straight attribute copy. Keyed by this tuple so to_dict/from_dict stay in
+    # sync if a field is added.
+    _SERIAL_FIELDS = ('name', 'pitch_count', 'outs_recorded', 'hits_allowed',
+                      'runs_allowed', 'strikeouts', 'walks', 'home_runs_allowed',
+                      'consecutive_hits', 'is_active')
+
+    def to_dict(self) -> dict:
+        return {f: getattr(self, f) for f in self._SERIAL_FIELDS}
+
+    @classmethod
+    def from_dict(cls, d: dict) -> 'PitcherStats':
+        stats = cls(d['name'])
+        for f in cls._SERIAL_FIELDS:
+            if f in d:
+                setattr(stats, f, d[f])
+        return stats
 
 
 class GameDayManager:
@@ -199,6 +246,11 @@ class GameDayManager:
         self.player_name = player_name
         self.opponent_name = "Opponent"
         self.difficulty = difficulty
+
+        # Stable per-game id. Used to key this game's resumable session entry
+        # (gameday_sessions.json) so each inning-boundary autosave updates the
+        # same row, and so completion can remove it. Preserved across resume.
+        self.session_uuid = str(uuid.uuid4())
 
         # Game state
         self.current_inning = 1
@@ -267,10 +319,7 @@ class GameDayManager:
         self.event_log: List[GameEvent] = []
 
         # Opponent batter lineup (just names for logging)
-        self.opponent_lineup = [
-            "J. Smith", "A. Johnson", "M. Davis", "R. Wilson",
-            "K. Brown", "T. Martinez", "C. Garcia", "D. Rodriguez", "S. Lee"
-        ]
+        self.opponent_lineup = list(DEFAULT_OPPONENT_LINEUP)
         self.current_batter_index = 0
 
     # --- Probability adjustment methods ---
@@ -692,9 +741,21 @@ class GameDayManager:
         # Process the outcome
         runs_scored = 0
 
-        if outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT']:
+        if outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP_UP']:
             self.current_outs += 1
-            pitcher_stats.record_outcome(outcome)
+            if outcome == 'STRIKEOUT':
+                pitcher_stats.record_outcome(outcome)
+            else:
+                before_score = self.opponent_scorekeeper.get_score()
+                suppress_advancement = self.current_outs >= 3
+                self.opponent_scorekeeper.update_hit_event(
+                    outcome,
+                    suppress_out_advancement=suppress_advancement,
+                )
+                runs_scored = self.opponent_scorekeeper.get_score() - before_score
+                self.opponent_score += runs_scored  # Add to cumulative score
+                self._current_half_runs += runs_scored
+                pitcher_stats.record_outcome(outcome, runs_scored)
             self._consecutive_hits = 0
 
         elif outcome == 'WALK':
@@ -707,9 +768,8 @@ class GameDayManager:
             # Walk doesn't reset or add to consecutive hits
 
         elif outcome in ['SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN']:
-            hit_type = {'SINGLE': 1, 'DOUBLE': 2, 'TRIPLE': 3, 'HOME RUN': 4}[outcome]
             before_score = self.opponent_scorekeeper.get_score()
-            self.opponent_scorekeeper.update_hit_event(hit_type)
+            self.opponent_scorekeeper.update_hit_event(outcome)
             runs_scored = self.opponent_scorekeeper.get_score() - before_score
             self.opponent_score += runs_scored  # Add to cumulative score
             self._current_half_runs += runs_scored
@@ -764,12 +824,12 @@ class GameDayManager:
         # Track player momentum
         if outcome in ['SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN']:
             self.player_consecutive_hits += 1
-        elif outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT']:
+        elif outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP_UP']:
             self.player_consecutive_hits = 0
         # WALK doesn't reset streak
 
         # Check for outs
-        if outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT']:
+        if outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP_UP']:
             self.current_outs += 1
 
     def check_walkoff(self) -> bool:
@@ -914,6 +974,13 @@ class GameDayManager:
             return
         self._result_saved = True
 
+        player_hits, opponent_hits = self._game_hit_totals()
+        play_log = []
+        for play_index, event in enumerate(self.event_log, start=1):
+            play_entry = event.to_dict()
+            play_entry['play_index'] = play_index
+            play_log.append(play_entry)
+
         if self.player_score > self.opponent_score:
             result_str = "WIN"
         elif self.player_score < self.opponent_score:
@@ -926,11 +993,17 @@ class GameDayManager:
             'session_id': session_id,
             'player_score': self.player_score,
             'opponent_score': self.opponent_score,
+            'player_name': self.player_name,
+            'player_hits': player_hits,
+            'opponent_hits': opponent_hits,
             'result': result_str,
             'difficulty': self.difficulty,
             'player_inning_scores': self.player_inning_scores,
             'opponent_inning_scores': self.opponent_inning_scores,
             'opponent_starter': self.opponent_pitcher_preset['starter'],
+            'opponent_lineup': list(self.opponent_lineup),
+            'play_log_version': 1,
+            'play_log': play_log,
         }
 
         history = self._load_history()
@@ -944,6 +1017,23 @@ class GameDayManager:
         # Atomic write so a crash mid-save can't truncate the history file and
         # silently wipe the entire career record on the next load.
         atomic_write_json(self.HISTORY_FILE, history)
+
+    def _game_hit_totals(self) -> tuple[int, int]:
+        """Return (player_hits, opponent_hits) for the completed game.
+
+        Hits are derived from the event log so the completed history record
+        doesn't depend on the pitch database being available at read time.
+        """
+        player_hits = 0
+        opponent_hits = 0
+        for event in self.event_log:
+            if event.result not in ('SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN'):
+                continue
+            if event.is_top:
+                opponent_hits += 1
+            else:
+                player_hits += 1
+        return player_hits, opponent_hits
 
     @classmethod
     def _load_history(cls) -> dict:
@@ -978,3 +1068,136 @@ class GameDayManager:
         wins = sum(1 for g in games if g.get('result') == 'WIN')
         losses = sum(1 for g in games if g.get('result') == 'LOSS')
         return {'wins': wins, 'losses': losses, 'total': wins + losses}
+
+    @classmethod
+    def get_history_games(cls) -> List[dict]:
+        """Return completed games most-recent-first for the history viewer.
+
+        gameday_history.json stores games oldest-first (newest appended), so we
+        reverse a copy here. Safe to call without an instance.
+        """
+        history = cls._load_history()
+        return list(reversed(history.get('games', [])))
+
+    # --- In-progress session (resume) serialization ---
+
+    def to_dict(self) -> dict:
+        """Serialize the full in-progress game state to a JSON-safe dict.
+
+        Scorekeepers are intentionally omitted: a session is only ever saved at
+        a half-inning boundary (see GameDayTransitionState), where both
+        scorekeepers have just been reset, so from_dict rebuilds them fresh.
+        """
+        return {
+            'session_uuid': self.session_uuid,
+            'player_name': self.player_name,
+            'opponent_name': self.opponent_name,
+            'difficulty': self.difficulty,
+            # Core game state
+            'current_inning': self.current_inning,
+            'is_top_inning': self.is_top_inning,
+            'player_score': self.player_score,
+            'opponent_score': self.opponent_score,
+            'game_over': self.game_over,
+            'is_walkoff': self.is_walkoff,
+            '_result_saved': self._result_saved,
+            'player_inning_scores': list(self.player_inning_scores),
+            'opponent_inning_scores': list(self.opponent_inning_scores),
+            '_current_half_runs': self._current_half_runs,
+            '_consecutive_hits': self._consecutive_hits,
+            'player_consecutive_hits': self.player_consecutive_hits,
+            'current_outs': self.current_outs,
+            # Opponent staff (player bats against these)
+            'opponent_pitcher_preset': self.opponent_pitcher_preset,
+            'current_pitcher_name': self.current_pitcher_name,
+            'available_opponent_relievers': list(self.available_opponent_relievers),
+            'opponent_pitcher_stats': {
+                name: ps.to_dict()
+                for name, ps in self.opponent_pitcher_stats.items()
+            },
+            # Player staff (opponent bats against these)
+            'player_pitcher_preset': self.player_pitcher_preset,
+            'current_player_pitcher_name': self.current_player_pitcher_name,
+            'available_player_relievers': list(self.available_player_relievers),
+            'player_pitcher_innings_pitched': self.player_pitcher_innings_pitched,
+            'player_pitcher_stats': {
+                name: ps.to_dict()
+                for name, ps in self.player_pitcher_stats.items()
+            },
+            # Lineup + log
+            'opponent_lineup': list(self.opponent_lineup),
+            'current_batter_index': self.current_batter_index,
+            'event_log': [e.to_dict() for e in self.event_log],
+        }
+
+    @classmethod
+    def from_dict(cls, d: dict) -> 'GameDayManager':
+        """Rebuild a GameDayManager from a to_dict() payload.
+
+        Tolerant of roster drift: a saved pitcher no longer present in
+        ALL_PITCHERS still loads (PitcherStats are keyed by name and the sim
+        only needs the name + attrs), but the chosen starter falls back to a
+        valid one if it has vanished, mirroring __init__.
+        """
+        preset = d.get('opponent_pitcher_preset') or {}
+        mgr = cls(
+            player_name=d.get('player_name', 'Player'),
+            difficulty=d.get('difficulty', 'amateur'),
+            starter_name=preset.get('starter', 'yamamoto'),
+        )
+
+        mgr.session_uuid = d.get('session_uuid', mgr.session_uuid)
+        mgr.opponent_name = d.get('opponent_name', mgr.opponent_name)
+
+        # Core game state
+        mgr.current_inning = d['current_inning']
+        mgr.is_top_inning = d['is_top_inning']
+        mgr.player_score = d['player_score']
+        mgr.opponent_score = d['opponent_score']
+        mgr.game_over = d['game_over']
+        mgr.is_walkoff = d['is_walkoff']
+        mgr._result_saved = d.get('_result_saved', False)
+        mgr.player_inning_scores = list(d.get('player_inning_scores', []))
+        mgr.opponent_inning_scores = list(d.get('opponent_inning_scores', []))
+        mgr._current_half_runs = d.get('_current_half_runs', 0)
+        mgr._consecutive_hits = d.get('_consecutive_hits', 0)
+        mgr.player_consecutive_hits = d.get('player_consecutive_hits', 0)
+        mgr.current_outs = d.get('current_outs', 0)
+
+        # Opponent staff
+        if preset:
+            mgr.opponent_pitcher_preset = preset
+        mgr.current_pitcher_name = d['current_pitcher_name']
+        mgr.available_opponent_relievers = list(d.get('available_opponent_relievers', []))
+        mgr.opponent_pitcher_stats = {
+            name: PitcherStats.from_dict(ps)
+            for name, ps in d.get('opponent_pitcher_stats', {}).items()
+        }
+
+        # Player staff
+        if d.get('player_pitcher_preset'):
+            mgr.player_pitcher_preset = d['player_pitcher_preset']
+        mgr.current_player_pitcher_name = d['current_player_pitcher_name']
+        mgr.available_player_relievers = list(d.get('available_player_relievers', []))
+        mgr.player_pitcher_innings_pitched = d.get('player_pitcher_innings_pitched', 0)
+        mgr.player_pitcher_stats = {
+            name: PitcherStats.from_dict(ps)
+            for name, ps in d.get('player_pitcher_stats', {}).items()
+        }
+
+        # Defensive: guarantee the active pitchers always have a stats row so
+        # get_active_*_pitcher_stats() can't KeyError on a partial/legacy payload.
+        if mgr.current_pitcher_name not in mgr.opponent_pitcher_stats:
+            mgr.opponent_pitcher_stats[mgr.current_pitcher_name] = \
+                PitcherStats(mgr.current_pitcher_name)
+        if mgr.current_player_pitcher_name not in mgr.player_pitcher_stats:
+            mgr.player_pitcher_stats[mgr.current_player_pitcher_name] = \
+                PitcherStats(mgr.current_player_pitcher_name)
+
+        # Lineup + log
+        if d.get('opponent_lineup'):
+            mgr.opponent_lineup = list(d['opponent_lineup'])
+        mgr.current_batter_index = d.get('current_batter_index', 0)
+        mgr.event_log = [GameEvent.from_dict(e) for e in d.get('event_log', [])]
+
+        return mgr

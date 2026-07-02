@@ -44,7 +44,7 @@ class Sale(Pitcher):
 
     def SL(self, simulation_func):
         speed_mph = random.gauss(79.0, 1.0)
-        pfx_x = random.gauss(11.0, 0.5)
+        pfx_x = random.gauss(15.0, 1.0)
         pfx_z = random.gauss(0.0, 0.5)
         target_x, target_y = self.get_pitch_target('SL')
         simulation_func(self.release_point, 'chrissale', speed_mph, pfx_x, pfx_z, target_x, target_y, 'SL')
@@ -65,7 +65,7 @@ class Sale(Pitcher):
 
     def CH(self, simulation_func):
         speed_mph = random.gauss(87.0, 0.50)
-        pfx_x = random.gauss(-17.0, 1.0)
+        pfx_x = random.gauss(-18.0, 1.0)
         pfx_z = random.gauss(8.0, 1.0)
         target_x, target_y = self.get_pitch_target('CH')
         simulation_func(self.release_point, 'chrissale', speed_mph, pfx_x, pfx_z, target_x, target_y, 'CH')

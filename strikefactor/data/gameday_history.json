@@ -1303,7 +1303,2436 @@
         0
       ],
       "opponent_starter": "degrom"
+    },
+    {
+      "date": "2026-05-31T17:35:19.243017",
+      "game_id": "942e0ebc-11f7-4910-9f3f-a9b1ebc74ba1",
+      "session_id": "3f265cd0-80ec-4565-8145-c3f96bc04647",
+      "player_score": 1,
+      "opponent_score": 3,
+      "result": "LOSS",
+      "difficulty": "all_star",
+      "player_inning_scores": [
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "opponent_inning_scores": [
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        0,
+        1
+      ],
+      "opponent_starter": "yamamoto"
+    },
+    {
+      "date": "2026-05-31T17:53:41.638159",
+      "game_id": "c6e0ec87-e3ce-4ccc-a00d-43975d515aab",
+      "session_id": "3f265cd0-80ec-4565-8145-c3f96bc04647",
+      "player_score": 5,
+      "opponent_score": 3,
+      "result": "WIN",
+      "difficulty": "all_star",
+      "player_inning_scores": [
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        4,
+        0
+      ],
+      "opponent_inning_scores": [
+        0,
+        3,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "opponent_starter": "degrom"
+    },
+    {
+      "date": "2026-06-12T22:22:52.877422",
+      "game_id": "808a2847-7e55-457b-a944-d116b9a13f04",
+      "session_id": "1c763493-78a2-4939-9f02-397c1ff4d95d",
+      "player_score": 9,
+      "opponent_score": 12,
+      "result": "LOSS",
+      "difficulty": "all_star",
+      "player_inning_scores": [
+        0,
+        0,
+        9,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "opponent_inning_scores": [
+        1,
+        0,
+        0,
+        0,
+        2,
+        3,
+        0,
+        5,
+        1
+      ],
+      "opponent_starter": "yamamoto"
+    },
+    {
+      "date": "2026-06-12T22:31:44.639142",
+      "game_id": "838c24e8-e3d6-49ce-91ca-86fcc0fa7257",
+      "session_id": "1c763493-78a2-4939-9f02-397c1ff4d95d",
+      "player_score": 6,
+      "opponent_score": 2,
+      "result": "WIN",
+      "difficulty": "all_star",
+      "player_inning_scores": [
+        0,
+        0,
+        3,
+        0,
+        0,
+        0,
+        3,
+        0
+      ],
+      "opponent_inning_scores": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        1
+      ],
+      "opponent_starter": "degrom"
+    },
+    {
+      "date": "2026-06-13T21:44:23.577538",
+      "game_id": "d9d1e00b-1eab-4cfb-b87d-07936bddbb69",
+      "session_id": "420a3339-708b-4109-aa66-78095480265c",
+      "player_score": 2,
+      "opponent_score": 3,
+      "result": "LOSS",
+      "difficulty": "all_star",
+      "player_inning_scores": [
+        0,
+        0,
+        0,
+        0,
+        0,
+        1,
+        0,
+        1,
+        0
+      ],
+      "opponent_inning_scores": [
+        0,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        1,
+        0
+      ],
+      "opponent_starter": "yamamoto"
+    },
+    {
+      "date": "2026-06-13T21:52:42.524047",
+      "game_id": "4c6c674b-cc77-46ff-92e3-a70a8b8ca92f",
+      "session_id": "420a3339-708b-4109-aa66-78095480265c",
+      "player_score": 4,
+      "opponent_score": 1,
+      "result": "WIN",
+      "difficulty": "all_star",
+      "player_inning_scores": [
+        0,
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        3
+      ],
+      "opponent_inning_scores": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "opponent_starter": "mcclanahan"
+    },
+    {
+      "date": "2026-06-20T11:55:03.902443",
+      "game_id": "9fe906ab-ee54-452a-98a6-f958e80ba460",
+      "session_id": "85a2e6f6-e600-4828-8dd5-e4ca59600bf6",
+      "player_score": 6,
+      "opponent_score": 2,
+      "player_hits": 11,
+      "opponent_hits": 6,
+      "result": "WIN",
+      "difficulty": "amateur",
+      "player_inning_scores": [
+        1,
+        0,
+        0,
+        0,
+        0,
+        3,
+        0,
+        2
+      ],
+      "opponent_inning_scores": [
+        0,
+        0,
+        0,
+        0,
+        2,
+        0,
+        0,
+        0,
+        0
+      ],
+      "opponent_starter": "yamamoto"
+    },
+    {
+      "date": "2026-06-26T23:53:49.522262",
+      "game_id": "5fe10d4d-efbb-41bb-b447-522395253841",
+      "session_id": "6cbd85f7-348c-40d8-bfa0-b1bba3ee0ac1",
+      "player_score": 19,
+      "opponent_score": 1,
+      "player_name": "Player",
+      "player_hits": 21,
+      "opponent_hits": 1,
+      "result": "WIN",
+      "difficulty": "rookie",
+      "player_inning_scores": [
+        0,
+        1,
+        0,
+        2,
+        0,
+        13,
+        3,
+        0
+      ],
+      "opponent_inning_scores": [
+        0,
+        1,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "opponent_starter": "yamamoto",
+      "opponent_lineup": [
+        "J. Smith",
+        "A. Johnson",
+        "M. Davis",
+        "R. Wilson",
+        "K. Brown",
+        "T. Martinez",
+        "C. Garcia",
+        "D. Rodriguez",
+        "S. Lee"
+      ],
+      "play_log_version": 1,
+      "play_log": [
+        {
+          "inning": 1,
+          "is_top": true,
+          "batter_name": "J. Smith",
+          "pitcher_name": "kershaw",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 1
+        },
+        {
+          "inning": 1,
+          "is_top": true,
+          "batter_name": "A. Johnson",
+          "pitcher_name": "kershaw",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 2
+        },
+        {
+          "inning": 1,
+          "is_top": true,
+          "batter_name": "M. Davis",
+          "pitcher_name": "kershaw",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 3
+        },
+        {
+          "inning": 1,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "yamamoto",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 4
+        },
+        {
+          "inning": 1,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "yamamoto",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 5
+        },
+        {
+          "inning": 1,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "yamamoto",
+          "result": "POP_UP",
+          "runs_scored": 0,
+          "play_index": 6
+        },
+        {
+          "inning": 2,
+          "is_top": true,
+          "batter_name": "R. Wilson",
+          "pitcher_name": "kershaw",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 7
+        },
+        {
+          "inning": 2,
+          "is_top": true,
+          "batter_name": "K. Brown",
+          "pitcher_name": "kershaw",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 8
+        },
+        {
+          "inning": 2,
+          "is_top": true,
+          "batter_name": "T. Martinez",
+          "pitcher_name": "kershaw",
+          "result": "HOME RUN",
+          "runs_scored": 1,
+          "play_index": 9
+        },
+        {
+          "inning": 2,
+          "is_top": true,
+          "batter_name": "C. Garcia",
+          "pitcher_name": "kershaw",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 10
+        },
+        {
+          "inning": 2,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "yamamoto",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 11
+        },
+        {
+          "inning": 2,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "yamamoto",
+          "result": "POP_UP",
+          "runs_scored": 0,
+          "play_index": 12
+        },
+        {
+          "inning": 2,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "yamamoto",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 13
+        },
+        {
+          "inning": 2,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "yamamoto",
+          "result": "DOUBLE",
+          "runs_scored": 0,
+          "play_index": 14
+        },
+        {
+          "inning": 2,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "yamamoto",
+          "result": "FLYOUT",
+          "runs_scored": 1,
+          "play_index": 15
+        },
+        {
+          "inning": 3,
+          "is_top": true,
+          "batter_name": "D. Rodriguez",
+          "pitcher_name": "kershaw",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 16
+        },
+        {
+          "inning": 3,
+          "is_top": true,
+          "batter_name": "S. Lee",
+          "pitcher_name": "kershaw",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 17
+        },
+        {
+          "inning": 3,
+          "is_top": true,
+          "batter_name": "J. Smith",
+          "pitcher_name": "kershaw",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 18
+        },
+        {
+          "inning": 3,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "yamamoto",
+          "result": "POP_UP",
+          "runs_scored": 0,
+          "play_index": 19
+        },
+        {
+          "inning": 3,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "yamamoto",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 20
+        },
+        {
+          "inning": 3,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "yamamoto",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 21
+        },
+        {
+          "inning": 4,
+          "is_top": true,
+          "batter_name": "A. Johnson",
+          "pitcher_name": "kershaw",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 22
+        },
+        {
+          "inning": 4,
+          "is_top": true,
+          "batter_name": "M. Davis",
+          "pitcher_name": "kershaw",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 23
+        },
+        {
+          "inning": 4,
+          "is_top": true,
+          "batter_name": "R. Wilson",
+          "pitcher_name": "kershaw",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 24
+        },
+        {
+          "inning": 4,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "yamamoto",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 25
+        },
+        {
+          "inning": 4,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "yamamoto",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 26
+        },
+        {
+          "inning": 4,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "yamamoto",
+          "result": "HOME RUN",
+          "runs_scored": 2,
+          "play_index": 27
+        },
+        {
+          "inning": 4,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "yamamoto",
+          "result": "POP_UP",
+          "runs_scored": 0,
+          "play_index": 28
+        },
+        {
+          "inning": 4,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "yamamoto",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 29
+        },
+        {
+          "inning": 4,
+          "is_top": false,
+          "batter_name": "",
+          "pitcher_name": "yamamoto",
+          "result": "MOUND VISIT - YAMAMOTO relieved by DEGROM",
+          "runs_scored": 0,
+          "play_index": 30
+        },
+        {
+          "inning": 5,
+          "is_top": true,
+          "batter_name": "K. Brown",
+          "pitcher_name": "kershaw",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 31
+        },
+        {
+          "inning": 5,
+          "is_top": true,
+          "batter_name": "T. Martinez",
+          "pitcher_name": "kershaw",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 32
+        },
+        {
+          "inning": 5,
+          "is_top": true,
+          "batter_name": "C. Garcia",
+          "pitcher_name": "kershaw",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 33
+        },
+        {
+          "inning": 5,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "degrom",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 34
+        },
+        {
+          "inning": 5,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "degrom",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 35
+        },
+        {
+          "inning": 5,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "degrom",
+          "result": "DOUBLE",
+          "runs_scored": 0,
+          "play_index": 36
+        },
+        {
+          "inning": 5,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "degrom",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 37
+        },
+        {
+          "inning": 6,
+          "is_top": true,
+          "batter_name": "D. Rodriguez",
+          "pitcher_name": "kershaw",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 38
+        },
+        {
+          "inning": 6,
+          "is_top": true,
+          "batter_name": "S. Lee",
+          "pitcher_name": "kershaw",
+          "result": "LINEOUT",
+          "runs_scored": 0,
+          "play_index": 39
+        },
+        {
+          "inning": 6,
+          "is_top": true,
+          "batter_name": "J. Smith",
+          "pitcher_name": "kershaw",
+          "result": "WALK",
+          "runs_scored": 0,
+          "play_index": 40
+        },
+        {
+          "inning": 6,
+          "is_top": true,
+          "batter_name": "A. Johnson",
+          "pitcher_name": "kershaw",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 41
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "degrom",
+          "result": "TRIPLE",
+          "runs_scored": 0,
+          "play_index": 42
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "degrom",
+          "result": "DOUBLE",
+          "runs_scored": 1,
+          "play_index": 43
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "degrom",
+          "result": "LINEOUT",
+          "runs_scored": 0,
+          "play_index": 44
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "degrom",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 45
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "degrom",
+          "result": "DOUBLE",
+          "runs_scored": 1,
+          "play_index": 46
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "degrom",
+          "result": "TRIPLE",
+          "runs_scored": 2,
+          "play_index": 47
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "degrom",
+          "result": "HOME RUN",
+          "runs_scored": 2,
+          "play_index": 48
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "degrom",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 49
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "degrom",
+          "result": "TRIPLE",
+          "runs_scored": 1,
+          "play_index": 50
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "degrom",
+          "result": "HOME RUN",
+          "runs_scored": 2,
+          "play_index": 51
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "degrom",
+          "result": "HOME RUN",
+          "runs_scored": 1,
+          "play_index": 52
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "degrom",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 53
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "degrom",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 54
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "degrom",
+          "result": "HOME RUN",
+          "runs_scored": 2,
+          "play_index": 55
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "degrom",
+          "result": "HOME RUN",
+          "runs_scored": 1,
+          "play_index": 56
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "degrom",
+          "result": "POP_UP",
+          "runs_scored": 0,
+          "play_index": 57
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "",
+          "pitcher_name": "degrom",
+          "result": "MOUND VISIT - DEGROM relieved by MCCLANAHAN",
+          "runs_scored": 0,
+          "play_index": 58
+        },
+        {
+          "inning": 7,
+          "is_top": true,
+          "batter_name": "M. Davis",
+          "pitcher_name": "kershaw",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 59
+        },
+        {
+          "inning": 7,
+          "is_top": true,
+          "batter_name": "R. Wilson",
+          "pitcher_name": "kershaw",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 60
+        },
+        {
+          "inning": 7,
+          "is_top": true,
+          "batter_name": "K. Brown",
+          "pitcher_name": "lauer",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 61
+        },
+        {
+          "inning": 7,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "DOUBLE",
+          "runs_scored": 0,
+          "play_index": 62
+        },
+        {
+          "inning": 7,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "DOUBLE",
+          "runs_scored": 1,
+          "play_index": 63
+        },
+        {
+          "inning": 7,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "HOME RUN",
+          "runs_scored": 2,
+          "play_index": 64
+        },
+        {
+          "inning": 7,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 65
+        },
+        {
+          "inning": 7,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 66
+        },
+        {
+          "inning": 7,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "LINEOUT",
+          "runs_scored": 0,
+          "play_index": 67
+        },
+        {
+          "inning": 7,
+          "is_top": false,
+          "batter_name": "",
+          "pitcher_name": "mcclanahan",
+          "result": "MOUND VISIT - MCCLANAHAN relieved by SASAKI",
+          "runs_scored": 0,
+          "play_index": 68
+        },
+        {
+          "inning": 8,
+          "is_top": true,
+          "batter_name": "T. Martinez",
+          "pitcher_name": "lauer",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 69
+        },
+        {
+          "inning": 8,
+          "is_top": true,
+          "batter_name": "C. Garcia",
+          "pitcher_name": "lauer",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 70
+        },
+        {
+          "inning": 8,
+          "is_top": true,
+          "batter_name": "D. Rodriguez",
+          "pitcher_name": "lauer",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 71
+        },
+        {
+          "inning": 8,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 72
+        },
+        {
+          "inning": 8,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 73
+        },
+        {
+          "inning": 8,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 74
+        },
+        {
+          "inning": 8,
+          "is_top": false,
+          "batter_name": "",
+          "pitcher_name": "sasaki",
+          "result": "MOUND VISIT - SASAKI relieved by SALE",
+          "runs_scored": 0,
+          "play_index": 75
+        },
+        {
+          "inning": 9,
+          "is_top": true,
+          "batter_name": "S. Lee",
+          "pitcher_name": "woo",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 76
+        },
+        {
+          "inning": 9,
+          "is_top": true,
+          "batter_name": "J. Smith",
+          "pitcher_name": "woo",
+          "result": "WALK",
+          "runs_scored": 0,
+          "play_index": 77
+        },
+        {
+          "inning": 9,
+          "is_top": true,
+          "batter_name": "A. Johnson",
+          "pitcher_name": "woo",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 78
+        },
+        {
+          "inning": 9,
+          "is_top": true,
+          "batter_name": "M. Davis",
+          "pitcher_name": "woo",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 79
+        }
+      ]
+    },
+    {
+      "date": "2026-06-28T00:08:17.519326",
+      "game_id": "5fe77ce0-eb21-44af-a31f-64a431e6e08c",
+      "session_id": "19d0906b-5015-4255-ae59-445297738697",
+      "player_score": 7,
+      "opponent_score": 3,
+      "player_name": "Player",
+      "player_hits": 12,
+      "opponent_hits": 8,
+      "result": "WIN",
+      "difficulty": "all_star",
+      "player_inning_scores": [
+        0,
+        0,
+        1,
+        0,
+        1,
+        1,
+        4,
+        0
+      ],
+      "opponent_inning_scores": [
+        0,
+        0,
+        0,
+        1,
+        0,
+        0,
+        2,
+        0,
+        0
+      ],
+      "opponent_starter": "sasaki",
+      "opponent_lineup": [
+        "J. Smith",
+        "A. Johnson",
+        "M. Davis",
+        "R. Wilson",
+        "K. Brown",
+        "T. Martinez",
+        "C. Garcia",
+        "D. Rodriguez",
+        "S. Lee"
+      ],
+      "play_log_version": 1,
+      "play_log": [
+        {
+          "inning": 1,
+          "is_top": true,
+          "batter_name": "J. Smith",
+          "pitcher_name": "yesavage",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 1
+        },
+        {
+          "inning": 1,
+          "is_top": true,
+          "batter_name": "A. Johnson",
+          "pitcher_name": "yesavage",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 2
+        },
+        {
+          "inning": 1,
+          "is_top": true,
+          "batter_name": "M. Davis",
+          "pitcher_name": "yesavage",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 3
+        },
+        {
+          "inning": 1,
+          "is_top": true,
+          "batter_name": "R. Wilson",
+          "pitcher_name": "yesavage",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 4
+        },
+        {
+          "inning": 1,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 5
+        },
+        {
+          "inning": 1,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 6
+        },
+        {
+          "inning": 1,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 7
+        },
+        {
+          "inning": 2,
+          "is_top": true,
+          "batter_name": "K. Brown",
+          "pitcher_name": "yesavage",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 8
+        },
+        {
+          "inning": 2,
+          "is_top": true,
+          "batter_name": "T. Martinez",
+          "pitcher_name": "yesavage",
+          "result": "WALK",
+          "runs_scored": 0,
+          "play_index": 9
+        },
+        {
+          "inning": 2,
+          "is_top": true,
+          "batter_name": "C. Garcia",
+          "pitcher_name": "yesavage",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 10
+        },
+        {
+          "inning": 2,
+          "is_top": true,
+          "batter_name": "D. Rodriguez",
+          "pitcher_name": "yesavage",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 11
+        },
+        {
+          "inning": 2,
+          "is_top": true,
+          "batter_name": "S. Lee",
+          "pitcher_name": "yesavage",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 12
+        },
+        {
+          "inning": 2,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 13
+        },
+        {
+          "inning": 2,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 14
+        },
+        {
+          "inning": 2,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 15
+        },
+        {
+          "inning": 3,
+          "is_top": true,
+          "batter_name": "J. Smith",
+          "pitcher_name": "yesavage",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 16
+        },
+        {
+          "inning": 3,
+          "is_top": true,
+          "batter_name": "A. Johnson",
+          "pitcher_name": "yesavage",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 17
+        },
+        {
+          "inning": 3,
+          "is_top": true,
+          "batter_name": "M. Davis",
+          "pitcher_name": "yesavage",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 18
+        },
+        {
+          "inning": 3,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "HOME RUN",
+          "runs_scored": 1,
+          "play_index": 19
+        },
+        {
+          "inning": 3,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 20
+        },
+        {
+          "inning": 3,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 21
+        },
+        {
+          "inning": 3,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "DOUBLE",
+          "runs_scored": 0,
+          "play_index": 22
+        },
+        {
+          "inning": 3,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 23
+        },
+        {
+          "inning": 4,
+          "is_top": true,
+          "batter_name": "R. Wilson",
+          "pitcher_name": "yesavage",
+          "result": "WALK",
+          "runs_scored": 0,
+          "play_index": 24
+        },
+        {
+          "inning": 4,
+          "is_top": true,
+          "batter_name": "K. Brown",
+          "pitcher_name": "yesavage",
+          "result": "WALK",
+          "runs_scored": 0,
+          "play_index": 25
+        },
+        {
+          "inning": 4,
+          "is_top": true,
+          "batter_name": "T. Martinez",
+          "pitcher_name": "yesavage",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 26
+        },
+        {
+          "inning": 4,
+          "is_top": true,
+          "batter_name": "C. Garcia",
+          "pitcher_name": "yesavage",
+          "result": "GROUNDOUT",
+          "runs_scored": 1,
+          "play_index": 27
+        },
+        {
+          "inning": 4,
+          "is_top": true,
+          "batter_name": "D. Rodriguez",
+          "pitcher_name": "yesavage",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 28
+        },
+        {
+          "inning": 4,
+          "is_top": true,
+          "batter_name": "S. Lee",
+          "pitcher_name": "yesavage",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 29
+        },
+        {
+          "inning": 4,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 30
+        },
+        {
+          "inning": 4,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 31
+        },
+        {
+          "inning": 4,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "LINEOUT",
+          "runs_scored": 0,
+          "play_index": 32
+        },
+        {
+          "inning": 4,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 33
+        },
+        {
+          "inning": 5,
+          "is_top": true,
+          "batter_name": "J. Smith",
+          "pitcher_name": "yesavage",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 34
+        },
+        {
+          "inning": 5,
+          "is_top": true,
+          "batter_name": "A. Johnson",
+          "pitcher_name": "yesavage",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 35
+        },
+        {
+          "inning": 5,
+          "is_top": true,
+          "batter_name": "M. Davis",
+          "pitcher_name": "yesavage",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 36
+        },
+        {
+          "inning": 5,
+          "is_top": true,
+          "batter_name": "R. Wilson",
+          "pitcher_name": "yesavage",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 37
+        },
+        {
+          "inning": 5,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 38
+        },
+        {
+          "inning": 5,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "HOME RUN",
+          "runs_scored": 1,
+          "play_index": 39
+        },
+        {
+          "inning": 5,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 40
+        },
+        {
+          "inning": 5,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "DOUBLE",
+          "runs_scored": 0,
+          "play_index": 41
+        },
+        {
+          "inning": 5,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 42
+        },
+        {
+          "inning": 6,
+          "is_top": true,
+          "batter_name": "K. Brown",
+          "pitcher_name": "lauer",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 43
+        },
+        {
+          "inning": 6,
+          "is_top": true,
+          "batter_name": "T. Martinez",
+          "pitcher_name": "lauer",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 44
+        },
+        {
+          "inning": 6,
+          "is_top": true,
+          "batter_name": "C. Garcia",
+          "pitcher_name": "lauer",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 45
+        },
+        {
+          "inning": 6,
+          "is_top": true,
+          "batter_name": "D. Rodriguez",
+          "pitcher_name": "lauer",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 46
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "DOUBLE",
+          "runs_scored": 0,
+          "play_index": 47
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 48
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "GROUNDOUT",
+          "runs_scored": 1,
+          "play_index": 49
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "DOUBLE",
+          "runs_scored": 0,
+          "play_index": 50
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 51
+        },
+        {
+          "inning": 7,
+          "is_top": true,
+          "batter_name": "S. Lee",
+          "pitcher_name": "lauer",
+          "result": "WALK",
+          "runs_scored": 0,
+          "play_index": 52
+        },
+        {
+          "inning": 7,
+          "is_top": true,
+          "batter_name": "J. Smith",
+          "pitcher_name": "lauer",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 53
+        },
+        {
+          "inning": 7,
+          "is_top": true,
+          "batter_name": "A. Johnson",
+          "pitcher_name": "lauer",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 54
+        },
+        {
+          "inning": 7,
+          "is_top": true,
+          "batter_name": "M. Davis",
+          "pitcher_name": "vesia",
+          "result": "GROUNDOUT",
+          "runs_scored": 1,
+          "play_index": 55
+        },
+        {
+          "inning": 7,
+          "is_top": true,
+          "batter_name": "R. Wilson",
+          "pitcher_name": "vesia",
+          "result": "SINGLE",
+          "runs_scored": 1,
+          "play_index": 56
+        },
+        {
+          "inning": 7,
+          "is_top": true,
+          "batter_name": "K. Brown",
+          "pitcher_name": "kahnle",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 57
+        },
+        {
+          "inning": 7,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "TRIPLE",
+          "runs_scored": 0,
+          "play_index": 58
+        },
+        {
+          "inning": 7,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "SINGLE",
+          "runs_scored": 1,
+          "play_index": 59
+        },
+        {
+          "inning": 7,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 60
+        },
+        {
+          "inning": 7,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 61
+        },
+        {
+          "inning": 7,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "GROUNDOUT",
+          "runs_scored": 1,
+          "play_index": 62
+        },
+        {
+          "inning": 7,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "HOME RUN",
+          "runs_scored": 2,
+          "play_index": 63
+        },
+        {
+          "inning": 7,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 64
+        },
+        {
+          "inning": 7,
+          "is_top": false,
+          "batter_name": "",
+          "pitcher_name": "sasaki",
+          "result": "MOUND VISIT - SASAKI relieved by SALE",
+          "runs_scored": 0,
+          "play_index": 65
+        },
+        {
+          "inning": 8,
+          "is_top": true,
+          "batter_name": "T. Martinez",
+          "pitcher_name": "kahnle",
+          "result": "LINEOUT",
+          "runs_scored": 0,
+          "play_index": 66
+        },
+        {
+          "inning": 8,
+          "is_top": true,
+          "batter_name": "C. Garcia",
+          "pitcher_name": "kahnle",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 67
+        },
+        {
+          "inning": 8,
+          "is_top": true,
+          "batter_name": "D. Rodriguez",
+          "pitcher_name": "kahnle",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 68
+        },
+        {
+          "inning": 8,
+          "is_top": true,
+          "batter_name": "S. Lee",
+          "pitcher_name": "woo",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 69
+        },
+        {
+          "inning": 8,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sale",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 70
+        },
+        {
+          "inning": 8,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sale",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 71
+        },
+        {
+          "inning": 8,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sale",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 72
+        },
+        {
+          "inning": 8,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sale",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 73
+        },
+        {
+          "inning": 9,
+          "is_top": true,
+          "batter_name": "J. Smith",
+          "pitcher_name": "woo",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 74
+        },
+        {
+          "inning": 9,
+          "is_top": true,
+          "batter_name": "A. Johnson",
+          "pitcher_name": "woo",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 75
+        },
+        {
+          "inning": 9,
+          "is_top": true,
+          "batter_name": "M. Davis",
+          "pitcher_name": "woo",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 76
+        }
+      ]
+    },
+    {
+      "date": "2026-07-01T23:37:09.364550",
+      "game_id": "290b0347-5903-4e01-aa8a-a6eaa23d3f3b",
+      "session_id": "7769a484-55d9-4b83-b7ec-00c1478f87c7",
+      "player_score": 5,
+      "opponent_score": 2,
+      "player_name": "Player",
+      "player_hits": 13,
+      "opponent_hits": 7,
+      "result": "WIN",
+      "difficulty": "professional",
+      "player_inning_scores": [
+        0,
+        0,
+        2,
+        0,
+        0,
+        3,
+        0,
+        0
+      ],
+      "opponent_inning_scores": [
+        0,
+        2,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "opponent_starter": "mcclanahan",
+      "opponent_lineup": [
+        "J. Smith",
+        "A. Johnson",
+        "M. Davis",
+        "R. Wilson",
+        "K. Brown",
+        "T. Martinez",
+        "C. Garcia",
+        "D. Rodriguez",
+        "S. Lee"
+      ],
+      "play_log_version": 1,
+      "play_log": [
+        {
+          "inning": 1,
+          "is_top": true,
+          "batter_name": "J. Smith",
+          "pitcher_name": "scherzer",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 1
+        },
+        {
+          "inning": 1,
+          "is_top": true,
+          "batter_name": "A. Johnson",
+          "pitcher_name": "scherzer",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 2
+        },
+        {
+          "inning": 1,
+          "is_top": true,
+          "batter_name": "M. Davis",
+          "pitcher_name": "scherzer",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 3
+        },
+        {
+          "inning": 1,
+          "is_top": true,
+          "batter_name": "R. Wilson",
+          "pitcher_name": "scherzer",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 4
+        },
+        {
+          "inning": 1,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "DOUBLE",
+          "runs_scored": 0,
+          "play_index": 5
+        },
+        {
+          "inning": 1,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "POP_UP",
+          "runs_scored": 0,
+          "play_index": 6
+        },
+        {
+          "inning": 1,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 7
+        },
+        {
+          "inning": 1,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 8
+        },
+        {
+          "inning": 2,
+          "is_top": true,
+          "batter_name": "K. Brown",
+          "pitcher_name": "scherzer",
+          "result": "DOUBLE",
+          "runs_scored": 0,
+          "play_index": 9
+        },
+        {
+          "inning": 2,
+          "is_top": true,
+          "batter_name": "T. Martinez",
+          "pitcher_name": "scherzer",
+          "result": "TRIPLE",
+          "runs_scored": 1,
+          "play_index": 10
+        },
+        {
+          "inning": 2,
+          "is_top": true,
+          "batter_name": "C. Garcia",
+          "pitcher_name": "scherzer",
+          "result": "GROUNDOUT",
+          "runs_scored": 1,
+          "play_index": 11
+        },
+        {
+          "inning": 2,
+          "is_top": true,
+          "batter_name": "D. Rodriguez",
+          "pitcher_name": "scherzer",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 12
+        },
+        {
+          "inning": 2,
+          "is_top": true,
+          "batter_name": "S. Lee",
+          "pitcher_name": "scherzer",
+          "result": "WALK",
+          "runs_scored": 0,
+          "play_index": 13
+        },
+        {
+          "inning": 2,
+          "is_top": true,
+          "batter_name": "J. Smith",
+          "pitcher_name": "scherzer",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 14
+        },
+        {
+          "inning": 2,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 15
+        },
+        {
+          "inning": 2,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "DOUBLE",
+          "runs_scored": 0,
+          "play_index": 16
+        },
+        {
+          "inning": 2,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "LINEOUT",
+          "runs_scored": 0,
+          "play_index": 17
+        },
+        {
+          "inning": 2,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 18
+        },
+        {
+          "inning": 3,
+          "is_top": true,
+          "batter_name": "A. Johnson",
+          "pitcher_name": "scherzer",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 19
+        },
+        {
+          "inning": 3,
+          "is_top": true,
+          "batter_name": "M. Davis",
+          "pitcher_name": "scherzer",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 20
+        },
+        {
+          "inning": 3,
+          "is_top": true,
+          "batter_name": "R. Wilson",
+          "pitcher_name": "scherzer",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 21
+        },
+        {
+          "inning": 3,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 22
+        },
+        {
+          "inning": 3,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 23
+        },
+        {
+          "inning": 3,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "DOUBLE",
+          "runs_scored": 0,
+          "play_index": 24
+        },
+        {
+          "inning": 3,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "GROUNDOUT",
+          "runs_scored": 1,
+          "play_index": 25
+        },
+        {
+          "inning": 3,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "SINGLE",
+          "runs_scored": 1,
+          "play_index": 26
+        },
+        {
+          "inning": 3,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 27
+        },
+        {
+          "inning": 4,
+          "is_top": true,
+          "batter_name": "K. Brown",
+          "pitcher_name": "scherzer",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 28
+        },
+        {
+          "inning": 4,
+          "is_top": true,
+          "batter_name": "T. Martinez",
+          "pitcher_name": "scherzer",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 29
+        },
+        {
+          "inning": 4,
+          "is_top": true,
+          "batter_name": "C. Garcia",
+          "pitcher_name": "scherzer",
+          "result": "LINEOUT",
+          "runs_scored": 0,
+          "play_index": 30
+        },
+        {
+          "inning": 4,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 31
+        },
+        {
+          "inning": 4,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 32
+        },
+        {
+          "inning": 4,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 33
+        },
+        {
+          "inning": 4,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 34
+        },
+        {
+          "inning": 5,
+          "is_top": true,
+          "batter_name": "D. Rodriguez",
+          "pitcher_name": "scherzer",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 35
+        },
+        {
+          "inning": 5,
+          "is_top": true,
+          "batter_name": "S. Lee",
+          "pitcher_name": "scherzer",
+          "result": "LINEOUT",
+          "runs_scored": 0,
+          "play_index": 36
+        },
+        {
+          "inning": 5,
+          "is_top": true,
+          "batter_name": "J. Smith",
+          "pitcher_name": "scherzer",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 37
+        },
+        {
+          "inning": 5,
+          "is_top": true,
+          "batter_name": "A. Johnson",
+          "pitcher_name": "scherzer",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 38
+        },
+        {
+          "inning": 5,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 39
+        },
+        {
+          "inning": 5,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 40
+        },
+        {
+          "inning": 5,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 41
+        },
+        {
+          "inning": 6,
+          "is_top": true,
+          "batter_name": "M. Davis",
+          "pitcher_name": "scherzer",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 42
+        },
+        {
+          "inning": 6,
+          "is_top": true,
+          "batter_name": "R. Wilson",
+          "pitcher_name": "scherzer",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 43
+        },
+        {
+          "inning": 6,
+          "is_top": true,
+          "batter_name": "K. Brown",
+          "pitcher_name": "scherzer",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 44
+        },
+        {
+          "inning": 6,
+          "is_top": true,
+          "batter_name": "T. Martinez",
+          "pitcher_name": "scherzer",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 45
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 46
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 47
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 48
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 49
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "DOUBLE",
+          "runs_scored": 2,
+          "play_index": 50
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 51
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "SINGLE",
+          "runs_scored": 1,
+          "play_index": 52
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "mcclanahan",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 53
+        },
+        {
+          "inning": 6,
+          "is_top": false,
+          "batter_name": "",
+          "pitcher_name": "mcclanahan",
+          "result": "MOUND VISIT - MCCLANAHAN relieved by SASAKI",
+          "runs_scored": 0,
+          "play_index": 54
+        },
+        {
+          "inning": 7,
+          "is_top": true,
+          "batter_name": "C. Garcia",
+          "pitcher_name": "lauer",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 55
+        },
+        {
+          "inning": 7,
+          "is_top": true,
+          "batter_name": "D. Rodriguez",
+          "pitcher_name": "lauer",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 56
+        },
+        {
+          "inning": 7,
+          "is_top": true,
+          "batter_name": "S. Lee",
+          "pitcher_name": "lauer",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 57
+        },
+        {
+          "inning": 7,
+          "is_top": true,
+          "batter_name": "J. Smith",
+          "pitcher_name": "lauer",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 58
+        },
+        {
+          "inning": 7,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 59
+        },
+        {
+          "inning": 7,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "DOUBLE",
+          "runs_scored": 0,
+          "play_index": 60
+        },
+        {
+          "inning": 7,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 61
+        },
+        {
+          "inning": 7,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 62
+        },
+        {
+          "inning": 8,
+          "is_top": true,
+          "batter_name": "A. Johnson",
+          "pitcher_name": "lauer",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 63
+        },
+        {
+          "inning": 8,
+          "is_top": true,
+          "batter_name": "M. Davis",
+          "pitcher_name": "lauer",
+          "result": "STRIKEOUT",
+          "runs_scored": 0,
+          "play_index": 64
+        },
+        {
+          "inning": 8,
+          "is_top": true,
+          "batter_name": "R. Wilson",
+          "pitcher_name": "vesia",
+          "result": "LINEOUT",
+          "runs_scored": 0,
+          "play_index": 65
+        },
+        {
+          "inning": 8,
+          "is_top": true,
+          "batter_name": "K. Brown",
+          "pitcher_name": "vesia",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 66
+        },
+        {
+          "inning": 8,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "SINGLE",
+          "runs_scored": 0,
+          "play_index": 67
+        },
+        {
+          "inning": 8,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "POP_UP",
+          "runs_scored": 0,
+          "play_index": 68
+        },
+        {
+          "inning": 8,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 69
+        },
+        {
+          "inning": 8,
+          "is_top": false,
+          "batter_name": "Player",
+          "pitcher_name": "sasaki",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 70
+        },
+        {
+          "inning": 8,
+          "is_top": false,
+          "batter_name": "",
+          "pitcher_name": "sasaki",
+          "result": "MOUND VISIT - SASAKI relieved by YAMAMOTO",
+          "runs_scored": 0,
+          "play_index": 71
+        },
+        {
+          "inning": 9,
+          "is_top": true,
+          "batter_name": "T. Martinez",
+          "pitcher_name": "vesia",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 72
+        },
+        {
+          "inning": 9,
+          "is_top": true,
+          "batter_name": "C. Garcia",
+          "pitcher_name": "chapman",
+          "result": "GROUNDOUT",
+          "runs_scored": 0,
+          "play_index": 73
+        },
+        {
+          "inning": 9,
+          "is_top": true,
+          "batter_name": "D. Rodriguez",
+          "pitcher_name": "chapman",
+          "result": "FLYOUT",
+          "runs_scored": 0,
+          "play_index": 74
+        }
+      ]
     }
   ],
-  "last_updated": "2026-05-31T09:36:50.516229"
+  "last_updated": "2026-07-01T23:37:09.366461"
 }

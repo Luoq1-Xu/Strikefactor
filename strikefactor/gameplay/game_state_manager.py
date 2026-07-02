@@ -7,7 +7,8 @@ from typing import Dict, Optional
 from .game_states import (
     GameState, ModeSelectState, MenuState, GameplayState, SummaryState,
     VisualizationState, ViewPitchesState, InningEndState, SandboxMenuState,
-    SandboxGameplayState, GameDayState, GameDayTransitionState
+    SandboxGameplayState, GameDayState, GameDayTransitionState,
+    GameDayResumeState, GameDayHistoryState
 )
 
 
@@ -36,7 +37,9 @@ class GameStateManager:
             'view_pitches': ViewPitchesState(self.game),
             'inning_end': InningEndState(self.game),
             'gameday': GameDayState(self.game),
-            'gameday_transition': GameDayTransitionState(self.game)
+            'gameday_transition': GameDayTransitionState(self.game),
+            'gameday_resume': GameDayResumeState(self.game),
+            'gameday_history': GameDayHistoryState(self.game)
         }
         
     def change_state(self, state_name: str):

@@ -1891,9 +1891,14 @@ class HitAnimation:
                 self.fielders["1B"].target = first_target
         else:
             # A line drive caught before it lands is a LINEOUT; everything
-            # else caught in the air (fly balls, pop-ups) is a FLYOUT. Both
-            # share the same catch-hold finishing animation.
-            self.classified_outcome = "LINEOUT" if self.shape == "LINER" else "FLYOUT"
+            # else caught in the air (fly balls, pop-ups) is classified by
+            # its trajectory shape so pop-ups remain distinct from sac flies.
+            if self.shape == "LINER":
+                self.classified_outcome = "LINEOUT"
+            elif self.shape == "POP_UP":
+                self.classified_outcome = "POP_UP"
+            else:
+                self.classified_outcome = "FLYOUT"
             self._go_done_ms = self._elapsed + FLYOUT_CATCH_HOLD
 
         # Stand down everyone else now that the play is over. The

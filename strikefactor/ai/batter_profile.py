@@ -207,7 +207,7 @@ class BatterProfile:
             swing_rate = self.get_swing_rate(pitch)
 
             # If batter chases a lot (>45%), reward chase pitches (breaking balls)
-            if chase_rate > 0.45 and pitch in ('SL', 'CB', 'SLD', 'FS', 'CH'):
+            if chase_rate > 0.45 and pitch in ('SL', 'CB', 'SLD', 'FS', 'FO', 'CH'):
                 bonus += (chase_rate - 0.35) * 1.5  # Up to ~0.3 bonus
 
             # If batter rarely swings at this pitch type, it's less effective as a chase
@@ -225,7 +225,7 @@ class BatterProfile:
             # First-pitch aggression exploitation
             if count_state == 'first_pitch':
                 fp_rate = self.get_first_pitch_swing_rate()
-                if fp_rate > 0.60 and pitch in ('SL', 'CB', 'SLD', 'FS'):
+                if fp_rate > 0.60 and pitch in ('SL', 'CB', 'SLD', 'FS', 'FO'):
                     bonus += 0.2  # Aggressive batter → start with breaking ball
                 elif fp_rate < 0.25 and pitch in ('FF', 'SI'):
                     bonus += 0.15  # Passive batter → steal first-pitch strike

@@ -39,9 +39,12 @@ class Pitcher:
     # Per-pitch-category intent bias adjustments
     PITCH_INTENT_BIAS = {
         'strike': {'FF': 0.08, 'SI': 0.05},
-        'chase':  {'SL': 0.10, 'CB': 0.10, 'SLD': 0.10, 'FS': 0.08},
-        'low':    {'CH': 0.06},
+        'chase':  {'SL': 0.10, 'CB': 0.10, 'SLD': 0.10, 'FS': 0.08, 'FO': 0.08, 'CH': 0.08},
+        'low':    {'CH': 0.06, 'SL': 0.05, 'SLD': 0.05, 'FS': 0.06, 'FO': 0.06},
     }
+
+    # Pitches that should naturally live lower in the zone or below it.
+    LOW_BIASED_TYPES = {'SL', 'SLD', 'CB', 'CH', 'FS', 'FO'}
 
     def __init__(self, xpos, ypos, release_point, screen, name, windup_time, arm_extension, command=0.70) -> None:
         self.name = name
@@ -350,7 +353,7 @@ class Pitcher:
 
     # Pitch categories for sequencing logic
     FASTBALL_TYPES = {'FF', 'SI'}
-    BREAKING_TYPES = {'SL', 'CB', 'SLD', 'FS', 'CH', 'FC'}
+    BREAKING_TYPES = {'SL', 'CB', 'SLD', 'FS', 'FO', 'CH', 'FC'}
 
     def get_pitch_target(self, pitch_type='FF'):
         """Choose a target location using intent system + command error + sequencing.
@@ -422,6 +425,19 @@ class Pitcher:
             else:
                 target_x = random.uniform(self.ZONE_LEFT - 40, self.ZONE_RIGHT + 40)
                 target_y = self.ZONE_BOTTOM + offset
+
+        # Bias certain pitches toward the lower third of the zone or below it.
+        # Screen Y increases downward, so larger values mean a lower target.
+        if pitch_type in self.LOW_BIASED_TYPES and intent != 'ball':
+            if intent == 'zone':
+                low_target = self.ZONE_BOTTOM + random.uniform(-10, 12)
+                target_y = target_y * 0.35 + low_target * 0.65
+            elif intent == 'edge':
+                low_target = self.ZONE_BOTTOM + random.uniform(0, 24)
+                target_y = target_y * 0.30 + low_target * 0.70
+            else:  # chase
+                low_target = self.ZONE_BOTTOM + random.uniform(12, 42)
+                target_y = target_y * 0.25 + low_target * 0.75
 
         # Apply sequence-aware location bias
         target_x, target_y = self._apply_sequence_bias(

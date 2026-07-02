@@ -39,6 +39,7 @@ class ERAI():
         'SL': ['FF', 'SI', 'CH'],
         'CB': ['FF', 'SI'],
         'CH': ['FF', 'SI', 'SL'],
+        'FO': ['FF', 'SI'],
         'FS': ['FF', 'SI'],
         'SLD': ['FF', 'SI'],
     }

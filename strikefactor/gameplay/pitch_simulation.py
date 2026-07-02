@@ -17,6 +17,10 @@ from config import get_path, ABS_ZONE, ABS_BALL_RADIUS, CHALLENGE_WINDOW_MS
 model = pickle.load(open(get_path("ai/ai_umpire.pkl"), "rb"))
 
 class PitchSimulation:
+    @staticmethod
+    def _format_display_outcome(outcome):
+        return outcome.replace("_", " ") if isinstance(outcome, str) else outcome
+
     def __init__(self, game, release_point, pitchername, speed_mph, pfx_x, pfx_z,
                  target_x, target_y, pitchtype):
         self.game: "Game" = game
@@ -187,7 +191,7 @@ class PitchSimulation:
 
         if elapsed_time >= 10 and current_time - self.starttime > self.windup or (current_time - self.starttime > self.windup and not self.pitch_results_done):
             self.last_time = current_time
-            if current_time > self.starttime + self.traveltime + self.windup and hasattr(self, 'outcome') and self.outcome in ['FLYOUT', 'GROUNDOUT', 'LINEOUT']:
+            if current_time > self.starttime + self.traveltime + self.windup and hasattr(self, 'outcome') and self.outcome in ['FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP_UP']:
                 entry = [self.game.ball[0], self.game.ball[1], self.game.fourseamballsize, (198, 169, 251), "out"]  # Purple for outs
             elif current_time > self.starttime + self.traveltime + self.windup and self.is_hit:
                 entry = [self.game.ball[0], self.game.ball[1], self.game.fourseamballsize, (71, 204, 252), "hit"]
@@ -443,7 +447,11 @@ class PitchSimulation:
                 self.game.homeruns_allowed += 1
             banner_text = homerun_text if homerun_text != '' else hit_string
             self._start_hit_animation(hit_string, banner_text, vertical_offset, quality)
-            self.game._display_pitch_results(f"HIT - {hit_string}", self.pitchtype, self.speed_mph)
+            self.game._display_pitch_results(
+                f"HIT - {self._format_display_outcome(hit_string)}",
+                self.pitchtype,
+                self.speed_mph,
+            )
             self.new_entry['isHit'] = hit_string
             self.outcome = hit_string
 
@@ -484,7 +492,7 @@ class PitchSimulation:
         score_before = getattr(self, '_pending_hit_score_before', 0)
         pitches_thrown = getattr(self, '_pending_hit_pitchnumber', 0)
 
-        is_out = classified in ("FLYOUT", "GROUNDOUT", "LINEOUT")
+        is_out = classified in ("FLYOUT", "GROUNDOUT", "LINEOUT", "POP_UP")
         if is_out:
             self.is_hit = False
             self.game.currentouts += 1
@@ -507,7 +515,11 @@ class PitchSimulation:
                 last_entry[3] = new_trail_color
 
         # Advance runners + score for hits (no-op for outs).
-        self.game.hit_outcome_manager.apply_classified_outcome(classified)
+        suppress_out_advancement = is_out and self.game.currentouts >= 3
+        self.game.hit_outcome_manager.apply_classified_outcome(
+            classified,
+            suppress_out_advancement=suppress_out_advancement,
+        )
 
         # Hit-location stats only record actual hits — outs don't contribute
         # to the batting-zone heatmap.
@@ -531,7 +543,7 @@ class PitchSimulation:
         self.new_entry['isHit'] = classified
         self.outcome = classified
 
-        self.game.ui_manager.show_banner(classified)
+        self.game.ui_manager.show_banner(self._format_display_outcome(classified))
 
     def _check_walkoff(self):
         """Check for walk-off win and flag a deferred game-end transition.
@@ -803,7 +815,9 @@ class PitchSimulation:
         if outcome == "IN_PLAY":
             on_complete = self._finalize_batted_ball
         else:
-            on_complete = lambda: self.game.ui_manager.show_banner(banner_text)
+            on_complete = lambda: self.game.ui_manager.show_banner(
+                self._format_display_outcome(banner_text)
+            )
 
         # Append a labeled trail entry now — once hit_animation owns the frame,
         # _update_pitch_trajectory stops running, so the contact-point marker

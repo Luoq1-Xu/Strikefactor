@@ -196,6 +196,71 @@ class HitOutcomeManager:
             return "HOME RUN"
         return "IN_PLAY"
 
+    def _pick_contact_sound(self):
+        """Choose a non-HR contact sound from contact quality and batted-ball shape."""
+        quality = max(0.0, min(1.0, self.last_quality or 0.0))
+        batted_ball_type = self.last_batted_ball_type
+
+        if batted_ball_type == "POP_UP":
+            candidates = [
+                ("pop2", 4),
+                ("pop3", 4),
+                ("pop4", 3),
+                ("outside", 1),
+            ]
+        elif batted_ball_type == "GROUNDER":
+            if quality < 0.45:
+                candidates = [
+                    ("outside", 4),
+                    ("pop1", 2),
+                    ("single", 1),
+                ]
+            else:
+                candidates = [
+                    ("single", 3),
+                    ("double", 2),
+                    ("outside", 1),
+                ]
+        elif batted_ball_type == "FLY":
+            if quality < 0.7:
+                candidates = [
+                    ("single", 2),
+                    ("double", 3),
+                    ("triple", 1),
+                ]
+            else:
+                candidates = [
+                    ("double", 2),
+                    ("triple", 4),
+                    ("single", 1),
+                ]
+        else:
+            if quality < 0.35:
+                candidates = [
+                    ("outside", 3),
+                    ("pop2", 2),
+                    ("single", 1),
+                ]
+            elif quality < 0.65:
+                candidates = [
+                    ("single", 3),
+                    ("double", 3),
+                    ("outside", 1),
+                ]
+            else:
+                candidates = [
+                    ("double", 3),
+                    ("triple", 3),
+                    ("single", 1),
+                ]
+
+        available = [(name, weight) for name, weight in candidates if name in self.sound_manager.sounds]
+        if not available:
+            return "single"
+
+        names, weights = zip(*available)
+        return random.choices(names, weights=weights, k=1)[0]
+
     def _compute_horizontal_inside(self, ball_location_x, batter_handedness):
         """Signed inside/outside offset (px) relative to the batter's body.
 
@@ -228,6 +293,8 @@ class HitOutcomeManager:
         self.last_batted_ball_type) — it drives the HR gate and the
         trajectory shape used by the animation.
         """
+        self.hit_type = 0
+        self.ishomerun = ''
         quality, vertical_offset = self._compute_contact_quality(
             swing_location_y, ball_location_y, timing_diff
         )
@@ -240,6 +307,8 @@ class HitOutcomeManager:
 
     def get_power_hit_outcome(self, swing_location_y=None, ball_location_y=None, timing_diff=None,
                               ball_location_x=None, batter_handedness='R'):
+        self.hit_type = 0
+        self.ishomerun = ''
         quality, vertical_offset = self._compute_contact_quality(
             swing_location_y, ball_location_y, timing_diff
         )
@@ -250,16 +319,15 @@ class HitOutcomeManager:
         )
         return self._resolve_outcome(quality, vertical_offset, swing_type="power")
 
-    def apply_classified_outcome(self, outcome_str):
+    def apply_classified_outcome(self, outcome_str, suppress_out_advancement=False):
         """Called by pitch_simulation once the animation has classified an
-        IN_PLAY contact into its final outcome. Hits advance runners; outs
-        do not (the game doesn't model sac flies / productive outs yet).
+        IN_PLAY contact into its final outcome. Runner movement is based on
+        the resolved outcome so productive outs can advance runners.
         """
-        if outcome_str in ("GROUNDOUT", "FLYOUT", "LINEOUT"):
-            return
-        mapping = {"SINGLE": 1, "DOUBLE": 2, "TRIPLE": 3}
-        self.hit_type = mapping.get(outcome_str, 1)
-        self.update_runners_and_score()
+        self.score_keeper.update_hit_event(
+            outcome_str,
+            suppress_out_advancement=suppress_out_advancement,
+        )
     
     def power_timing_quality(self, swing_starttime, starttime, traveltime, windup_time):
         diff = abs((swing_starttime + 150) - (starttime + windup_time + traveltime))
@@ -321,7 +389,7 @@ class HitOutcomeManager:
 
     def update_runners_and_score(self):
         self.ishomerun = ''
-        scored = self.score_keeper.update_hit_event(self.hit_type)[1]
+        scored = self.score_keeper.update_hit_event("HOME RUN")[1]
         
         if self.hit_type == 4:
             if scored == 1:

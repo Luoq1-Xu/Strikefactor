@@ -24,6 +24,7 @@ class SoundManager:
             'double': "DOUBLE.mp3",
             'triple': "TRIPLE.mp3",
             'homerun': "HOMERUN.mp3",
+            'outside': "OUTSIDE.mp3",
             'sizzle': "sss.mp3"
         }
 

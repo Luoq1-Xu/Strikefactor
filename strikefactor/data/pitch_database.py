@@ -358,7 +358,7 @@ class PitchDataExtractor:
     # Compared against outcome.upper().replace(" ", "_") — keep keys in that form.
     TERMINAL_OUTCOMES = frozenset({
         "STRIKEOUT", "WALK", "SINGLE", "DOUBLE", "TRIPLE", "HOME_RUN",
-        "FLYOUT", "GROUNDOUT", "LINEOUT",
+        "FLYOUT", "GROUNDOUT", "LINEOUT", "POP_UP",
     })
 
     @staticmethod

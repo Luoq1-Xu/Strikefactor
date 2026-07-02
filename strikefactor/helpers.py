@@ -16,7 +16,7 @@ from pygame_gui.elements.ui_horizontal_slider import UIHorizontalSlider
 PITCH_TYPE_NAMES = {
     'FF': 'Fastball', 'SI': 'Sinker', 'FC': 'Cutter',
     'SL': 'Slider', 'CB': 'Curveball', 'CU': 'Curveball',
-    'CH': 'Changeup', 'FS': 'Splitter', 'KC': 'Knuckle Curve',
+    'CH': 'Changeup', 'FS': 'Splitter', 'FO': 'Forkball', 'KC': 'Knuckle Curve',
     'FF_strike': 'Fastball', 'FF_chase': 'Fastball',
     'SL_strike': 'Slider', 'SL_chase': 'Slider',
     'CB_strike': 'Curveball', 'CB_chase': 'Curveball',
@@ -37,6 +37,7 @@ OUTCOME_COLORS = {
     'FLYOUT': (198, 169, 251),      # Purple
     'GROUNDOUT': (198, 169, 251),   # Purple
     'LINEOUT': (198, 169, 251),     # Purple
+    'POP_UP': (198, 169, 251),      # Purple
 }
 
 
@@ -99,32 +100,64 @@ class ScoreKeeper:
         self.basesfilled = {1: 0, 2: 0, 3: 0}
         self.score = 0
 
-    # Takes in hit_type, then returns tuple of (bases, score)
-    def update_hit_event(self, hit_type):
-        batter = Runner(hit_type)
-        self.runners.append(batter)
-        scored = 0
-        # Advance every existing runner (the batter is already placed by
-        # Runner(hit_type)), tallying anyone who comes around to score.
-        for runner in self.runners[:]:
-            if runner != batter:
-                runner.advance(hit_type)
-            if runner.scored:
-                self.runners.remove(runner)
-                scored += 1
-        self.score += scored
-        # Rebuild base occupancy from scratch from the surviving runners.
-        # Mutating basesfilled in place during the advance loop could clobber
-        # a runner just placed on a base that another runner is vacating
-        # (e.g. runners on 1st+2nd, batter singles), so the dict and the
-        # display list are both recomputed here from the post-advance state.
+    def _rebuild_base_state(self):
         self.basesfilled = {1: 0, 2: 0, 3: 0}
         basesFilled = ['white', 'white', 'white']
+        surviving_runners = []
         for runner in self.runners:
+            if runner.scored:
+                continue
             if 1 <= runner.base <= 3:
                 self.basesfilled[runner.base] = runner
                 basesFilled[runner.base - 1] = 'yellow'
+                surviving_runners.append(runner)
+        self.runners = surviving_runners
         self.bases = basesFilled
+        return basesFilled
+
+    # Takes in hit_type, then returns tuple of (bases, score)
+    def update_hit_event(self, hit_type, suppress_out_advancement=False):
+        hit_map = {
+            1: 'SINGLE',
+            2: 'DOUBLE',
+            3: 'TRIPLE',
+            4: 'HOME RUN',
+        }
+        outcome = hit_type if isinstance(hit_type, str) else hit_map.get(hit_type, 'SINGLE')
+        scored = 0
+
+        if outcome in ('SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN'):
+            advance = {'SINGLE': 1, 'DOUBLE': 2, 'TRIPLE': 3, 'HOME RUN': 4}[outcome]
+            batter = Runner(advance)
+            self.runners.append(batter)
+            for runner in self.runners[:]:
+                if runner is not batter:
+                    runner.advance(advance)
+        elif outcome == 'GROUNDOUT':
+            if not suppress_out_advancement:
+                for runner in self.runners[:]:
+                    runner.advance(1)
+        elif outcome == 'FLYOUT':
+            if not suppress_out_advancement:
+                for runner in self.runners[:]:
+                    if runner.base in (2, 3):
+                        runner.advance(1)
+        elif outcome in ('LINEOUT', 'POP_UP'):
+            pass
+        else:
+            batter = Runner(1)
+            self.runners.append(batter)
+            for runner in self.runners[:]:
+                if runner is not batter:
+                    runner.advance(1)
+
+        for runner in self.runners[:]:
+            if runner.scored:
+                self.runners.remove(runner)
+                scored += 1
+
+        self.score += scored
+        basesFilled = self._rebuild_base_state()
         return (basesFilled, scored)
 
     def updateScored(self):

@@ -15,6 +15,7 @@ PITCH_NAMES = {
     'CB': 'Curveball',
     'CU': 'Curveball',
     'CH': 'Changeup',
+    'FO': 'Forkball',
     'FS': 'Splitter',
     'KC': 'Knuckle Curve'
 }
@@ -28,7 +29,8 @@ PITCH_VELOCITIES = {
     'CB': '73-81',
     'CU': '73-81',
     'CH': '83-89',
-    'FS': '85-90',
+    'FO': '84-87',
+    'FS': '90-92',
     'KC': '75-82'
 }
 

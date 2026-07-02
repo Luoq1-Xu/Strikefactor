@@ -6,10 +6,13 @@ Each state handles its own rendering, input processing, and state transitions.
 import pygame
 import pygame.gfxdraw
 import pygame_gui
+import os
 from abc import ABC, abstractmethod
+from datetime import datetime
 from typing import Optional
 from gameplay.gameday_manager import GameDayManager
 from config import get_path, resource_path
+from ui import gameday_theme as gdt
 
 
 class GameState(ABC):
@@ -1119,6 +1122,10 @@ class GameDayState(GameState):
                 self.carousel.prev()
             elif event.ui_element == buttons.get('gameday_next_pitcher'):
                 self.carousel.next()
+            elif event.ui_element == buttons.get('gameday_resume'):
+                self.game.enter_gameday_resume()
+            elif event.ui_element == buttons.get('gameday_past_games'):
+                self.game.enter_gameday_history()
         return True
 
     def _confirm_selection(self):
@@ -1128,15 +1135,9 @@ class GameDayState(GameState):
         self.game.start_gameday_with_starter(starter)
 
     def _ensure_fonts(self):
-        """Lazily build the pixel fonts used by the entry-screen chrome."""
+        """Lazily build the shared GameDay pixel font set."""
         if not hasattr(self, '_gd_fonts') or self._gd_fonts is None:
-            base = resource_path(get_path("ui/font/8bitoperator_jve.ttf"))
-            self._gd_fonts = {
-                'micro': pygame.font.Font(base, 14),
-                'tiny':  pygame.font.Font(base, 16),
-                'small': pygame.font.Font(base, 18),
-                'huge':  pygame.font.Font(base, 60),
-            }
+            self._gd_fonts = gdt.load_fonts()
         return self._gd_fonts
 
     def render(self, screen):
@@ -1239,7 +1240,16 @@ class GameDayTransitionState(GameState):
 
         # Determine what phase we're in
         gameday_mgr = self.game.gameday_manager
-        if gameday_mgr.game_over or gameday_mgr.is_walkoff:
+
+        # One-shot resume hint: restore the saved phase verbatim and skip
+        # re-derivation so an already-simulated opponent half (whose events are
+        # already in the restored log) isn't replayed a second time.
+        resume_phase = self.game._resuming_gameday_phase
+        self.game._resuming_gameday_phase = None
+
+        if resume_phase in ("SHOW_SCORE", "SIMULATING"):
+            self.phase = resume_phase
+        elif gameday_mgr.game_over or gameday_mgr.is_walkoff:
             # Game is decided (regulation, extras, or walk-off)
             self.phase = "FINAL"
             self._save_result_once()
@@ -1271,6 +1281,14 @@ class GameDayTransitionState(GameState):
 
         # Position buttons and set visibility for current phase
         self._setup_phase_ui()
+
+        # Persist (or clear) the resumable session at this half-inning boundary.
+        # FINAL games move to history (and clear their active session in
+        # _save_result_once); every other boundary is a clean resume point.
+        if self.phase == "FINAL":
+            self.game.clear_gameday_session(gameday_mgr.session_uuid)
+        else:
+            self.game.autosave_gameday_session(self.phase)
 
         # Ensure gameplay UI stays hidden (redundant safety)
         self.game.ui_manager.scoreboard.hide()
@@ -1307,6 +1325,10 @@ class GameDayTransitionState(GameState):
         session_id = svc.session_id
 
         gm.save_game_result(game_id=game_id, session_id=session_id)
+
+        # Game is now in history — drop any resumable session for it so it can't
+        # be resumed after completion (backstops the FINAL branch in enter()).
+        self.game.clear_gameday_session(gm.session_uuid)
 
         # Close the pitch-DB games row with the final score and result.
         if gm.player_score > gm.opponent_score:
@@ -1551,71 +1573,46 @@ class GameDayTransitionState(GameState):
     # ============================================================
     # Refreshed GameDay layout — monochrome retro/CRT aesthetic.
     # All screens share these constants and helpers.
+    # Palette / fonts / chrome / linescore live in ui/gameday_theme.py so the
+    # setup, transition, final, resume, and history screens stay identical.
     # ============================================================
-    _SCREEN_W = 1280
-    _SCREEN_H = 720
-    _MARGIN_X = 40
+    _SCREEN_W = gdt.SCREEN_W
+    _SCREEN_H = gdt.SCREEN_H
+    _MARGIN_X = gdt.MARGIN_X
 
     # Palette — strict black / white / gray, matches BroadcastHUD.
-    _BG = (0, 0, 0)
-    _FG = (240, 240, 240)
-    _DIM = (140, 140, 140)
-    _DIM_SOFT = (90, 90, 90)
-    _DIVIDER = (60, 60, 60)
-    _HIGHLIGHT_BG = (240, 240, 240)
-    _HIGHLIGHT_FG = (10, 10, 10)
+    _BG = gdt.BG
+    _FG = gdt.FG
+    _DIM = gdt.DIM
+    _DIM_SOFT = gdt.DIM_SOFT
+    _DIVIDER = gdt.DIVIDER
+    _HIGHLIGHT_BG = gdt.HIGHLIGHT_BG
+    _HIGHLIGHT_FG = gdt.HIGHLIGHT_FG
 
     # Hit / out classification reused across screens.
     _HIT_RESULTS = ('SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN')
-    _OUT_RESULTS = ('STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT')
+    _OUT_RESULTS = ('STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP_UP')
     # Compact labels for notable-play display.
     _HIT_ABBREV = {
         'SINGLE': '1B', 'DOUBLE': '2B', 'TRIPLE': '3B', 'HOME RUN': 'HR',
     }
 
     def _ensure_fonts(self):
-        """Lazily build the pixel font set used by the GameDay layout."""
-        if self._gd_fonts is not None:
-            return self._gd_fonts
-        base = resource_path(get_path("ui/font/8bitoperator_jve.ttf"))
-        self._gd_fonts = {
-            'micro': pygame.font.Font(base, 14),
-            'tiny':  pygame.font.Font(base, 16),
-            'small': pygame.font.Font(base, 18),
-            'med':   pygame.font.Font(base, 22),
-            'big':   pygame.font.Font(base, 30),
-            'huge':  pygame.font.Font(base, 60),
-            'mega':  pygame.font.Font(base, 110),
-        }
+        """Lazily build the shared GameDay pixel font set."""
+        if self._gd_fonts is None:
+            self._gd_fonts = gdt.load_fonts()
         return self._gd_fonts
 
-    # ---- Generic drawing helpers --------------------------------
+    # ---- Generic drawing helpers (delegate to shared theme) -----
 
     def _blit_text(self, screen, text, font, pos, color, align='left'):
         """Render text once and blit it. Returns the blit rect."""
-        surf = font.render(text, True, color)
-        x, y = pos
-        if align == 'right':
-            x -= surf.get_width()
-        elif align == 'center':
-            x -= surf.get_width() // 2
-        rect = surf.get_rect(topleft=(x, y))
-        screen.blit(surf, rect)
-        return rect
+        return gdt.blit_text(screen, text, font, pos, color, align)
 
     def _draw_top_chrome(self, screen, header_text):
         """Draw the shared header: '=== TITLE ===' top-left, brand top-right,
         plus a thin divider underneath."""
-        f = self._ensure_fonts()
-        self._blit_text(screen, header_text, f['micro'],
-                        (self._MARGIN_X, 20), self._FG)
-        self._blit_text(screen, "StrikeFactor 0.1", f['micro'],
-                        (self._SCREEN_W - self._MARGIN_X, 20),
-                        self._DIM, align='right')
-        pygame.draw.line(
-            screen, self._DIVIDER,
-            (self._MARGIN_X, 44),
-            (self._SCREEN_W - self._MARGIN_X, 44), 1)
+        gdt.draw_top_chrome(screen, header_text, self._ensure_fonts())
 
     # ---- Player batting-line stats (used by SHOW_SCORE + FINAL) -
 
@@ -1662,125 +1659,21 @@ class GameDayTransitionState(GameState):
 
     # ---- Linescore (top half of FINAL & transition screens) -----
 
-    _LINESCORE_TEAM_COL_W = 130
-    _LINESCORE_INNING_COL_W = 60
-    _LINESCORE_TOTAL_COL_W = 60
-    _LINESCORE_MIN_INNING_W = 36
-    _LINESCORE_MIN_TOTAL_W = 50
-
-    def _linescore_column_widths(self, n_innings: int):
-        """Return (team_w, inn_w, tot_w) sized to fit `n_innings` columns
-        within the screen margins; shrinks inning/total widths for extras."""
-        team_w = self._LINESCORE_TEAM_COL_W
-        inn_w = self._LINESCORE_INNING_COL_W
-        tot_w = self._LINESCORE_TOTAL_COL_W
-        max_w = self._SCREEN_W - 2 * self._MARGIN_X
-
-        # Shrink inning columns first, then totals, until the table fits.
-        if team_w + n_innings * inn_w + 3 * tot_w > max_w:
-            avail = max_w - team_w - 3 * tot_w
-            inn_w = max(self._LINESCORE_MIN_INNING_W, avail // n_innings)
-        if team_w + n_innings * inn_w + 3 * tot_w > max_w:
-            avail = max_w - team_w - n_innings * inn_w
-            tot_w = max(self._LINESCORE_MIN_TOTAL_W, avail // 3)
-        return team_w, inn_w, tot_w
-
     def _draw_linescore(self, screen, x, y, current_inning=None):
-        """Draw inning-by-inning linescore with R / H / E totals.
-        Auto-expands when the game has gone into extra innings.
+        """Draw the live game's inning-by-inning linescore with R / H / E.
+        Thin adapter over the shared array-fed renderer (ui/gameday_theme).
         Returns the y position just below the table."""
-        f = self._ensure_fonts()
         gm = self.game.gameday_manager
         box = gm.get_box_score_lines()
+        # Each side's hits = hits allowed by the pitchers they batted against.
         plr_hits = sum(ps.hits_allowed for ps in gm.get_opponent_pitcher_stats())
         opp_hits = sum(ps.hits_allowed for ps in gm.get_player_pitcher_stats())
-
-        n_innings = len(box['opponent'])
-        team_w, inn_w, tot_w = self._linescore_column_widths(n_innings)
-        table_w = team_w + n_innings * inn_w + 3 * tot_w
-        row_h = 38
-
-        # Section label — flag extras explicitly.
-        label = "LINESCORE"
-        if n_innings > 9:
-            label = f"LINESCORE  ·  {n_innings} INN"
-        self._blit_text(screen, label, f['micro'], (x, y), self._DIM)
-
-        header_y = y + 28
-        # Team header
-        self._blit_text(screen, "TEAM", f['tiny'],
-                        (x, header_y), self._DIM)
-        # Inning numbers (centered in column)
-        cx = x + team_w
-        for i in range(1, n_innings + 1):
-            color = self._FG if i == current_inning else self._DIM
-            self._blit_text(screen, str(i), f['tiny'],
-                            (cx + inn_w // 2, header_y),
-                            color, align='center')
-            cx += inn_w
-        for label in ("R", "H", "E"):
-            self._blit_text(screen, label, f['tiny'],
-                            (cx + tot_w // 2, header_y),
-                            self._DIM, align='center')
-            cx += tot_w
-
-        # Header / data divider
-        sep_y = header_y + 22
-        pygame.draw.line(screen, self._DIVIDER,
-                         (x, sep_y), (x + table_w, sep_y), 1)
-
-        # Opponent row
-        opp_y = sep_y + 8
-        self._draw_linescore_row(
-            screen, "OPPONENT", box['opponent'], box['opponent_total'],
-            opp_hits, 0, x, opp_y, team_w, inn_w, tot_w, table_w,
-            highlight=False)
-
-        # Player row (highlighted with white block)
-        plr_y = opp_y + row_h
-        self._draw_linescore_row(
-            screen, "YOU", box['player'], box['player_total'],
-            plr_hits, 0, x, plr_y, team_w, inn_w, tot_w, table_w,
-            highlight=True)
-
-        return plr_y + row_h
-
-    def _draw_linescore_row(self, screen, team_label, runs_per_inning,
-                            r_total, h_total, e_total,
-                            x, y, team_w, inn_w, tot_w, table_w,
-                            highlight=False):
-        """Render a single linescore row (OPPONENT / YOU). `y` is the row top-y."""
-        f = self._ensure_fonts()
-        row_h = 36
-
-        if highlight:
-            block = pygame.Rect(x - 6, y - 4, table_w + 12, row_h - 4)
-            pygame.draw.rect(screen, self._HIGHLIGHT_BG, block)
-            text_color = self._HIGHLIGHT_FG
-            dim_color = self._HIGHLIGHT_FG
-        else:
-            text_color = self._FG
-            dim_color = self._DIM_SOFT
-
-        # Team label
-        self._blit_text(screen, team_label, f['med'],
-                        (x, y), text_color)
-
-        # Inning runs (centered in column)
-        cx = x + team_w
-        for runs in runs_per_inning:
-            color = text_color if runs > 0 else dim_color
-            self._blit_text(screen, str(runs), f['med'],
-                            (cx + inn_w // 2, y),
-                            color, align='center')
-            cx += inn_w
-
-        # R / H / E (always rendered even if 0)
-        for value in (r_total, h_total, e_total):
-            self._blit_text(screen, str(value), f['med'],
-                            (cx + tot_w // 2, y),
-                            text_color, align='center')
-            cx += tot_w
+        return gdt.draw_linescore_from_arrays(
+            screen, x, y, self._ensure_fonts(),
+            box['opponent'], box['player'],
+            box['opponent_total'], box['player_total'],
+            opp_hits=opp_hits, plr_hits=plr_hits,
+            current_inning=current_inning)
 
     # ---- Stat grid (YOUR LINE) ----------------------------------
 
@@ -2077,3 +1970,461 @@ class GameDayTransitionState(GameState):
             self._render_final(screen)
         else:
             self._render_active(screen)
+
+
+def _fmt_iso(iso, fmt):
+    """Format an ISO timestamp, tolerating a missing/garbage value."""
+    try:
+        return datetime.fromisoformat(iso).strftime(fmt)
+    except (ValueError, TypeError):
+        return '—'
+
+
+class _GameDayListState(GameState):
+    """Shared scaffolding for the paginated GameDay list screens (Resume,
+    History).
+
+    Owns fonts, paging, layout, hover/click hit-testing and the shared retro
+    chrome. Subclasses supply the items, header/empty text, a per-row content
+    renderer, and the activation handler. Page nav + back are pygame_gui
+    buttons (``gd_page_prev`` / ``gd_page_next`` / ``gd_list_back``) plus
+    Left/Right/Esc keyboard fallbacks; rows are clicked directly.
+    """
+
+    PAGE_SIZE = 7
+    _LIST_TOP = 150            # y of the first row
+    _ROW_STRIDE = 66          # row top-to-top spacing
+    _ROW_H = 54               # drawn row height
+    _LIST_X = gdt.MARGIN_X
+    _LIST_W = gdt.SCREEN_W - 2 * gdt.MARGIN_X
+
+    HEADER = "=== GAMEDAY ==="
+    SUBTITLE = ""
+    EMPTY_TEXT = "NOTHING HERE YET"
+    ACTION_LABEL = "OPEN ›"
+    VISIBILITY_STATE = 'gameday_history'
+
+    def __init__(self, game):
+        super().__init__(game)
+        self._fonts = None
+        self.items = []
+        self.page = 0
+        self._row_rects = []  # list of (pygame.Rect, item) for hit-testing
+
+    # --- fonts ---
+    def _f(self):
+        if self._fonts is None:
+            self._fonts = gdt.load_fonts()
+        return self._fonts
+
+    # --- hooks for subclasses ---
+    def _load_items(self):
+        return []
+
+    def _render_row_content(self, screen, item, rect, fonts, fg):
+        """Draw a row's text. `fg` is the foreground color (dimmed on non-hover)."""
+        raise NotImplementedError
+
+    def _on_activate(self, item):
+        pass
+
+    def _on_back(self):
+        # Default: return to the GameDay setup screen.
+        self.game.state_manager.change_state('gameday')
+
+    # --- lifecycle ---
+    def enter(self):
+        self.items = self._load_items()
+        self.page = 0
+        self.game.ui_manager.set_visibility_state(self.VISIBILITY_STATE)
+
+    def exit(self):
+        pass
+
+    def update(self, time_delta: float):
+        pass
+
+    # --- paging ---
+    def _page_count(self):
+        if not self.items:
+            return 1
+        return (len(self.items) + self.PAGE_SIZE - 1) // self.PAGE_SIZE
+
+    def _page_items(self):
+        start = self.page * self.PAGE_SIZE
+        return self.items[start:start + self.PAGE_SIZE]
+
+    def next_page(self):
+        if self.page < self._page_count() - 1:
+            self.page += 1
+
+    def prev_page(self):
+        if self.page > 0:
+            self.page -= 1
+
+    # --- events ---
+    def handle_event(self, event):
+        self.game.ui_manager.process_events(event)
+        if event.type == pygame.QUIT:
+            return False
+
+        if event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_LEFT:
+                self.prev_page()
+            elif event.key == pygame.K_RIGHT:
+                self.next_page()
+            elif event.key == pygame.K_ESCAPE:
+                self._on_back()
+
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            for rect, item in self._row_rects:
+                if rect.collidepoint(event.pos):
+                    self._on_activate(item)
+                    break
+
+        if event.type == pygame_gui.UI_BUTTON_PRESSED:
+            buttons = self.game.ui_manager.buttons
+            if event.ui_element == buttons.get('gd_page_prev'):
+                self.prev_page()
+            elif event.ui_element == buttons.get('gd_page_next'):
+                self.next_page()
+            elif event.ui_element == buttons.get('gd_list_back'):
+                self._on_back()
+        return True
+
+    # --- render ---
+    def render(self, screen):
+        screen.fill(gdt.BG)
+        f = self._f()
+        gdt.draw_top_chrome(screen, self.HEADER, f)
+        if self.SUBTITLE:
+            gdt.blit_text(screen, self.SUBTITLE, f['micro'],
+                          (gdt.MARGIN_X, 64), gdt.DIM)
+
+        self._row_rects = []
+
+        if not self.items:
+            gdt.blit_text(screen, self.EMPTY_TEXT, f['big'],
+                          (gdt.SCREEN_W // 2, 320), gdt.DIM, align='center')
+            self._render_footer(screen, f)
+            return
+
+        mouse = pygame.mouse.get_pos()
+        y = self._LIST_TOP
+        for item in self._page_items():
+            rect = pygame.Rect(self._LIST_X, y, self._LIST_W, self._ROW_H)
+            hover = rect.collidepoint(mouse)
+            # Row frame — hover gets a faint fill + bright border + action hint.
+            if hover:
+                pygame.draw.rect(screen, (18, 18, 18), rect)
+            pygame.draw.rect(screen, gdt.FG if hover else gdt.DIVIDER, rect, 1)
+            self._render_row_content(screen, item, rect, f,
+                                     gdt.FG if hover else gdt.DIM)
+            # Action affordance on the right.
+            gdt.blit_text(screen, self.ACTION_LABEL, f['small'],
+                          (rect.right - 18, rect.centery - 9),
+                          gdt.FG if hover else gdt.DIM_SOFT, align='right')
+            self._row_rects.append((rect, item))
+            y += self._ROW_STRIDE
+
+        self._render_footer(screen, f)
+
+    def _render_footer(self, screen, f):
+        page_txt = f"PAGE {self.page + 1} / {self._page_count()}"
+        gdt.blit_text(screen, page_txt, f['small'],
+                      (gdt.SCREEN_W // 2, gdt.SCREEN_H - 92),
+                      gdt.FG, align='center')
+        hint = "LEFT / RIGHT  PAGE      CLICK A ROW      ESC  BACK"
+        gdt.blit_text(screen, hint, f['micro'],
+                      (gdt.SCREEN_W // 2, gdt.SCREEN_H - 64),
+                      gdt.DIM_SOFT, align='center')
+
+
+class GameDayResumeState(_GameDayListState):
+    """Paginated list of resumable in-progress GameDay games (most-recent-first)."""
+
+    HEADER = "=== GAMEDAY · RESUME ==="
+    SUBTITLE = "PICK UP WHERE YOU LEFT OFF"
+    EMPTY_TEXT = "NO SAVED GAMES"
+    ACTION_LABEL = "RESUME ›"
+    VISIBILITY_STATE = 'gameday_resume'
+
+    def _load_items(self):
+        from data import gameday_sessions
+        return gameday_sessions.load_sessions()
+
+    def _on_activate(self, item):
+        self.game.resume_gameday_session(item.get('session_id'))
+
+    def _render_row_content(self, screen, item, rect, fonts, fg):
+        cy = rect.centery - fonts['med'].get_height() // 2
+        ly = rect.top + 8
+
+        saved = _fmt_iso(item.get('saved_at'), '%m/%d %H:%M')
+        inning = item.get('inning', '?')
+        half = (item.get('half') or '').upper()
+        diff = (item.get('difficulty') or '').upper()
+        starter = (item.get('opponent_starter') or '?').upper()
+        score = f"YOU {item.get('player_score', 0)}-{item.get('opponent_score', 0)} OPP"
+
+        # Column labels (micro) + values (med), left to right.
+        gdt.blit_text(screen, "SAVED", fonts['micro'], (rect.left + 20, ly), gdt.DIM_SOFT)
+        gdt.blit_text(screen, saved, fonts['med'], (rect.left + 20, cy + 6), fg)
+
+        gdt.blit_text(screen, f"INN {inning} · {half}", fonts['med'],
+                      (rect.left + 240, cy), fg)
+        gdt.blit_text(screen, score, fonts['med'], (rect.left + 440, cy), fg)
+        gdt.blit_text(screen, diff, fonts['small'],
+                      (rect.left + 720, cy + 2), gdt.DIM)
+        gdt.blit_text(screen, f"vs {starter}", fonts['small'],
+                      (rect.left + 930, cy + 2), gdt.DIM)
+
+
+class GameDayHistoryState(_GameDayListState):
+    """Paginated list of completed GameDay games (most-recent-first) with a
+    per-game inning-by-inning detail view."""
+
+    HEADER = "=== GAMEDAY · HISTORY ==="
+    SUBTITLE = "YOUR COMPLETED GAMES"
+    EMPTY_TEXT = "NO GAMES YET"
+    ACTION_LABEL = "VIEW ›"
+    VISIBILITY_STATE = 'gameday_history'
+
+    def __init__(self, game):
+        super().__init__(game)
+        self.selected = None  # a game dict when viewing detail
+
+    def _load_items(self):
+        return GameDayManager.get_history_games()
+
+    @staticmethod
+    def _history_hit_totals(item):
+        """Return (player_hits, opponent_hits) for a completed game record.
+
+        New records store hit totals directly. Older records can be recovered
+        from the pitch database when game/session foreign keys are present.
+        """
+        player_hits = item.get('player_hits')
+        opponent_hits = item.get('opponent_hits')
+        if player_hits is not None and opponent_hits is not None:
+            return player_hits, opponent_hits
+
+        game_id = item.get('game_id')
+        session_id = item.get('session_id')
+        if not game_id or not session_id:
+            return 0, 0
+
+        try:
+            import sqlite3
+            db_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'strikefactor.db')
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT is_hit, is_top_inning
+                FROM pitches
+                WHERE game_id = ? AND session_id = ? AND is_hit = 1
+                """,
+                (game_id, session_id),
+            ).fetchall()
+        except Exception:
+            return 0, 0
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+        player_hits = sum(1 for row in rows if not row['is_top_inning'])
+        opponent_hits = sum(1 for row in rows if row['is_top_inning'])
+        return player_hits, opponent_hits
+
+    @staticmethod
+    def _format_play_entry(entry):
+        inning = entry.get('inning', '?')
+        half = 'Top' if entry.get('is_top') else 'Bottom'
+        batter = entry.get('batter_name') or ('Opponent' if entry.get('is_top') else 'Player')
+        pitcher = entry.get('pitcher_name') or 'Unknown pitcher'
+        result = (entry.get('result') or 'UNKNOWN').replace('_', ' ')
+        runs = int(entry.get('runs_scored', 0) or 0)
+        if runs:
+            result = f"{result} ({runs} R)"
+        play_index = entry.get('play_index')
+        prefix = f"{play_index:>3}. " if isinstance(play_index, int) else ""
+        return f"{prefix}[{half} {inning}] {batter} - {result} (vs {pitcher})"
+
+    @staticmethod
+    def _play_log_from_game(item):
+        log = item.get('play_log') or []
+        if log:
+            return list(log)
+
+        game_id = item.get('game_id')
+        session_id = item.get('session_id')
+        if not game_id or not session_id:
+            return []
+
+        try:
+            import sqlite3
+            db_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'strikefactor.db')
+            conn = sqlite3.connect(db_path)
+            conn.row_factory = sqlite3.Row
+            rows = conn.execute(
+                """
+                SELECT
+                    a.ab_id,
+                    a.final_outcome,
+                    a.pitcher_name,
+                    p.inning,
+                    p.is_top_inning,
+                    MIN(a.created_at) AS ab_created_at,
+                    MIN(p.created_at) AS first_pitch_created_at,
+                    MAX(p.runs_scored_on_pitch) AS runs_scored_on_pitch
+                FROM at_bats a
+                JOIN pitches p ON p.ab_id = a.ab_id
+                WHERE a.game_id = ? AND a.session_id = ?
+                GROUP BY a.ab_id, a.final_outcome, a.pitcher_name, p.inning, p.is_top_inning
+                ORDER BY ab_created_at, first_pitch_created_at, a.ab_id
+                """,
+                (game_id, session_id),
+            ).fetchall()
+        except Exception:
+            return []
+        finally:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+        play_log = []
+        for index, row in enumerate(rows, start=1):
+            play_log.append({
+                'play_index': index,
+                'inning': row['inning'],
+                'is_top': bool(row['is_top_inning']),
+                'batter_name': 'Opponent' if row['is_top_inning'] else 'Player',
+                'pitcher_name': row['pitcher_name'] or 'Unknown pitcher',
+                'result': row['final_outcome'] or 'UNKNOWN',
+                'runs_scored': int(row['runs_scored_on_pitch'] or 0),
+            })
+        return play_log
+
+    def enter(self):
+        self.selected = None
+        super().enter()
+
+    def _on_activate(self, item):
+        self.selected = item
+        self.game.ui_manager.set_visibility_state('gameday_history_detail')
+
+    # --- result chip + row ---
+    @staticmethod
+    def _result_of(item):
+        r = (item.get('result') or '').upper()
+        return r if r in ('WIN', 'LOSS', 'TIE') else '—'
+
+    def _render_row_content(self, screen, item, rect, fonts, fg):
+        cy = rect.centery - fonts['med'].get_height() // 2
+        date = _fmt_iso(item.get('date'), '%m/%d/%y')
+        result = self._result_of(item)
+        score = f"YOU {item.get('player_score', 0)}-{item.get('opponent_score', 0)} OPP"
+        diff = (item.get('difficulty') or '').upper()
+        starter = (item.get('opponent_starter') or '?').upper()
+
+        gdt.blit_text(screen, date, fonts['med'], (rect.left + 20, cy), fg)
+        self._draw_result_chip(screen, fonts, result, rect.left + 170, rect.centery)
+        gdt.blit_text(screen, score, fonts['med'], (rect.left + 310, cy), fg)
+        gdt.blit_text(screen, diff, fonts['small'],
+                      (rect.left + 600, cy + 2), gdt.DIM)
+        gdt.blit_text(screen, f"vs {starter}", fonts['small'],
+                      (rect.left + 860, cy + 2), gdt.DIM)
+
+    def _draw_result_chip(self, screen, fonts, result, x, cy):
+        """WIN renders as an inverted chip; LOSS/TIE as dim text."""
+        font = fonts['small']
+        if result == 'WIN':
+            surf = font.render(result, True, gdt.HIGHLIGHT_FG)
+            pad = 8
+            chip = pygame.Rect(x - pad, cy - surf.get_height() // 2 - 4,
+                               surf.get_width() + 2 * pad, surf.get_height() + 8)
+            pygame.draw.rect(screen, gdt.HIGHLIGHT_BG, chip)
+            screen.blit(surf, (x, cy - surf.get_height() // 2))
+        else:
+            gdt.blit_text(screen, result, font, (x, cy - font.get_height() // 2),
+                          gdt.DIM)
+
+    # --- detail view overrides ---
+    def handle_event(self, event):
+        if self.selected is None:
+            return super().handle_event(event)
+
+        # Detail view: only "back" (returns to the list) is available.
+        self.game.ui_manager.process_events(event)
+        if event.type == pygame.QUIT:
+            return False
+        back = (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE)
+        if event.type == pygame_gui.UI_BUTTON_PRESSED:
+            back = back or (event.ui_element ==
+                            self.game.ui_manager.buttons.get('gd_list_back'))
+        if back:
+            self.selected = None
+            self.game.ui_manager.set_visibility_state('gameday_history')
+        return True
+
+    def render(self, screen):
+        if self.selected is None:
+            super().render(screen)
+        else:
+            self._render_detail(screen, self.selected)
+
+    def _render_detail(self, screen, game):
+        screen.fill(gdt.BG)
+        f = self._f()
+        gdt.draw_top_chrome(screen, "=== GAMEDAY · HISTORY ===", f)
+
+        date = _fmt_iso(game.get('date'), '%B %d, %Y · %H:%M')
+        result = self._result_of(game)
+        p = game.get('player_score', 0)
+        o = game.get('opponent_score', 0)
+
+        gdt.blit_text(screen, date, f['micro'], (gdt.MARGIN_X, 64), gdt.DIM)
+        head = "WIN" if result == 'WIN' else ("LOSS" if result == 'LOSS' else "TIE")
+        gdt.blit_text(screen, head, f['huge'], (gdt.MARGIN_X, 84), gdt.FG)
+        gdt.blit_text(screen, f"{p}-{o}", f['mega'],
+                      (gdt.SCREEN_W - gdt.MARGIN_X, 70), gdt.FG, align='right')
+
+        diff = (game.get('difficulty') or '').upper()
+        starter = (game.get('opponent_starter') or '?').upper()
+        gdt.blit_text(screen, f"{diff}   ·   OPPONENT STARTER: {starter}",
+                      f['small'], (gdt.MARGIN_X, 200), gdt.DIM)
+
+        player_hits, opponent_hits = self._history_hit_totals(game)
+
+        opp = game.get('opponent_inning_scores', []) or []
+        plr = game.get('player_inning_scores', []) or []
+        # Pad to equal length (history rows can differ if a half was skipped).
+        n = max(9, len(opp), len(plr))
+        opp = list(opp) + [0] * (n - len(opp))
+        plr = list(plr) + [0] * (n - len(plr))
+        gdt.draw_linescore_from_arrays(
+            screen, gdt.MARGIN_X, 250, f, opp, plr, sum(opp), sum(plr),
+            opp_hits=opponent_hits, plr_hits=player_hits,
+        )
+
+        play_log = self._play_log_from_game(game)
+        play_y = 420
+        gdt.blit_text(screen, "PLAY LOG", f['micro'],
+                      (gdt.MARGIN_X, play_y), gdt.DIM)
+        play_y += 26
+        if play_log:
+            for entry in play_log[-10:]:
+                gdt.blit_text(screen, self._format_play_entry(entry), f['small'],
+                              (gdt.MARGIN_X, play_y), gdt.FG)
+                play_y += 24
+        else:
+            gdt.blit_text(screen, "NO STRUCTURED PLAY LOG AVAILABLE FOR THIS GAME",
+                          f['small'], (gdt.MARGIN_X, play_y), gdt.DIM_SOFT)
+
+        gdt.blit_text(screen, "ESC  ·  BACK TO LIST", f['micro'],
+                      (gdt.SCREEN_W // 2, gdt.SCREEN_H - 64),
+                      gdt.DIM_SOFT, align='center')

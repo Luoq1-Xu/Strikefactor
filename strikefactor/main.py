@@ -118,7 +118,7 @@ class PitcherManager:
                 'CB': ['FF'], 'CH': ['FF', 'SL'],
             },
             'sasaki': {
-                'FF': ['FS'], 'FS': ['FF'],
+                'FF': ['FO', 'FS'], 'FO': ['FF', 'FS'], 'FS': ['FF', 'FO'],
             },
             'yamamoto': {
                 'FF': ['FS', 'CB', 'FC'], 'FS': ['FF', 'SI'],
@@ -196,7 +196,7 @@ class GameStats:
         self.outcome_value = {
             'strike': 0.5, 'ball': -0.25, 'foul': 0.3, 'strikeout': 2, 'walk': -1,
             'SINGLE': -1.5, 'DOUBLE': -2, 'TRIPLE': -2.5, 'HOME RUN': -3,
-            'FLYOUT': 1.5, 'GROUNDOUT': 1.5, 'LINEOUT': 1.5
+            'FLYOUT': 1.5, 'GROUNDOUT': 1.5, 'LINEOUT': 1.5, 'POP_UP': 1.5
         }
         
     def reset_game_stats(self):
@@ -321,6 +321,10 @@ class Game:
         # GameDay mode management
         self.gameday_manager = None
         self.in_gameday_mode = False
+        # One-shot hint set by resume_gameday_session() and consumed by
+        # GameDayTransitionState.enter() to restore the saved phase without
+        # re-simulating an already-played opponent half.
+        self._resuming_gameday_phase = None
 
         # ABS challenge system
         self.challenge_manager = ChallengeManager()
@@ -824,6 +828,8 @@ class Game:
         self.challenge_manager.set_unlimited(False)
         self.challenge_manager.reset_all()
         self.inning_ended = False
+        # Starting fresh — drop any stale resume hint from a prior resume.
+        self._resuming_gameday_phase = None
 
         # Begin a new GameDay record. pitcher_name is None at the game level
         # because the opponent uses a staff (starter + relievers).
@@ -832,6 +838,88 @@ class Game:
         self.menu_state = 'gameday'
         self.state_manager.change_state('gameday_transition')
         self.ui_manager.update_scouting_panel(self.current_pitcher)
+
+    def resume_gameday_session(self, session_id: str):
+        """Rebuild and resume a previously-saved in-progress GameDay game.
+
+        Resumes at the half-inning boundary the session was saved at: the
+        GameDayManager is reconstructed from its snapshot and the player is
+        dropped back into the transition screen, which recomputes the phase.
+        """
+        from gameplay.gameday_manager import GameDayManager
+        from data import gameday_sessions
+
+        record = gameday_sessions.get_session(session_id)
+        if not record or not record.get('state'):
+            print(f"[gameday] resume failed: session {session_id} not found")
+            return
+
+        self.gameday_manager = GameDayManager.from_dict(record['state'])
+        self.in_gameday_mode = True
+
+        # Align the global difficulty with the resumed game so the batter-profile
+        # bucket (load + save) and gameplay difficulty match what was saved.
+        self.settings_manager.set_difficulty(self.gameday_manager.difficulty)
+
+        # Install the active opponent pitcher and re-link fatigue tracking.
+        self.pitcher_manager.set_current_pitcher(
+            self.gameday_manager.current_pitcher_name)
+        self.current_pitcher = self.pitcher_manager.get_current_pitcher()
+        self.current_pitcher.set_fatigue_stats(
+            self.gameday_manager.get_active_pitcher_stats()
+        )
+
+        # Fresh per-game side state (the manager itself carries score/innings).
+        self.game_stats.reset_game_stats()
+        self._load_batter_profile_for_current_bucket()
+        self.scoreKeeper.reset()
+        self.challenge_manager.set_unlimited(False)
+        self.challenge_manager.reset_all()
+        self.inning_ended = False
+
+        # Continued pitches log under a fresh DB game row (FK'd into history).
+        self._db_start_game("gameday", pitcher_name=None)
+
+        # One-shot resume hint consumed by GameDayTransitionState.enter() so it
+        # restores the saved phase and skips re-simulating an already-played half.
+        self._resuming_gameday_phase = record.get('phase')
+
+        self.menu_state = 'gameday'
+        self.state_manager.change_state('gameday_transition')
+        self.ui_manager.update_scouting_panel(self.current_pitcher)
+
+    def autosave_gameday_session(self, phase: str):
+        """Persist the in-progress GameDay game so it can be resumed later.
+
+        Called at each half-inning boundary (GameDayTransitionState). Best-effort:
+        a save failure must never interrupt play.
+        """
+        if not (self.in_gameday_mode and self.gameday_manager is not None):
+            return
+        try:
+            from data import gameday_sessions
+            record = gameday_sessions.build_record(self.gameday_manager, phase)
+            gameday_sessions.upsert_session(record)
+        except Exception as e:
+            print(f"[gameday] autosave_gameday_session failed: {e}")
+
+    def clear_gameday_session(self, session_id: str):
+        """Remove a saved in-progress session (on completion or abandonment)."""
+        if not session_id:
+            return
+        try:
+            from data import gameday_sessions
+            gameday_sessions.remove_session(session_id)
+        except Exception as e:
+            print(f"[gameday] clear_gameday_session failed: {e}")
+
+    def enter_gameday_history(self):
+        """Show the paginated list of completed GameDay games."""
+        self.state_manager.change_state('gameday_history')
+
+    def enter_gameday_resume(self):
+        """Show the list of resumable in-progress GameDay games."""
+        self.state_manager.change_state('gameday_resume')
 
     def enter_arcade_mode(self):
         """Enter Arcade mode (pitcher selection menu)."""
