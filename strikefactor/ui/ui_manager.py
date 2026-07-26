@@ -70,18 +70,23 @@ class UIManager:
     
     def _create_game_buttons(self, manager):
         """Creates and returns a dictionary of in-game UI buttons."""
+        sandbox_x = 6
+        sandbox_w = 120
+        sandbox_h = 28
+        sandbox_top = 188
+        sandbox_step = 28
         buttons = {
             # View toggles group
             'strikezone': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((6, 200), (120, 28)),
+                relative_rect=pygame.Rect((sandbox_x, sandbox_top), (sandbox_w, sandbox_h)),
                 text='ZONE', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             'toggle_batter': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((6, 230), (120, 28)),
+                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step), (sandbox_w, sandbox_h)),
                 text='BATTER', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             'visualise': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((6, 260), (120, 28)),
+                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 2), (sandbox_w, sandbox_h)),
                 text='TRACK', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             # Analysis group
@@ -356,59 +361,59 @@ class UIManager:
 
             # Sandbox gameplay - Pitcher switch buttons (left sidebar, broadcast style)
             'sandbox_pitcher_sale': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((6, 356), (120, 28)),
+                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 3), (sandbox_w, sandbox_h)),
                 text='SALE', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitcher_degrom': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((6, 384), (120, 28)),
+                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 4), (sandbox_w, sandbox_h)),
                 text='DEGROM', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitcher_sasaki': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((6, 412), (120, 28)),
+                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 5), (sandbox_w, sandbox_h)),
                 text='SASAKI', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitcher_yamamoto': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((6, 440), (120, 28)),
+                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 6), (sandbox_w, sandbox_h)),
                 text='YAMAMOTO', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitcher_mcclanahan': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((6, 468), (120, 28)),
+                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 7), (sandbox_w, sandbox_h)),
                 text='MCCLANAHAN', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
 
             # Sandbox gameplay - Pitch toggle buttons (left sidebar, 2-column broadcast style)
             'sandbox_pitch_1': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((6, 508), (58, 28)),
+                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 9), (58, sandbox_h)),
                 text='', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitch_2': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((68, 508), (58, 28)),
+                relative_rect=pygame.Rect((sandbox_x + 62, sandbox_top + sandbox_step * 9), (58, sandbox_h)),
                 text='', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitch_3': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((6, 538), (58, 28)),
+                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 10), (58, sandbox_h)),
                 text='', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitch_4': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((68, 538), (58, 28)),
+                relative_rect=pygame.Rect((sandbox_x + 62, sandbox_top + sandbox_step * 10), (58, sandbox_h)),
                 text='', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitch_5': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((6, 568), (58, 28)),
+                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 11), (58, sandbox_h)),
                 text='', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitch_6': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((68, 568), (58, 28)),
+                relative_rect=pygame.Rect((sandbox_x + 62, sandbox_top + sandbox_step * 11), (58, sandbox_h)),
                 text='', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
 
             # Sandbox gameplay - System buttons (left sidebar bottom)
             'sandbox_sound': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((6, 608), (120, 28)),
+                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 13), (sandbox_w, sandbox_h)),
                 text='SOUND', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_exit': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((6, 636), (120, 28)),
+                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 14), (sandbox_w, sandbox_h)),
                 text='EXIT', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button'))
         }

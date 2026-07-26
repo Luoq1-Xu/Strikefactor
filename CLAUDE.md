@@ -123,7 +123,10 @@ Full 9-inning game simulation in [gameday_manager.py](strikefactor/gameplay/game
 - **Bullpen logic**: `should_consider_relief_pitcher()` / `substitute_relief_pitcher()` for the opponent; `should_consider_player_relief_pitcher()` / `_pick_player_reliever()` / `substitute_player_relief_pitcher()` for the player team. Roles, pitch caps, IP caps, and outcome multipliers are loaded from [data/pitcher_attributes.json](strikefactor/data/pitcher_attributes.json) via `get_pitcher_attrs(name)`.
 - **Walk-off detection**: `check_walkoff()` ends the game immediately when the home team takes the lead in the bottom of the 9th or later.
 - **Box score**: `get_box_score_lines()` feeds the [BoxScorePanel](strikefactor/ui/box_score_panel.py) rendered in the GameDay finale.
+- **Play-by-play**: [PlayByPlayPanel](strikefactor/ui/play_by_play_panel.py) renders a stored/live `play_log` as a scrollable log grouped by half-inning, with a running score, ALL/SCORING/YOU/OPP filters, and a sticky inning header. Used by the GameDay history detail screen and the in-game GAME LOG overlay (`GameDayTransitionState._show_game_log`).
 - **History**: Saved per-game to `data/gameday_history.json` via `save_game_result()`; class methods `get_career_record()` and `load_history_record_vs(pitcher)` power the pitcher-vs-record line on the [PitcherCarousel](strikefactor/ui/pitcher_carousel.py).
+- **Resume**: `resume_gameday_session()` reattaches the pitch DB to the session's `db_game_id` via `PitchDatabaseService.resume_game()`, so a resumed game keeps **one** `game_id` end to end. Opening a second row instead splits one logical game in two, and the first half then has no final score — its runs become unattributable in the pitching line.
+- **Maintenance**: [gameday_maintenance.py](strikefactor/data/gameday_maintenance.py) archives, resets, and restores GameDay state. GameDay lives in *three* stores — `gameday_history.json`, `gameday_sessions.json`, and the `game_mode = 'gameday'` rows of `strikefactor.db` — and every operation must cover all three. Archiving the JSON alone lets history say one game while the analysis still aggregates every pitch ever thrown. `--keep-latest` / `--keep-game` retain specific games; `merge_game_fragments()` repairs games split by the pre-fix resume path. Snapshots land in `data/gameday_archives/<timestamp>/` with the DB slice as a standalone queryable SQLite file.
 
 ### Sandbox Mode
 Free-practice mode where the player picks every pitch:
@@ -152,8 +155,25 @@ Free-practice mode where the player picks every pitch:
   - Tables: `pitches` (full 9-parameter kinematics, derived speed/movement, AB context, outcomes, ABS truth-vs-call), `pitch_trajectories` (20-sample 3D trajectory per pitch), `at_bats`, `games` (one row per Arcade encounter / GameDay / Sandbox session), `batter_profiles` (persisted [BatterProfile](#ai-system) aggregates keyed by mode+difficulty).
   - `PitchDatabaseService` is a singleton (`PitchDatabaseService.get_instance()`) with `start_game()` / `end_game()` / `record_pitch()` / `load_batter_profile()` / `save_batter_profile()`. Migrations are versioned by `SCHEMA_VERSION` and run in `PitchDB._migrate()`; an auto-backup runs into `data/backups/`.
 - **Analytics scripts** (repo root, run outside the game):
-  - [pitch_analysis.py](pitch_analysis.py): Generates visualizations from `strikefactor.db` (filterable by mode + difficulty). Output goes to `analysis_output/`.
-  - [batting_analysis.py](batting_analysis.py): Player batting-tendency visualizations from the same DB.
+  - [pitch_analysis.py](pitch_analysis.py): Thin CLI over the [analysis/](analysis/) package. Renders 15 figures plus `report.html`, or prints the same numbers as terminal tables with `--terminal`. Output goes to `analysis_output/<filter-slug>/`.
+  - [batting_analysis.py](batting_analysis.py): Player batting-tendency figures, writing `batting_report.html` into the same per-filter folder. Shares filtering/palettes/outcome groups with the analysis package.
+  - Shared flags: `--mode`, `--difficulty`, `--handedness`, `--pitcher`. `pitch_analysis.py` adds `--terminal`, `--figures`, `--sections`, `--only`, `--list`, `--width`, `--out`, `--db`, `--no-report`.
+
+### Analysis Package
+[analysis/](analysis/) is layered so metrics are computed once and rendered many ways — see [docs/pitch-analysis-refactor.md](docs/pitch-analysis-refactor.md) for the design rationale.
+
+- **[data.py](analysis/data.py)**: SQLite → pandas plus derived columns (`is_whiff`, `in_zone`, `is_chase`, `count_state`, `platoon`, `plate_x_batter`, backfilled `pitcher_hand`). `Context` bundles filter + frame + output dir, replacing the old module-level globals.
+- **[filters.py](analysis/filters.py)**: `Filter` dataclass and the shared CLI options. One output subfolder per filter slug.
+- **[metrics.py](analysis/metrics.py)**: Pure DataFrame → DataFrame statistics. No I/O, no drawing — this is what keeps the PNG and terminal outputs identical.
+- **[theme.py](analysis/theme.py)**: Palettes, pitch/pitcher labels, outcome groups, MLB benchmarks, strike-zone constants.
+- **[render_mpl.py](analysis/render_mpl.py)** / **[render_term.py](analysis/render_term.py)**: The two renderers. `render_term` uses `rich` when present and falls back to plain ASCII.
+- **[figures/](analysis/figures/)**: One module per section, registered in `figures.FIGURES`. Adding a figure means adding a row to that list.
+
+Key metric definitions worth knowing:
+- **Whiff** = `swing_type > 0 AND outcome IN ('strike','strikeout')`. Fouls carry `outcome = 'foul'` and contact carries an in-play outcome, so this is exact. `on_time` grades *timing* (0 mistimed / 1 foul-timing / 2 on time), **not** contact — a well-timed swing still misses on location.
+- **`POP_UP` is a terminal outcome** and belongs in every PA/BF/out denominator (`theme.TERMINAL_OUTCOMES`).
+- **Run value** comes from a count-value model solved by backward induction over the active slice, so run values sum to ~0 across it and are only meaningful *between* sub-groups. Any per-count aggregate is structurally zero.
+- **The pitching line computes every column over one slice**: GameDay rows with a non-null `game_id`, which is exactly the set whose runs can be attributed. `game_id IS NULL` and `runs_scored_on_pitch IS NULL` are perfectly correlated (both arrived in the v2 migration), so counting H/HR/BB/K over all rows while counting R over only the covered ones makes the pre-v2 era contribute innings and homers but structurally zero runs — which is how a line ends up reporting more HR than R. Excluded rows are surfaced via `df.attrs["dropped_pitches"]`, not silently dropped. Runs charged to these pitchers are `final_player_score`: the pitches table only holds pitches thrown *to* the player.
 
 ## Key Dependencies
 - **pygame-ce**: Game engine and rendering
@@ -210,8 +230,19 @@ Free-practice mode where the player picks every pitch:
 ## File Organization
 ```
 .
-├── pitch_analysis.py        # Offline pitch DB visualizations (writes to analysis_output/)
+├── pitch_analysis.py        # CLI: figures + report.html, or --terminal tables
 ├── batting_analysis.py      # Offline batting-tendency visualizations
+├── docs/
+│   └── pitch-analysis-refactor.md  # Analysis design doc (metric definitions, layering)
+├── analysis/                # Offline analysis package (shared by both scripts)
+│   ├── data.py              # SQLite -> pandas, derived columns, Context
+│   ├── filters.py           # Filter dataclass + shared CLI options
+│   ├── metrics.py           # Pure DataFrame -> DataFrame statistics
+│   ├── theme.py             # Palettes, labels, outcome groups, benchmarks
+│   ├── render_mpl.py        # Figure/table helpers
+│   ├── render_term.py       # rich terminal renderer (ASCII fallback)
+│   ├── report.py            # HTML index over the generated PNGs
+│   └── figures/             # One module per section; registry in __init__.py
 └── strikefactor/
     ├── main.py                  # Game class, managers, HUD dispatch
     ├── config.py                # Global constants (screen, physics, ABS, CHALLENGES_PER_SIDE)
@@ -244,6 +275,7 @@ Free-practice mode where the player picks every pitch:
     │   ├── abs_challenge_overlay.py # ABS replay overlay
     │   ├── pitcher_carousel.py  # GameDay starter picker
     │   ├── box_score_panel.py   # Retro 9-inning box score
+    │   ├── play_by_play_panel.py # Scrollable, filterable play-by-play log
     │   ├── lap_log_panel.py     # Sandbox lap history viewer
     │   └── components.py        # Shared UI primitives
     ├── engine/
@@ -257,6 +289,9 @@ Free-practice mode where the player picks every pitch:
     │   ├── batting_stats.json
     │   ├── batting_stats_legacy_v1.json
     │   ├── gameday_history.json # GameDay results / career record
+    │   ├── gameday_sessions.json # Resumable in-progress GameDay games
+    │   ├── gameday_maintenance.py # Archive/reset/restore GameDay (JSON + DB slice)
+    │   ├── gameday_archives/     # Timestamped GameDay snapshots
     │   ├── lap_history.json     # Sandbox lap log
     │   ├── pitcher_attributes.json # Bullpen role/cap/multiplier tuning
     │   ├── pitch_database.py    # SQLite layer (PitchDB, PitchDatabaseService)

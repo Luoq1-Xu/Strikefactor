@@ -13,7 +13,9 @@ class Sale(Pitcher):
                          'Chris Sale',
                          1100,
                          6.7,
-                         command=0.80)
+                         command=0.80,
+                         throws='L',
+                         pitch_command={'FF': 0.84, 'SI': 0.82, 'SL': 0.78, 'CH': 0.70})
         self.load_img(loadfunc, 'assets/images/sale/LEFTY', 9)
         self.add_pitch_type(self.FF, 'FF')
         self.add_pitch_type(self.SL, 'SL')

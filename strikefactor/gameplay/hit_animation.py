@@ -497,6 +497,50 @@ GO_FIELD_HOLD_MS        = 280
 GO_THROW_MS             = 760
 GO_CATCH_HOLD_MS        = 420
 
+# ---- First-base coverage --------------------------------------------------
+# The standing spot at the bag (a step to the home-plate side of it, which
+# is where a cover man actually sets up). Single source of truth — this
+# used to be re-derived inline in three places.
+FIRST_BASE_BAG_POS = (BASES["1B"][0] - 7, BASES["1B"][1] + 5)
+
+# Who can cover first, and how strongly we prefer them over a raw ETA
+# race (ms subtracted from their ETA when choosing). The 1B owns the bag
+# by default. When the 1B is the one fielding the ball, the pitcher
+# breaking to the bag is the canonical 3-1 play, so they get the largest
+# bump — but the 2B is still allowed to take it when they're genuinely
+# closer (a 1B ranging into the hole is when the 2B covers in real ball).
+# These only ever break ties among fielders who can *actually* get there
+# in time; see COVER_IN_TIME_BUDGET_MS.
+COVER_ROLE_PRIORITY = ["1B", "2B", "P"]
+COVER_PREFERENCE_MS = {"1B": 1200.0, "P": 2000.0}
+# Extra bonus the fielder already running to the bag gets, so a challenger
+# has to be clearly better before the job changes hands. Without it two
+# candidates with near-identical ETAs can trade the assignment frame to
+# frame and both end up jogging in place.
+COVER_INCUMBENT_BONUS_MS = 250.0
+
+# How long a fielder will stand holding the ball waiting for the cover man
+# to reach the bag before throwing anyway. Real infielders double-clutch
+# when first isn't covered yet; without a cap, a badly-timed play could
+# stall the whole animation.
+GO_COVER_WAIT_MAX_MS = 1400
+
+# A cover man is "in time" if they can reach the bag before a maximally
+# delayed throw would land on it. Candidates inside this budget are the
+# only ones the preference weights get to choose between — the point of
+# the whole mechanism is that the bag is occupied when the ball arrives,
+# and a stylistic preference must never outrank that.
+COVER_IN_TIME_BUDGET_MS = GO_COVER_WAIT_MAX_MS + GO_THROW_MS
+
+# How far the 1B may range from their home position to play a GROUNDER.
+# Their home sits ~9 px off the bag, so this is effectively "how far off
+# the bag will they go" — deliberately tight, because every foot the 1B
+# ranges is a foot they have to sprint back before a throw arrives. Balls
+# outside it belong to the 2B/pitcher and the 1B stays home to take the
+# throw. Grounder-only: there's no throw to beat on a pop-up or liner, so
+# the 1B is free to range on those.
+FIRST_BASE_GROUNDER_RANGE_PX = 55
+
 # Where on the trajectory a fielder can plausibly catch the ball — as
 # fractions of the in-flight time t ∈ [0, 1]. Catchability is gated by
 # the ball's *lift* above ground at that t: at peak, a fly is over
@@ -845,6 +889,18 @@ class Fielder:
     accel_time_ms: float = FIELDER_ACCEL_TIME_MS
     decel_radius_px: float = FIELDER_DECEL_RADIUS_PX
     current_speed: float = 0.0
+    # Immutable copy of the jittered sprint speed this fielder was born
+    # with. `max_speed` gets temporarily *paced down* while a fielder is
+    # routed to an in-flight intercept (so they arrive with the ball
+    # instead of standing under it), and every code path that later
+    # re-tasks them — most importantly "get back and cover the bag" —
+    # has to restore the real speed. Reading it back off `max_speed`
+    # would read the paced value; this field is the source of truth.
+    base_max_speed: float = None
+
+    def __post_init__(self):
+        if self.base_max_speed is None:
+            self.base_max_speed = self.max_speed
 
 
 class HitAnimation:
@@ -909,6 +965,12 @@ class HitAnimation:
         self._go_throw_arrive_ms = None
         self._go_done_ms = None
         self._go_first_base_pos = None
+        # Who is currently assigned to cover first base. Maintained every
+        # frame on grounders (see _route_first_base_cover) rather than
+        # decided once at intercept time — the fielder chasing the ball
+        # can't also be standing on the bag, so the assignment has to
+        # follow the play as it develops.
+        self._cover_role = None
 
         # Stateful ball-on-ground physics (SDT). Lazy-initialized at the
         # landing transition by _init_ball_on_ground.
@@ -1216,6 +1278,12 @@ class HitAnimation:
         # Per-role mobility cap. Pitcher and catcher don't chase balls
         # far from their home position — see ROLE_MAX_INTERCEPT_DIST_PX.
         max_dist = ROLE_MAX_INTERCEPT_DIST_PX.get(fielder.role, float('inf'))
+        # The 1B gets an extra, tighter cap on grounders only. Their range
+        # isn't limited by mobility, it's limited by responsibility: every
+        # step they take away from the bag is a step back before the throw
+        # lands. See FIRST_BASE_GROUNDER_RANGE_PX.
+        if fielder.role == "1B" and self.shape == "GROUNDER":
+            max_dist = min(max_dist, FIRST_BASE_GROUNDER_RANGE_PX)
 
         # Off-segment fielders can't make the play in flight — they're
         # at one end of the path, not beside it. The catcher and the
@@ -1298,17 +1366,17 @@ class HitAnimation:
 
         excluded = {self._primary_role}
 
-        # Grounders: 1B always covers the bag unless they are the
-        # primary fielding the ball themselves. This has to run BEFORE
-        # the secondaries loop — if 1B's timing put them in the
-        # secondary window first, the old code skipped the bag-staging
-        # branch and routed 1B on a 25% chase, leaving the bag empty
-        # when the actual primary (2B/SS) threw across the diamond.
-        # Pre-excluding 1B here keeps the secondaries loop from
-        # overwriting the bag target.
-        if self.shape == "GROUNDER" and self._primary_role != "1B":
-            self.fielders["1B"].target = (BASES["1B"][0] - 7, BASES["1B"][1] + 5)
-            excluded.add("1B")
+        # Grounders: somebody covers the bag from the first frame — the 1B
+        # normally, the pitcher/2B when the 1B is the one fielding it.
+        # This has to run BEFORE the secondaries loop, or a cover man
+        # whose timing put them in the secondary window would get routed
+        # on a 25% chase instead and leave the bag empty when the actual
+        # fielder threw across the diamond. Pre-excluding them here keeps
+        # the secondaries loop from overwriting the bag target.
+        if self.shape == "GROUNDER":
+            cover_role, _ = self._route_first_base_cover(self._primary_role)
+            if cover_role is not None:
+                excluded.add(cover_role)
 
         # Secondary fielders within a timing margin lean toward their
         # own intercept points — modeling the backup defender shifting
@@ -1354,6 +1422,95 @@ class HitAnimation:
 
         self._lean_excluded = excluded
 
+    def _eta_to_point(self, fielder, point):
+        """Approximate ms for `fielder` to reach `point` from where they
+        currently stand, at their true (un-paced) sprint speed.
+
+        Mirrors the phases of _step_fielder closely enough to time a throw
+        against: whatever is left of the see-react delay, the acceleration
+        ramp (which costs roughly half the ramp window in lost ground),
+        cruise, and the slow last few pixels inside the decel radius.
+        Deliberately a little pessimistic — arriving at the bag early and
+        waiting looks fine, arriving late is the bug this exists to fix.
+        """
+        dx = point[0] - fielder.pos[0]
+        dy = point[1] - fielder.pos[1]
+        dist = math.hypot(dx, dy)
+        if dist < 1.0:
+            return 0.0
+        speed = max(0.001, fielder.base_max_speed)
+        reaction = max(0.0, fielder.reaction_delay_ms - self._elapsed)
+        ramp = fielder.accel_time_ms * 0.5
+        decel_extra = 0.7 * min(dist, SECURE_RADIUS_PX) / speed
+        return reaction + ramp + dist / speed + decel_extra
+
+    def _route_first_base_cover(self, fielding_role):
+        """Assign — and keep re-assigning — somebody to first base.
+
+        This is the fix for the play that reads worst on screen: the 1B
+        breaks after a ball, a different infielder ends up fielding it,
+        and the throw goes to an empty bag because the 1B is still 60 ft
+        away with their back turned.
+
+        The rule is the real one: whoever is fielding the ball is not
+        covering the bag, and the bag is covered by whichever of the
+        remaining candidates gets there soonest (with a preference nudge
+        so the 1B keeps the job by default and the pitcher takes it on
+        the 3-1). Because it's recomputed as `fielding_role` changes, the
+        moment the 1B stops being the likely fielder they abandon the
+        chase and sprint back — the behaviour a real 1B has.
+
+        Returns `(cover_role, eta_ms)` — the ETA is what
+        _trigger_in_flight_intercept times the throw against so the ball
+        and the cover man arrive together. Returns `(None, 0.0)` only if
+        every candidate is somehow unavailable.
+        """
+        candidates = [r for r in COVER_ROLE_PRIORITY
+                      if r != fielding_role and r in self.fielders]
+        if not candidates:
+            return None, 0.0
+
+        etas = {r: self._eta_to_point(self.fielders[r], FIRST_BASE_BAG_POS)
+                for r in candidates}
+
+        def cover_cost(role):
+            bonus = COVER_PREFERENCE_MS.get(role, 0.0)
+            if role == self._cover_role:
+                bonus += COVER_INCUMBENT_BONUS_MS
+            return etas[role] - bonus
+
+        # Style preferences only get to break ties among fielders who can
+        # actually beat the throw. If nobody can (the ball was fielded
+        # right next to the bag, so it's going to be an unassisted play
+        # anyway), fall back to the full list and let the preferences pick
+        # who breaks for the bag — cosmetic at that point.
+        in_time = [r for r in candidates if etas[r] <= COVER_IN_TIME_BUDGET_MS]
+        cover_role = min(in_time or candidates, key=cover_cost)
+
+        # Release the previous cover man if the job changed hands, so they
+        # don't keep standing on a bag that isn't theirs any more. Guarded
+        # against releasing someone who has since become the fielder —
+        # their chase target must win.
+        prev = self._cover_role
+        if prev is not None and prev != cover_role and prev != fielding_role:
+            old = self.fielders[prev]
+            old.target = old.home_pos
+            old.max_speed = old.base_max_speed
+            old.decel_radius_px = FIELDER_DECEL_RADIUS_PX
+            self._lean_excluded.discard(prev)
+
+        cover = self.fielders[cover_role]
+        cover.target = FIRST_BASE_BAG_POS
+        # Full sprint with a tight decel zone — the cover man is racing a
+        # throw. Restoring max_speed matters: if this fielder was the
+        # primary a moment ago they were paced *down* to arrive with the
+        # ball, and that paced speed would have them jogging to the bag.
+        cover.max_speed = cover.base_max_speed
+        cover.decel_radius_px = SECURE_RADIUS_PX
+        self._lean_excluded.add(cover_role)
+        self._cover_role = cover_role
+        return cover_role, self._eta_to_point(cover, FIRST_BASE_BAG_POS)
+
     def _ball_past_fielder(self, fielder):
         """True when the live ball is radially past the fielder's home
         position by more than their per-role bail-out buffer.
@@ -1390,16 +1547,17 @@ class HitAnimation:
         was over, because _update_lean_targets skips _lean_excluded
         members and never wipes those stale targets.
 
-        `keep_at_bag` preserves 1B's current target during the
-        throw-to-1B sub-animation; otherwise 1B is also sent home.
+        `keep_at_bag` preserves the cover man's target during the
+        throw-to-1B sub-animation; otherwise they are also sent home.
         """
         new_excluded = {self._primary_role}
-        if keep_at_bag and "1B" in self.fielders:
-            new_excluded.add("1B")
+        if keep_at_bag and self._cover_role in self.fielders:
+            new_excluded.add(self._cover_role)
         for role, f in self.fielders.items():
             if role in new_excluded:
                 continue
             f.target = f.home_pos
+            f.max_speed = f.base_max_speed
             f.decel_radius_px = FIELDER_DECEL_RADIUS_PX
         self._lean_excluded = new_excluded
 
@@ -1853,42 +2011,60 @@ class HitAnimation:
 
         if self.shape == "GROUNDER":
             self.classified_outcome = "GROUNDOUT"
-            first_target = (BASES["1B"][0] - 7, BASES["1B"][1] + 5)
-            self._go_first_base_pos = first_target
-            if catcher_role == "1B":
-                # 1B fielded it themselves — there's no one to throw to.
-                # The fielder runs the ball to the bag and steps on it.
-                # `_go_throw_start_ms = None` is the flag the renderer
-                # uses to skip the throw arc and pin the ball to the 1B
-                # as they cross to the base.
-                first_baseman = self.fielders["1B"]
-                first_baseman.target = first_target
-                # Restore full sprint speed (the primary may have been
-                # paced for the in-flight catch) and a tight decel zone
-                # so the 1B runs hard for the bag and lands on it.
-                first_baseman.max_speed = self._primary_full_speed
-                first_baseman.decel_radius_px = SECURE_RADIUS_PX
+            self._go_first_base_pos = FIRST_BASE_BAG_POS
+            # Re-resolve the bag assignment now that we know who actually
+            # came up with the ball — it may not be who we expected during
+            # flight, and the fielder holding the ball is never the cover.
+            cover_role, cover_eta_ms = self._route_first_base_cover(catcher_role)
+            carry_dist = math.hypot(
+                FIRST_BASE_BAG_POS[0] - catcher.pos[0],
+                FIRST_BASE_BAG_POS[1] - catcher.pos[1],
+            )
+            carry_ms = self._eta_to_point(catcher, FIRST_BASE_BAG_POS)
+
+            if cover_role is None or carry_ms <= cover_eta_ms:
+                # Unassisted: the fielder is closer to the bag than anyone
+                # they'd throw to, so they carry the ball over and step on
+                # it. `_go_throw_start_ms = None` is the flag the renderer
+                # uses to skip the throw arc and pin the ball to the
+                # fielder as they cross to the base.
+                catcher.target = FIRST_BASE_BAG_POS
+                # Restore full sprint speed (the primary was paced for the
+                # in-flight catch) and a tight decel zone so they run hard
+                # for the bag and land on it.
+                catcher.max_speed = catcher.base_max_speed
+                catcher.decel_radius_px = SECURE_RADIUS_PX
                 self._go_throw_start_ms = None
                 self._go_throw_arrive_ms = None
-                # Time the done-frame to the actual run distance from
-                # catch position to the bag (plus a brief step-on-base
-                # hold). A fixed timing window would either leave the
-                # 1B short of the bag on long carries (catch made by
-                # ranging away from the bag) or stall the animation on
-                # short ones.
-                dist_to_bag = math.hypot(
-                    first_target[0] - first_baseman.pos[0],
-                    first_target[1] - first_baseman.pos[1],
-                )
-                run_ms = dist_to_bag / max(0.001, first_baseman.max_speed)
+                # Time the done-frame to the actual run distance from catch
+                # position to the bag (plus a brief step-on-base hold). A
+                # fixed window would either leave them short of the bag on
+                # long carries or stall the animation on short ones.
+                run_ms = carry_dist / max(0.001, catcher.max_speed)
                 self._go_done_ms = self._elapsed + run_ms + GO_CATCH_HOLD_MS
+                # Nobody is receiving a throw, so wave the cover man off
+                # rather than have two defenders converge on the bag.
+                cover = self.fielders.get(cover_role)
+                if cover is not None:
+                    cover.target = cover.home_pos
+                    cover.decel_radius_px = FIELDER_DECEL_RADIUS_PX
+                    self._lean_excluded.discard(cover_role)
+                self._cover_role = None
             else:
-                # Standard throw-to-1B: hold at the fielder, throw arc
-                # to first, catch-hold at the bag.
-                self._go_throw_start_ms = self._elapsed + GO_FIELD_HOLD_MS
+                # Throw to first — but not before the bag is covered.
+                # Delaying the *release* (rather than stretching the throw,
+                # which would read as a lob) makes the ball and the cover
+                # man arrive together, so the throw always has someone to
+                # arrive to. Capped by GO_COVER_WAIT_MAX_MS so a badly
+                # out-of-position cover can't stall the animation; the
+                # fielder just holds the ball a beat, which is exactly what
+                # an infielder does when first isn't covered yet.
+                wait_ms = min(max(0.0, cover_eta_ms - GO_THROW_MS),
+                              GO_COVER_WAIT_MAX_MS)
+                self._go_throw_start_ms = (self._elapsed
+                                           + max(GO_FIELD_HOLD_MS, wait_ms))
                 self._go_throw_arrive_ms = self._go_throw_start_ms + GO_THROW_MS
                 self._go_done_ms = self._go_throw_arrive_ms + GO_CATCH_HOLD_MS
-                self.fielders["1B"].target = first_target
         else:
             # A line drive caught before it lands is a LINEOUT; everything
             # else caught in the air (fly balls, pop-ups) is classified by
@@ -1902,8 +2078,8 @@ class HitAnimation:
             self._go_done_ms = self._elapsed + FLYOUT_CATCH_HOLD
 
         # Stand down everyone else now that the play is over. The
-        # catcher (new primary) and — on grounders — 1B covering the
-        # bag are the only fielders with live responsibilities; the
+        # catcher (new primary) and — on grounders — whoever is covering
+        # first are the only fielders with live responsibilities; the
         # old primary and any pre-catch secondaries would otherwise
         # keep sprinting toward stale targets through the entire
         # post-catch hold (most visibly: pitcher running into the
@@ -2029,6 +2205,13 @@ class HitAnimation:
             # the wall-hit classifier. No-op for non-wall-candidates.
             if self._is_wall_candidate and not self._wall_hit:
                 self._maybe_trigger_in_flight_wall_impact()
+            # Keep first base covered as the play develops. `_primary_role`
+            # can change mid-flight, and whoever it lands on has to be off
+            # the bag — so the assignment is re-resolved rather than fixed
+            # at setup. This is what turns the 1B around and sends them
+            # back the instant they stop being the likely fielder.
+            if self.shape == "GROUNDER" and not self._secured:
+                self._route_first_base_cover(self._primary_role)
             # In-flight intercept check — any fielder reaching the ball
             # before it lands turns this into a FLYOUT or GROUNDOUT.
             # Suppressed for wall-candidate trajectories: those are aimed
@@ -2143,14 +2326,14 @@ class HitAnimation:
                 # Old primary stops sprinting — they go back to their
                 # natural max_speed and standard decel; lean takes over.
                 old = self.fielders[self._primary_role]
-                old.max_speed = self._primary_full_speed
+                old.max_speed = old.base_max_speed
                 old.decel_radius_px = FIELDER_DECEL_RADIUS_PX
                 self._lean_excluded.discard(self._primary_role)
-                # New primary's "full speed" is whatever their natural
-                # jittered max is — we only paced the original primary,
-                # so other fielders are at their natural speed.
+                # New primary's "full speed" is their natural jittered max.
+                # Read it off base_max_speed rather than max_speed — the
+                # latter may still hold a paced-down intercept value.
                 self._primary_role = closest_role
-                self._primary_full_speed = self.fielders[closest_role].max_speed
+                self._primary_full_speed = self.fielders[closest_role].base_max_speed
                 self._lean_excluded.add(closest_role)
 
             primary = self.fielders[self._primary_role]

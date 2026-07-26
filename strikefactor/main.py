@@ -12,6 +12,7 @@ from pitchers.Yamamoto import Yamamoto
 from pitchers.Sasaki import Sasaki
 from ai.AI_2 import ERAI, build_state
 from ai.batter_profile import BatterProfile
+from ai.pitch_priors import validate_usage_priors
 
 # Import game components
 from ui.components import create_pci_cursor
@@ -118,7 +119,7 @@ class PitcherManager:
                 'CB': ['FF'], 'CH': ['FF', 'SL'],
             },
             'sasaki': {
-                'FF': ['FO', 'FS'], 'FO': ['FF', 'FS'], 'FS': ['FF', 'FO'],
+                'FF': ['FS', 'SL'], 'FS': ['FF'], 'SL': ['FF'],
             },
             'yamamoto': {
                 'FF': ['FS', 'CB', 'FC'], 'FS': ['FF', 'SI'],
@@ -130,11 +131,14 @@ class PitcherManager:
             },
         }
 
-        # Attach AI to each pitcher with tunnel pairs
+        # Attach AI to each pitcher with tunnel pairs and a real-world usage
+        # prior, which anchors the pitch mix so the Q-table can't collapse
+        # onto a single dominant pitch.
         for name, pitcher in self.pitchers.items():
             ai = self._load_ai(name, pitcher)
             if name in tunnel_pairs:
                 ai.set_tunnel_pairs(tunnel_pairs[name])
+            ai.set_usage_prior(validate_usage_priors(name, pitcher.get_pitch_names()))
             pitcher.attach_ai(ai)
 
         # Set default pitcher
@@ -749,6 +753,22 @@ class Game:
         except Exception as e:
             print(f"[pitch_db] _db_start_game failed: {e}")
 
+    def _db_resume_game(self, game_id):
+        """Reattach the pitch DB to an existing games row, or open a new one.
+
+        Keeps a resumed GameDay logging under a single game_id instead of
+        forking into a second, scoreless row.
+        """
+        try:
+            from data.pitch_database import PitchDatabaseService
+            if PitchDatabaseService.get_instance().resume_game(game_id):
+                mode, difficulty = self._current_bucket_key()
+                self.field_renderer.set_active_bucket(mode, difficulty)
+                return
+        except Exception as e:
+            print(f"[pitch_db] _db_resume_game failed: {e}")
+        self._db_start_game("gameday", pitcher_name=None)
+
     def _db_end_game_if_open(self, player_score=None, opponent_score=None, result=None):
         """Close the active games row, if any. Safe to call from any transition."""
         try:
@@ -877,8 +897,10 @@ class Game:
         self.challenge_manager.reset_all()
         self.inning_ended = False
 
-        # Continued pitches log under a fresh DB game row (FK'd into history).
-        self._db_start_game("gameday", pitcher_name=None)
+        # Continue logging into the same DB game row this session opened, so a
+        # resumed game stays one game_id end to end. Sessions saved before
+        # db_game_id was recorded fall back to a fresh row.
+        self._db_resume_game(record.get('db_game_id'))
 
         # One-shot resume hint consumed by GameDayTransitionState.enter() so it
         # restores the saved phase and skips re-simulating an already-played half.
@@ -898,7 +920,10 @@ class Game:
             return
         try:
             from data import gameday_sessions
-            record = gameday_sessions.build_record(self.gameday_manager, phase)
+            from data.pitch_database import PitchDatabaseService
+            record = gameday_sessions.build_record(
+                self.gameday_manager, phase,
+                db_game_id=PitchDatabaseService.get_instance().current_game_id)
             gameday_sessions.upsert_session(record)
         except Exception as e:
             print(f"[gameday] autosave_gameday_session failed: {e}")
@@ -1513,12 +1538,8 @@ class Game:
         """Trigger walkoff handling after an ABS-applied walk in gameday."""
         if (self.in_gameday_mode and self.gameday_manager is not None
                 and self.gameday_manager.check_walkoff()):
-            # player_score / _current_half_runs are already up-to-date via
-            # record_player_at_bat. Just commit the partial inning to the box
-            # score before transitioning.
-            self.gameday_manager.player_inning_scores.append(
-                self.gameday_manager._current_half_runs
-            )
+            # check_walkoff() already commits the walk-off half-inning's runs to
+            # player_inning_scores; don't append them a second time.
             self.ui_manager.show_banner("WALK-OFF WIN!", typing_speed=0.05)
             self.inning_ended = True
             self.menu_state = 'inning_end'

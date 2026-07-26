@@ -4,79 +4,49 @@ Generates visualizations of the player's batting tendencies from the SQLite pitc
 
 Filterable by game mode, difficulty, and batter handedness (mirrors
 pitch_analysis.py). Each filter slice writes to its own subfolder under
-analysis_output/ and produces a combined report.html alongside the PNGs.
+analysis_output/ and produces a combined batting_report.html alongside the PNGs.
+
+Filtering, palettes, and outcome groups come from the shared analysis package
+(see docs/pitch-analysis-refactor.md); only the figures are local to this file.
 
 Usage:
     python batting_analysis.py                         # default: gameday · hall_of_fame
     python batting_analysis.py --mode all --difficulty all
     python batting_analysis.py --handedness L          # left-handed batter only
+    python batting_analysis.py --pitcher degrom
 """
 import argparse
-import sqlite3
 import os
 import numpy as np
 import matplotlib.pyplot as plt
 import matplotlib.patches as patches
-from dataclasses import dataclass
 from matplotlib.gridspec import GridSpec
 from collections import defaultdict
 
-DB_PATH = os.path.join(os.path.dirname(__file__), "strikefactor", "data", "strikefactor.db")
-OUT_DIR = os.path.join(os.path.dirname(__file__), "analysis_output")
+# Filtering, palettes, and outcome groups are shared with pitch_analysis.py via
+# the analysis package so the two scripts can't drift apart again.
+from analysis import theme
+from analysis.data import DEFAULT_OUT_DIR, connect
+from analysis.filters import (DIFFICULTY_LABEL, Filter, add_filter_args,
+                              filter_from_args)
+
+OUT_DIR = DEFAULT_OUT_DIR
 os.makedirs(OUT_DIR, exist_ok=True)
 
-conn = sqlite3.connect(DB_PATH)
-conn.row_factory = sqlite3.Row
+conn = connect()
 
 
 def fetch(sql, params=()):
     return conn.execute(sql, params).fetchall()
 
 
-# ── Filter (mode + difficulty + handedness) ───────────────────────────────
-MODE_CHOICES = ("arcade", "gameday", "sandbox")
-DIFFICULTY_CHOICES = ("rookie", "amateur", "professional", "all_star", "hall_of_fame")
-
-MODE_LABEL = {"arcade": "Arcade", "gameday": "GameDay", "sandbox": "Sandbox"}
-DIFFICULTY_LABEL = {
-    "rookie": "Rookie", "amateur": "Amateur", "professional": "Professional",
-    "all_star": "All-Star", "hall_of_fame": "Hall of Fame",
-}
-
-
-@dataclass(frozen=True)
-class Filter:
-    modes: tuple        # subset of MODE_CHOICES; () = all
-    difficulties: tuple # subset of DIFFICULTY_CHOICES; () = all
-    hands: tuple = ()   # subset of ("L", "R"); () = both
-
-    @property
-    def label(self):
-        m = ", ".join(MODE_LABEL[x] for x in self.modes) if self.modes else "All modes"
-        d = ", ".join(DIFFICULTY_LABEL[x] for x in self.difficulties) if self.difficulties else "All difficulties"
-        h = ", ".join(f"{x}HB" for x in self.hands) if self.hands else "Both hands"
-        return f"{m} · {d} · {h}"
-
-    @property
-    def slug(self):
-        parts = list(self.modes) + list(self.difficulties) + [f"{x}HB" for x in self.hands]
-        return "__".join(parts) if parts else "all"
-
-
 # Module-level filter; set in __main__ from CLI args.
-FILTER = Filter(modes=(), difficulties=())
+FILTER = Filter()
 
 
 def parse_args():
     p = argparse.ArgumentParser(description="StrikeFactor batting analysis (filterable).")
-    p.add_argument("--mode", choices=list(MODE_CHOICES) + ["all"], default="gameday",
-                   help="Game mode to include (default: gameday). 'all' = no mode filter.")
-    p.add_argument("--difficulty", choices=list(DIFFICULTY_CHOICES) + ["all"],
-                   default="hall_of_fame",
-                   help="Difficulty to include (default: hall_of_fame). 'all' = no difficulty filter.")
-    p.add_argument("--handedness", choices=["L", "R", "all"], default="all",
-                   help="Batter handedness to include (default: all). Split L/R so the "
-                        "heatmaps don't smear inside vs outside.")
+    add_filter_args(p)
     return p.parse_args()
 
 
@@ -96,60 +66,34 @@ def pw():
     if FILTER.hands:
         clauses.append(f"batter_hand IN ({','.join('?' * len(FILTER.hands))})")
         params.extend(FILTER.hands)
+    if FILTER.pitchers:
+        clauses.append(f"pitcher_name IN ({','.join('?' * len(FILTER.pitchers))})")
+        params.extend(FILTER.pitchers)
     return (" AND " + " AND ".join(clauses) if clauses else "", params)
 
 
-# ── Styling ──────────────────────────────────────────────────────────────
-plt.rcParams.update({
-    "figure.facecolor": "#1a1a2e",
-    "axes.facecolor": "#16213e",
-    "axes.edgecolor": "#e0e0e0",
-    "axes.labelcolor": "#e0e0e0",
-    "text.color": "#e0e0e0",
-    "xtick.color": "#e0e0e0",
-    "ytick.color": "#e0e0e0",
-    "grid.color": "#2a2a4a",
-    "grid.alpha": 0.5,
-    "font.family": "monospace",
-    "font.size": 11,
-})
+# ── Styling (shared with pitch_analysis.py via analysis.theme) ───────────
+theme.apply_mpl_style()
 
-PITCH_COLORS = {
-    "FF": "#e74c3c",
-    "SI": "#e67e22",
-    "SL": "#3498db",
-    "CB": "#2ecc71",
-    "CH": "#9b59b6",
-    "FS": "#f39c12",
-    "FC": "#1abc9c",
-}
+PITCH_COLORS = theme.PITCH_COLORS
+PITCH_NAMES = theme.PITCH_NAMES
+OUTCOME_COLORS = theme.OUTCOME_COLORS
 
-PITCH_NAMES = {
-    "FF": "Four-Seam",
-    "SI": "Sinker",
-    "SL": "Slider",
-    "CB": "Curveball",
-    "CH": "Changeup",
-    "FS": "Splitter",
-    "FC": "Cutter",
-}
-
-OUTCOME_COLORS = {
-    "SINGLE": "#2ecc71",
-    "DOUBLE": "#27ae60",
-    "TRIPLE": "#1abc9c",
-    "HOME RUN": "#f1c40f",
-    "GROUNDOUT": "#95a5a6",
-    "FLYOUT": "#7f8c8d",
-    "LINEOUT": "#bdc3c7",
-}
-
+# on_time grades how well the swing was *timed*, not whether it made contact:
+# 0 = mistimed, 1 = foul-ball timing, 2 = on time. A swing graded 1 or 2 can
+# still miss if the bat is in the wrong place, so these are timing labels only.
 TIMING_COLORS = {0: "#e74c3c", 1: "#f39c12", 2: "#2ecc71"}
-TIMING_LABELS = {0: "Miss", 1: "Foul", 2: "Perfect"}
+TIMING_LABELS = {0: "Mistimed", 1: "Foul timing", 2: "On time"}
 
 # Strike zone boundaries (feet)
-SZ_X_MIN, SZ_X_MAX = -0.83, 0.83
-SZ_Z_MIN, SZ_Z_MAX = 1.5, 3.5
+SZ_X_MIN, SZ_X_MAX = -theme.SZ_X_HALF, theme.SZ_X_HALF
+SZ_Z_MIN, SZ_Z_MAX = theme.SZ_Z_MIN, theme.SZ_Z_MAX
+
+# A swing that produced no contact. Fouls carry outcome='foul' and contact
+# carries an in-play outcome, so this test is exact — see
+# docs/pitch-analysis-refactor.md. The old `on_time = 0` test missed every
+# well-timed swing that still whiffed, understating Whiff% by ~40%.
+WHIFF_SQL = "(swing_type > 0 AND outcome IN ('strike','strikeout'))"
 
 # Heatmap grid bounds (wider than zone to show chase area)
 GRID_X_MIN, GRID_X_MAX = -1.5, 1.5
@@ -243,7 +187,8 @@ def fig1_hit_rate_heatmap():
 def fig2_whiff_foul_heatmap():
     w, p = pw()
     rows = fetch(
-        f"SELECT plate_x_ft, plate_z_ft, on_time FROM pitches WHERE swing_type > 0{w}", p
+        f"SELECT plate_x_ft, plate_z_ft, on_time, outcome FROM pitches "
+        f"WHERE swing_type > 0{w}", p
     )
     if not rows:
         _no_data("Whiff/foul heatmap", 2)
@@ -251,10 +196,9 @@ def fig2_whiff_foul_heatmap():
 
     xs = [r["plate_x_ft"] for r in rows]
     zs = [r["plate_z_ft"] for r in rows]
-    on_times = [r["on_time"] for r in rows]
 
-    whiffs = [1 if t == 0 else 0 for t in on_times]
-    fouls = [1 if t == 1 else 0 for t in on_times]
+    whiffs = [1 if r["outcome"] in ("strike", "strikeout") else 0 for r in rows]
+    fouls = [1 if r["outcome"] == "foul" else 0 for r in rows]
 
     whiff_rate, xedges, zedges = build_rate_heatmap(xs, zs, whiffs)
     foul_rate, _, _ = build_rate_heatmap(xs, zs, fouls)
@@ -579,8 +523,9 @@ def fig6_outcomes_by_zone():
 # ═══════════════════════════════════════════════════════════════════════
 # At-bat-terminating outcomes (used to derive PA/AB from the pitches table —
 # at_bats has no game_mode/difficulty columns so it can't honour the filter).
-TERMINAL = ("strikeout", "walk", "SINGLE", "DOUBLE", "TRIPLE", "HOME RUN",
-            "GROUNDOUT", "FLYOUT", "LINEOUT")
+# Sourced from analysis.theme so POP_UP can't go missing here again: it was
+# absent from this tuple, silently dropping 86 at-bats from every denominator.
+TERMINAL = theme.TERMINAL_OUTCOMES
 
 
 def _terminal_counts():
@@ -627,7 +572,7 @@ def fig7_batting_dashboard():
     total_swings = fetch(
         f"SELECT COUNT(*) c FROM pitches WHERE swing_type > 0{w}", p)[0]["c"]
     total_whiffs = fetch(
-        f"SELECT COUNT(*) c FROM pitches WHERE swing_type > 0 AND on_time = 0{w}", p)[0]["c"]
+        f"SELECT COUNT(*) c FROM pitches WHERE {WHIFF_SQL}{w}", p)[0]["c"]
     whiff_pct = total_whiffs / total_swings * 100 if total_swings > 0 else 0
 
     chase_swings = fetch(
@@ -672,7 +617,7 @@ def fig7_batting_dashboard():
         f"SELECT COUNT(*) c FROM pitches WHERE swing_type = 0 AND is_strike = 1{w}", p)[0]["c"]
     oc["Whiff"] = total_whiffs
     oc["Foul"] = fetch(
-        f"SELECT COUNT(*) c FROM pitches WHERE swing_type > 0 AND on_time = 1{w}", p)[0]["c"]
+        f"SELECT COUNT(*) c FROM pitches WHERE outcome = 'foul'{w}", p)[0]["c"]
     oc["Hit"] = fetch(f"SELECT COUNT(*) c FROM pitches WHERE is_hit = 1{w}", p)[0]["c"]
     oc["Out (in play)"] = fetch(
         f"SELECT COUNT(*) c FROM pitches WHERE outcome IN ('GROUNDOUT','FLYOUT','LINEOUT'){w}",
@@ -836,7 +781,9 @@ def write_html_report():
             f"<img src='{fn}' alt='{fn}'><div class='cap'>{cap}</div></div>"
         )
     parts.append("</div></body></html>")
-    path = os.path.join(OUT_DIR, "report.html")
+    # Distinct from pitch_analysis.py's report.html — both scripts write into
+    # the same per-filter folder and used to overwrite each other's index.
+    path = os.path.join(OUT_DIR, "batting_report.html")
     with open(path, "w", encoding="utf-8") as f:
         f.write("".join(parts))
     return path
@@ -845,11 +792,7 @@ def write_html_report():
 def _apply_cli_filter():
     global FILTER, OUT_DIR
     args = parse_args()
-    FILTER = Filter(
-        modes=() if args.mode == "all" else (args.mode,),
-        difficulties=() if args.difficulty == "all" else (args.difficulty,),
-        hands=() if args.handedness == "all" else (args.handedness,),
-    )
+    FILTER = filter_from_args(args)
     OUT_DIR = os.path.join(OUT_DIR, FILTER.slug)
     os.makedirs(OUT_DIR, exist_ok=True)
 
@@ -858,7 +801,7 @@ def _apply_cli_filter():
 if __name__ == "__main__":
     _apply_cli_filter()
     print(f"Generating StrikeFactor batting analysis ({FILTER.label})...")
-    if FILTER.modes or FILTER.difficulties or FILTER.hands:
+    if not FILTER.is_empty:
         print("  (filtered view — pass --mode all --difficulty all --handedness all "
               "to include everything)")
     fig1_hit_rate_heatmap()

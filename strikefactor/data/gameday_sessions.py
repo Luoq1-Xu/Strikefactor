@@ -54,12 +54,17 @@ def get_session(session_id: str):
     return None
 
 
-def build_record(manager, phase: str) -> dict:
+def build_record(manager, phase: str, db_game_id: str = None) -> dict:
     """Build a session record from a live GameDayManager + transition phase.
 
     Metadata fields are denormalized copies of manager state so the resume list
     can render without rebuilding a manager; ``state`` is the full snapshot used
     on resume.
+
+    ``db_game_id`` carries the open ``games.game_id`` so a resume can reattach
+    its pitches to the same row. Without it a resumed game logs under a second
+    game_id, splitting one logical game in two — the first half then has no
+    final score, so its runs go unattributable in the pitching line.
     """
     return {
         'session_id': manager.session_uuid,
@@ -71,6 +76,7 @@ def build_record(manager, phase: str) -> dict:
         'player_score': manager.player_score,
         'opponent_score': manager.opponent_score,
         'phase': phase,
+        'db_game_id': db_game_id,
         'state': manager.to_dict(),
     }
 

@@ -1035,25 +1035,81 @@ class GameDayManager:
                 player_hits += 1
         return player_hits, opponent_hits
 
+    @staticmethod
+    def _empty_history() -> dict:
+        return {'version': '1.0', 'games': [], 'last_updated': None}
+
+    @classmethod
+    def _quarantine_history(cls, reason: str) -> None:
+        """Move an unusable history file aside so it isn't silently overwritten.
+
+        Callers fall back to an empty record, and the very next completed game
+        writes over HISTORY_FILE. Without this the original bytes — the only
+        copy of the career record — would be destroyed by that write, so keep
+        them under a timestamped name for manual recovery.
+        """
+        try:
+            stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            corrupt_path = f"{cls.HISTORY_FILE}.corrupt-{stamp}"
+            os.replace(cls.HISTORY_FILE, corrupt_path)
+            print(f"Warning: GameDay history file is unusable ({reason}); "
+                  f"moved to {corrupt_path} and starting from an empty record.")
+        except OSError as e:
+            print(f"Warning: GameDay history file is unusable ({reason}) and "
+                  f"could not be quarantined ({e}); starting from an empty record.")
+
     @classmethod
     def _load_history(cls) -> dict:
-        """Load game history from file."""
+        """Load game history from file.
+
+        Tolerates a missing, corrupt, or structurally-wrong file. Validating the
+        shape matters as much as parsing: `save_game_result` appends to
+        `history['games']`, so a file that parses but has no `games` list used to
+        raise there and lose the game that had just finished.
+        """
+        if not os.path.exists(cls.HISTORY_FILE):
+            return cls._empty_history()
+
         try:
-            if os.path.exists(cls.HISTORY_FILE):
-                with open(cls.HISTORY_FILE, 'r') as f:
-                    return json.load(f)
-        except (json.JSONDecodeError, FileNotFoundError) as e:
-            if isinstance(e, json.JSONDecodeError):
-                print(f"Warning: GameDay history file {cls.HISTORY_FILE} is corrupt "
-                      f"({e}); starting from an empty record.")
-        return {'version': '1.0', 'games': [], 'last_updated': None}
+            with open(cls.HISTORY_FILE, 'r') as f:
+                data = json.load(f)
+        except json.JSONDecodeError as e:
+            cls._quarantine_history(f"invalid JSON: {e}")
+            return cls._empty_history()
+        except OSError as e:
+            # Transient read failure — don't quarantine a file we may not have
+            # even been able to open.
+            print(f"Warning: could not read GameDay history file ({e}); "
+                  f"starting from an empty record.")
+            return cls._empty_history()
+
+        if not isinstance(data, dict) or not isinstance(data.get('games'), list):
+            cls._quarantine_history("missing a 'games' list")
+            return cls._empty_history()
+
+        # Drop any non-dict entries so a single bad row can't crash every reader.
+        data['games'] = [g for g in data['games'] if isinstance(g, dict)]
+        return data
+
+    @classmethod
+    def _history_games(cls) -> List[dict]:
+        """Return completed-game records, oldest-first.
+
+        gameday_history.json is the sole source of truth for completed games.
+        The pitch database is deliberately *not* consulted: it only logs pitches
+        the player actually faced, so the opponent's simulated half-innings
+        (their runs, hits, and pitchers) simply aren't in it — and treating it as
+        a fallback would both fabricate those columns and resurrect games that
+        were intentionally archived away.
+        """
+        return list(cls._load_history()['games'])
 
     @classmethod
     def get_career_record(cls) -> dict:
         """Get win/loss record from saved history."""
-        history = cls._load_history()
-        wins = sum(1 for g in history['games'] if g.get('result') == 'WIN')
-        losses = sum(1 for g in history['games'] if g.get('result') == 'LOSS')
+        games = cls._history_games()
+        wins = sum(1 for g in games if g.get('result') == 'WIN')
+        losses = sum(1 for g in games if g.get('result') == 'LOSS')
         return {'wins': wins, 'losses': losses, 'total': wins + losses}
 
     @classmethod
@@ -1062,8 +1118,7 @@ class GameDayManager:
         the given pitcher was the opponent starter. Callable without an instance
         because the pitcher carousel renders before a GameDayManager exists."""
         target = (pitcher_name or '').lower()
-        history = cls._load_history()
-        games = [g for g in history['games']
+        games = [g for g in cls._history_games()
                  if (g.get('opponent_starter') or '').lower() == target]
         wins = sum(1 for g in games if g.get('result') == 'WIN')
         losses = sum(1 for g in games if g.get('result') == 'LOSS')
@@ -1076,8 +1131,7 @@ class GameDayManager:
         gameday_history.json stores games oldest-first (newest appended), so we
         reverse a copy here. Safe to call without an instance.
         """
-        history = cls._load_history()
-        return list(reversed(history.get('games', [])))
+        return list(reversed(cls._history_games()))
 
     # --- In-progress session (resume) serialization ---
 

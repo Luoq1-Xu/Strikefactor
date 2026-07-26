@@ -1,0 +1,18 @@
+{
+  "created_at": "2026-07-26T13:11:01.261513",
+  "sources": {
+    "gameday_history.json": "/Users/xlq/Strikefactor/strikefactor/data/gameday_history.json",
+    "gameday_sessions.json": "/Users/xlq/Strikefactor/strikefactor/data/gameday_sessions.json",
+    "gameday_pitches.sqlite3": "/Users/xlq/Strikefactor/strikefactor/data/strikefactor.db"
+  },
+  "counts": {
+    "games": 1,
+    "sessions": 0,
+    "db": {
+      "games": 38,
+      "pitches": 6994,
+      "pitch_trajectories": 139880,
+      "at_bats": 1099
+    }
+  }
+}

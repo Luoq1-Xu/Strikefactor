@@ -45,6 +45,20 @@ class PitchSimulation:
         effective_pfx_x = pfx_x * move_mult
         effective_pfx_z = pfx_z * move_mult
 
+        # Command outcome for this pitch (see Pitcher.get_pitch_target). A
+        # hung pitch loses break as well as location — that combination is
+        # what makes it punishable rather than just mislocated.
+        self.pitch_intent = getattr(self.game.current_pitcher, 'last_intent', None)
+        if self.pitch_intent is not None:
+            if self.pitch_intent.break_mult != 1.0:
+                effective_pfx_x *= self.pitch_intent.break_mult
+                effective_pfx_z *= self.pitch_intent.break_mult
+            self.intent_x_ft, self.intent_z_ft = self.camera.screen_to_world_at_plate(
+                self.pitch_intent.intent_x, self.pitch_intent.intent_y
+            )
+        else:
+            self.intent_x_ft = self.intent_z_ft = None
+
         # Mistake pitch: drift target toward center zone
         self.mistake_pitch = False
         if mistake_chance > 0 and random.random() < mistake_chance:
@@ -560,12 +574,10 @@ class PitchSimulation:
         """
         if (self.game.in_gameday_mode
                 and self.game.gameday_manager.check_walkoff()):
-            # player_score / _current_half_runs are already up-to-date via
-            # record_player_at_bat. Just commit the partial inning to the box
-            # score before transitioning.
-            self.game.gameday_manager.player_inning_scores.append(
-                self.game.gameday_manager._current_half_runs
-            )
+            # check_walkoff() already committed the walk-off half-inning's runs
+            # to player_inning_scores and cleared _current_half_runs — appending
+            # here as well would add a phantom 0-run inning to the linescore and
+            # to the saved history record.
 
             # Mark inning as ended so check_inning_end() doesn't double-process
             # and so view-pitches navigation routes back to inning_end, not

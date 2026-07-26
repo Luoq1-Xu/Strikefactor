@@ -1,0 +1,11 @@
+{
+  "created_at": "2026-07-25T21:18:12.283762",
+  "sources": {
+    "gameday_history.json": "/Users/xlq/Strikefactor/strikefactor/data/gameday_history.json",
+    "gameday_sessions.json": "/Users/xlq/Strikefactor/strikefactor/data/gameday_sessions.json"
+  },
+  "counts": {
+    "games": 6,
+    "sessions": 0
+  }
+}

@@ -1,6 +1,29 @@
 import random
+from dataclasses import dataclass
 from utils.pitch_physics import DEFAULT_CAMERA
+from .pitch_locations import get_archetypes
 import config
+
+
+@dataclass
+class PitchIntent:
+    """Where a pitch was aimed vs. where it was actually executed.
+
+    Recorded on the Pitcher each time get_pitch_target() runs. The gap
+    between (intent_x, intent_y) and (exec_x, exec_y) is the command miss.
+    """
+    pitch_type: str
+    intent_kind: str      # zone | edge | chase | waste
+    intent_x: float
+    intent_y: float
+    exec_x: float
+    exec_y: float
+    miss_kind: str        # normal | yank | hang | wild
+    break_mult: float
+    command_sigma_in: float
+    archetype: str        # named location archetype, or '' if generic
+    batter_hand: str
+    platoon: str          # same | opp
 
 # ANSI color codes for terminal output
 class Colors:
@@ -27,33 +50,135 @@ class Pitcher:
     ZONE_CENTER_X = config.ZONE_CENTER_X
     ZONE_CENTER_Y = config.ZONE_CENTER_Y
 
-    # Intent probabilities: [zone, edge, chase, ball]
+    # Pixels per inch at the plate, derived from the camera so these stay
+    # correct if the projection is ever recalibrated. The two axes differ
+    # (scale_x != scale_y), which is why command error is applied in inches
+    # and converted per-axis rather than as a single pixel sigma.
+    PX_PER_INCH_X = DEFAULT_CAMERA.scale_x / DEFAULT_CAMERA.cam_dist / 12.0
+    PX_PER_INCH_Y = DEFAULT_CAMERA.scale_y / DEFAULT_CAMERA.cam_dist / 12.0
+
+    # Broad shape families. Location intent and miss behaviour are keyed off
+    # these rather than individual pitch codes.
+    PITCH_CLASS = {
+        'FF': 'fastball', 'SI': 'fastball',
+        'FC': 'cutter',
+        'SL': 'breaking', 'SLD': 'breaking', 'CB': 'breaking', 'KC': 'breaking',
+        'CH': 'offspeed', 'FS': 'offspeed', 'FO': 'offspeed',
+    }
+
+    # Where the pitcher is *trying* to put each class of pitch, per count:
+    # [zone, edge, chase, waste]. This is intent only — execution error is
+    # applied afterwards, so realized zone rates come out lower than these.
+    # Calibrated so final zone% lands near Statcast rates per pitch type.
     INTENT_TABLE = {
-        'first_pitch': [0.50, 0.30, 0.15, 0.05],
-        'ahead':       [0.15, 0.25, 0.45, 0.15],
-        'behind':      [0.65, 0.25, 0.05, 0.05],
-        'even':        [0.45, 0.30, 0.20, 0.05],
-        'full':        [0.55, 0.30, 0.10, 0.05],
+        'fastball': {
+            'first_pitch': [0.52, 0.34, 0.10, 0.04],
+            'ahead':       [0.22, 0.36, 0.34, 0.08],
+            'behind':      [0.62, 0.32, 0.05, 0.01],
+            'even':        [0.45, 0.36, 0.15, 0.04],
+            'full':        [0.55, 0.35, 0.08, 0.02],
+        },
+        'cutter': {
+            'first_pitch': [0.45, 0.38, 0.13, 0.04],
+            'ahead':       [0.18, 0.34, 0.40, 0.08],
+            'behind':      [0.55, 0.36, 0.07, 0.02],
+            'even':        [0.38, 0.38, 0.20, 0.04],
+            'full':        [0.48, 0.38, 0.11, 0.03],
+        },
+        'breaking': {
+            'first_pitch': [0.32, 0.40, 0.24, 0.04],
+            'ahead':       [0.10, 0.26, 0.55, 0.09],
+            'behind':      [0.48, 0.38, 0.12, 0.02],
+            'even':        [0.25, 0.36, 0.34, 0.05],
+            'full':        [0.38, 0.40, 0.19, 0.03],
+        },
+        'offspeed': {
+            'first_pitch': [0.24, 0.38, 0.34, 0.04],
+            'ahead':       [0.06, 0.20, 0.64, 0.10],
+            'behind':      [0.40, 0.40, 0.18, 0.02],
+            'even':        [0.18, 0.32, 0.45, 0.05],
+            'full':        [0.30, 0.40, 0.27, 0.03],
+        },
     }
 
-    # Per-pitch-category intent bias adjustments
-    PITCH_INTENT_BIAS = {
-        'strike': {'FF': 0.08, 'SI': 0.05},
-        'chase':  {'SL': 0.10, 'CB': 0.10, 'SLD': 0.10, 'FS': 0.08, 'FO': 0.08, 'CH': 0.08},
-        'low':    {'CH': 0.06, 'SL': 0.05, 'SLD': 0.05, 'FS': 0.06, 'FO': 0.06},
+    # Which edge of the zone each class works, as [left, right, top, bottom].
+    # Replaces the old blanket LOW_BIASED_TYPES pull: fastballs live up,
+    # breaking balls and splitters live at the bottom.
+    EDGE_WEIGHTS = {
+        'fastball': [0.30, 0.30, 0.22, 0.18],
+        'cutter':   [0.32, 0.32, 0.14, 0.22],
+        'breaking': [0.28, 0.28, 0.06, 0.38],
+        'offspeed': [0.24, 0.24, 0.04, 0.48],
     }
 
-    # Pitches that should naturally live lower in the zone or below it.
-    LOW_BIASED_TYPES = {'SL', 'SLD', 'CB', 'CH', 'FS', 'FO'}
+    # Chase direction by class — fastballs get chased above the zone,
+    # splitters below it.
+    CHASE_WEIGHTS = {
+        'fastball': [0.22, 0.22, 0.44, 0.12],
+        'cutter':   [0.28, 0.28, 0.20, 0.24],
+        'breaking': [0.26, 0.26, 0.04, 0.44],
+        'offspeed': [0.18, 0.18, 0.02, 0.62],
+    }
 
-    def __init__(self, xpos, ypos, release_point, screen, name, windup_time, arm_extension, command=0.70) -> None:
+    # Probability of each non-normal miss, by class. The remainder is a plain
+    # Gaussian miss around the intended spot.
+    #   yank — pulled glove-side and down; the buried breaking ball
+    #   hang — doesn't finish: drifts arm-side, stays up, loses break
+    #   wild — non-competitive, nowhere near a strike
+    MISS_PROFILES = {
+        'fastball': {'yank': 0.08, 'hang': 0.03, 'wild': 0.015},
+        'cutter':   {'yank': 0.10, 'hang': 0.05, 'wild': 0.015},
+        'breaking': {'yank': 0.15, 'hang': 0.07, 'wild': 0.025},
+        'offspeed': {'yank': 0.16, 'hang': 0.06, 'wild': 0.025},
+    }
+
+    # Spread of a zone-intent aim point, as a fraction of the zone half-width
+    # and half-height. Small = the pitcher aims at a spot near the middle.
+    ZONE_INTENT_SPREAD = 0.30
+
+    # Per-pitch-type correction on top of the class intent table, as
+    # probability mass moved between 'zone' and 'chase'. Needed where pitches
+    # sharing a class have different real zone rates — a changeup is worked
+    # in the zone far more than a splitter.
+    ZONE_TENDENCY = {
+        'FF': -0.05, 'SI': -0.09, 'FC': -0.08,
+        'SL': -0.07, 'SLD': -0.07, 'CB': -0.06, 'KC': -0.06,
+        'CH': 0.03, 'FS': -0.06, 'FO': -0.06,
+    }
+
+    # Command grade (0-1) maps linearly onto a per-axis miss sigma in inches.
+    # Calibrated by simulation so realized zone rates match Statcast per pitch
+    # type; the old model used one isotropic ~4-5in sigma for every pitch,
+    # which is what made offspeed far too easy to land for strikes.
+    COMMAND_SIGMA_MIN_IN = 3.0
+    COMMAND_SIGMA_MAX_IN = 8.1
+    # Misses run larger vertically than horizontally.
+    VERTICAL_SIGMA_RATIO = 1.15
+    # How much a hanger loses off its break.
+    HANG_BREAK_MULT = 0.65
+
+    def __init__(self, xpos, ypos, release_point, screen, name, windup_time, arm_extension,
+                 command=0.70, throws='R', pitch_command=None) -> None:
         self.name = name
         self.xpos = xpos
         self.ypos = ypos
         self.release_point = release_point
         self.arm_extension = arm_extension
         self.command = command
-        self.command_error_px = 55 - (command * 30)
+        self.throws = throws
+        # Per-pitch-type command grades; anything unlisted falls back to the
+        # pitcher's overall grade.
+        self.pitch_command = dict(pitch_command or {})
+        # Screen-x direction of the pitcher's arm side. +pfx_x is screen-left
+        # (see UmpireCamera.project), and a RHP runs the ball to +pfx_x.
+        self.arm_side_sign = -1 if throws == 'R' else 1
+        # Key into data/pitch_locations.json. Subclass names already match the
+        # internal roster keys in config.ALL_PITCHERS ('sale', 'degrom', ...).
+        self.pitcher_key = type(self).__name__.lower()
+        # Populated by get_pitch_target() each pitch; read by PitchSimulation
+        # for the break multiplier and by the DB extractor for intent logging.
+        self.last_intent = None
+        self._last_archetype = None
         # Derive 3D release position from the sprite's visual release point
         # so the ball always appears from where the pitcher's hand is in the sprite
         y0 = 60.5 - arm_extension
@@ -356,99 +481,211 @@ class Pitcher:
     BREAKING_TYPES = {'SL', 'CB', 'SLD', 'FS', 'FO', 'CH', 'FC'}
 
     def get_pitch_target(self, pitch_type='FF'):
-        """Choose a target location using intent system + command error + sequencing.
-        Returns (target_x, target_y)."""
+        """Return the executed target (screen px) for this pitch.
+
+        Intent and execution are separated: `_choose_intent` picks where the
+        pitcher is aiming, `_execute` applies command error on top. The
+        intended spot, the miss kind and the resulting break multiplier are
+        recorded on `self.last_intent` for PitchSimulation and the pitch DB —
+        without that split there is no way to tell a well-executed pitch off
+        the corner from one that leaked over the middle.
+        """
+        pitch_class = self.PITCH_CLASS.get(pitch_type, 'breaking')
         count_state = self._get_count_state()
-        probs = list(self.INTENT_TABLE[count_state])  # [zone, edge, chase, ball]
 
-        # Apply pitch-type bias
-        if pitch_type in self.PITCH_INTENT_BIAS.get('strike', {}):
-            probs[0] += self.PITCH_INTENT_BIAS['strike'][pitch_type]
-        if pitch_type in self.PITCH_INTENT_BIAS.get('chase', {}):
-            probs[2] += self.PITCH_INTENT_BIAS['chase'][pitch_type]
-        if pitch_type in self.PITCH_INTENT_BIAS.get('low', {}):
-            # Bias toward edge (low edge specifically)
-            probs[1] += self.PITCH_INTENT_BIAS['low'][pitch_type]
-
-        # Normalize
-        total = sum(probs)
-        probs = [p / total for p in probs]
-
-        # Choose intent
-        intent = random.choices(['zone', 'edge', 'chase', 'ball'], weights=probs, k=1)[0]
-
-        # Pick base target based on intent
-        if intent == 'zone':
-            target_x = random.uniform(self.ZONE_LEFT + 15, self.ZONE_RIGHT - 15)
-            target_y = random.uniform(self.ZONE_TOP + 15, self.ZONE_BOTTOM - 15)
-        elif intent == 'edge':
-            edge = random.choice(['left', 'right', 'top', 'bottom'])
-            if edge == 'left':
-                target_x = self.ZONE_LEFT + random.gauss(0, 10)
-                target_y = random.uniform(self.ZONE_TOP, self.ZONE_BOTTOM)
-            elif edge == 'right':
-                target_x = self.ZONE_RIGHT + random.gauss(0, 10)
-                target_y = random.uniform(self.ZONE_TOP, self.ZONE_BOTTOM)
-            elif edge == 'top':
-                target_x = random.uniform(self.ZONE_LEFT, self.ZONE_RIGHT)
-                target_y = self.ZONE_TOP + random.gauss(0, 10)
-            else:  # bottom
-                target_x = random.uniform(self.ZONE_LEFT, self.ZONE_RIGHT)
-                target_y = self.ZONE_BOTTOM + random.gauss(0, 10)
-        elif intent == 'chase':
-            edge = random.choice(['left', 'right', 'top', 'bottom'])
-            offset = random.uniform(30, 80)
-            if edge == 'left':
-                target_x = self.ZONE_LEFT - offset
-                target_y = random.uniform(self.ZONE_TOP - 20, self.ZONE_BOTTOM + 20)
-            elif edge == 'right':
-                target_x = self.ZONE_RIGHT + offset
-                target_y = random.uniform(self.ZONE_TOP - 20, self.ZONE_BOTTOM + 20)
-            elif edge == 'top':
-                target_x = random.uniform(self.ZONE_LEFT - 20, self.ZONE_RIGHT + 20)
-                target_y = self.ZONE_TOP - offset
-            else:  # bottom — most common chase direction
-                target_x = random.uniform(self.ZONE_LEFT - 20, self.ZONE_RIGHT + 20)
-                target_y = self.ZONE_BOTTOM + offset
-        else:  # ball — clearly outside
-            edge = random.choice(['left', 'right', 'top', 'bottom'])
-            offset = random.uniform(60, 120)
-            if edge == 'left':
-                target_x = self.ZONE_LEFT - offset
-                target_y = random.uniform(self.ZONE_TOP - 40, self.ZONE_BOTTOM + 40)
-            elif edge == 'right':
-                target_x = self.ZONE_RIGHT + offset
-                target_y = random.uniform(self.ZONE_TOP - 40, self.ZONE_BOTTOM + 40)
-            elif edge == 'top':
-                target_x = random.uniform(self.ZONE_LEFT - 40, self.ZONE_RIGHT + 40)
-                target_y = self.ZONE_TOP - offset
-            else:
-                target_x = random.uniform(self.ZONE_LEFT - 40, self.ZONE_RIGHT + 40)
-                target_y = self.ZONE_BOTTOM + offset
-
-        # Bias certain pitches toward the lower third of the zone or below it.
-        # Screen Y increases downward, so larger values mean a lower target.
-        if pitch_type in self.LOW_BIASED_TYPES and intent != 'ball':
-            if intent == 'zone':
-                low_target = self.ZONE_BOTTOM + random.uniform(-10, 12)
-                target_y = target_y * 0.35 + low_target * 0.65
-            elif intent == 'edge':
-                low_target = self.ZONE_BOTTOM + random.uniform(0, 24)
-                target_y = target_y * 0.30 + low_target * 0.70
-            else:  # chase
-                low_target = self.ZONE_BOTTOM + random.uniform(12, 42)
-                target_y = target_y * 0.25 + low_target * 0.75
-
-        # Apply sequence-aware location bias
-        target_x, target_y = self._apply_sequence_bias(
-            target_x, target_y, pitch_type, intent
+        intent_kind, intent_x, intent_y = self._choose_intent(
+            pitch_type, pitch_class, count_state
+        )
+        intent_x, intent_y = self._apply_sequence_bias(
+            intent_x, intent_y, pitch_type, intent_kind
         )
 
-        # Apply command error
-        target_x += random.gauss(0, self.command_error_px)
-        target_y += random.gauss(0, self.command_error_px)
+        exec_x, exec_y, miss_kind, break_mult, sigma_in = self._execute(
+            intent_x, intent_y, pitch_class, pitch_type
+        )
 
-        return target_x, target_y
+        batter_hand = self.get_batter_hand()
+        self.last_intent = PitchIntent(
+            pitch_type=pitch_type,
+            intent_kind=intent_kind,
+            intent_x=intent_x,
+            intent_y=intent_y,
+            exec_x=exec_x,
+            exec_y=exec_y,
+            miss_kind=miss_kind,
+            break_mult=break_mult,
+            command_sigma_in=sigma_in,
+            archetype=getattr(self, '_last_archetype', None) or '',
+            batter_hand=batter_hand,
+            platoon=self.get_platoon(batter_hand),
+        )
+        return exec_x, exec_y
+
+    @staticmethod
+    def in_sign(batter_hand):
+        """Screen-x direction that points *toward* the batter.
+
+        A RHB stands at screen x=330 and a LHB at x=735 (see batter.py) with
+        the zone centred at 630, so inside to a RHB is -x on screen. This is
+        what lets one archetype table serve both batter hands.
+        """
+        return -1 if batter_hand == 'R' else 1
+
+    def get_batter_hand(self):
+        """Current batter handedness, defaulting to 'R' outside a live game."""
+        game = getattr(self, '_game_ref', None)
+        batter = getattr(game, 'batter', None) if game is not None else None
+        if batter is None:
+            return 'R'
+        return batter.get_handedness()
+
+    def get_platoon(self, batter_hand):
+        """'same' when pitcher and batter share handedness, else 'opp'."""
+        return 'same' if batter_hand == self.throws else 'opp'
+
+    def _archetype_target(self, pitch_type, intent, count_state, batter_hand):
+        """Pick a named location archetype for this intent. None if undefined."""
+        archetypes = get_archetypes(
+            self.pitcher_key, pitch_type, self.get_platoon(batter_hand)
+        )
+        candidates = [a for a in archetypes if a['intent'] == intent]
+        if not candidates:
+            return None
+
+        weights = [a['weight'] * a.get('counts', {}).get(count_state, 1.0)
+                   for a in candidates]
+        if sum(weights) <= 0:
+            return None
+        spot = random.choices(candidates, weights=weights, k=1)[0]
+
+        half_w = (self.ZONE_RIGHT - self.ZONE_LEFT) / 2
+        half_h = (self.ZONE_BOTTOM - self.ZONE_TOP) / 2
+        in_away = random.gauss(spot['in_away'], spot['spread_x'])
+        height = random.gauss(spot['height'], spot['spread_z'])
+
+        # Screen y grows downward, so a positive height is a smaller y.
+        return (spot['name'],
+                self.ZONE_CENTER_X + self.in_sign(batter_hand) * in_away * half_w,
+                self.ZONE_CENTER_Y - height * half_h)
+
+    def _choose_intent(self, pitch_type, pitch_class, count_state):
+        """Pick where the pitcher is aiming. Returns (kind, x, y) in screen px."""
+        probs = list(self.INTENT_TABLE[pitch_class][count_state])
+
+        tendency = self.ZONE_TENDENCY.get(pitch_type, 0.0)
+        if tendency > 0:
+            shift = min(tendency, probs[2])
+            probs[0] += shift
+            probs[2] -= shift
+        elif tendency < 0:
+            shift = min(-tendency, probs[0])
+            probs[0] -= shift
+            probs[2] += shift
+
+        intent = random.choices(['zone', 'edge', 'chase', 'waste'], weights=probs, k=1)[0]
+
+        # Named archetypes take priority; the generic geometry below is the
+        # fallback for any (pitch, platoon, intent) with no archetype defined.
+        batter_hand = self.get_batter_hand()
+        spot = self._archetype_target(pitch_type, intent, count_state, batter_hand)
+        if spot is not None:
+            self._last_archetype = spot[0]
+            return intent, spot[1], spot[2]
+        self._last_archetype = None
+
+        if intent == 'zone':
+            # Aim at a spot, not "somewhere in the zone" — spreading the aim
+            # point uniformly across the zone stacks target variance on top of
+            # command variance and forces an unrealistically small miss sigma
+            # to hit real zone rates.
+            half_w = (self.ZONE_RIGHT - self.ZONE_LEFT) / 2
+            half_h = (self.ZONE_BOTTOM - self.ZONE_TOP) / 2
+            return (intent,
+                    self.ZONE_CENTER_X + random.gauss(0, self.ZONE_INTENT_SPREAD * half_w),
+                    self.ZONE_CENTER_Y + random.gauss(0, self.ZONE_INTENT_SPREAD * half_h))
+
+        if intent == 'edge':
+            edge = random.choices(['left', 'right', 'top', 'bottom'],
+                                  weights=self.EDGE_WEIGHTS[pitch_class], k=1)[0]
+            if edge == 'left':
+                return intent, self.ZONE_LEFT + random.gauss(0, 10), \
+                    random.uniform(self.ZONE_TOP, self.ZONE_BOTTOM)
+            if edge == 'right':
+                return intent, self.ZONE_RIGHT + random.gauss(0, 10), \
+                    random.uniform(self.ZONE_TOP, self.ZONE_BOTTOM)
+            if edge == 'top':
+                return intent, random.uniform(self.ZONE_LEFT, self.ZONE_RIGHT), \
+                    self.ZONE_TOP + random.gauss(0, 10)
+            return intent, random.uniform(self.ZONE_LEFT, self.ZONE_RIGHT), \
+                self.ZONE_BOTTOM + random.gauss(0, 10)
+
+        weights = self.CHASE_WEIGHTS[pitch_class]
+        offset = random.uniform(30, 80) if intent == 'chase' else random.uniform(60, 120)
+        spread = 20 if intent == 'chase' else 40
+        edge = random.choices(['left', 'right', 'top', 'bottom'], weights=weights, k=1)[0]
+        if edge == 'left':
+            return intent, self.ZONE_LEFT - offset, \
+                random.uniform(self.ZONE_TOP - spread, self.ZONE_BOTTOM + spread)
+        if edge == 'right':
+            return intent, self.ZONE_RIGHT + offset, \
+                random.uniform(self.ZONE_TOP - spread, self.ZONE_BOTTOM + spread)
+        if edge == 'top':
+            return intent, random.uniform(self.ZONE_LEFT - spread, self.ZONE_RIGHT + spread), \
+                self.ZONE_TOP - offset
+        return intent, random.uniform(self.ZONE_LEFT - spread, self.ZONE_RIGHT + spread), \
+            self.ZONE_BOTTOM + offset
+
+    def get_command_grade(self, pitch_type):
+        """Command grade (0-1) for one pitch type, falling back to overall."""
+        return self.pitch_command.get(pitch_type, self.command)
+
+    def _execute(self, intent_x, intent_y, pitch_class, pitch_type):
+        """Apply command error to an intended location.
+
+        Returns (x, y, miss_kind, break_mult, sigma_in). Screen Y increases
+        downward, so negative dy is up.
+        """
+        grade = max(0.0, min(1.0, self.get_command_grade(pitch_type)))
+        sigma_in = (self.COMMAND_SIGMA_MAX_IN
+                    - grade * (self.COMMAND_SIGMA_MAX_IN - self.COMMAND_SIGMA_MIN_IN))
+
+        # Fatigue degrades command on top of the per-pitch grade.
+        _, _, mistake_chance = self.get_fatigue_modifiers()
+        sigma_in *= 1.0 + mistake_chance
+
+        sx = sigma_in * self.PX_PER_INCH_X
+        sy = sigma_in * self.VERTICAL_SIGMA_RATIO * self.PX_PER_INCH_Y
+
+        x = intent_x + random.gauss(0, sx)
+        y = intent_y + random.gauss(0, sy)
+        break_mult = 1.0
+
+        profile = self.MISS_PROFILES[pitch_class]
+        roll = random.random()
+        yank_p = profile['yank']
+        hang_p = yank_p + profile['hang']
+        wild_p = hang_p + profile['wild']
+
+        if roll < yank_p:
+            # Yanked: pulled off glove-side and buried.
+            miss_kind = 'yank'
+            x -= self.arm_side_sign * random.uniform(0.8, 2.2) * sx
+            y += random.uniform(0.5, 1.8) * sy
+        elif roll < hang_p:
+            # Hung: drifts back toward the middle, stays up, loses its bite.
+            miss_kind = 'hang'
+            x = x * 0.4 + self.ZONE_CENTER_X * 0.6 + self.arm_side_sign * random.uniform(0, 0.6) * sx
+            y = y * 0.4 + self.ZONE_CENTER_Y * 0.6 - random.uniform(0.2, 0.9) * sy
+            break_mult = self.HANG_BREAK_MULT
+        elif roll < wild_p:
+            # Non-competitive — nowhere near a strike.
+            miss_kind = 'wild'
+            x -= self.arm_side_sign * random.uniform(-2.0, 4.0) * sx
+            y += random.uniform(-2.5, 4.5) * sy
+        else:
+            miss_kind = 'normal'
+
+        return x, y, miss_kind, break_mult, sigma_in
 
     def _apply_sequence_bias(self, target_x, target_y, pitch_type, intent):
         """Adjust target location based on the previous pitch for tunneling effect.
@@ -466,7 +703,7 @@ class Pitcher:
             return target_x, target_y
 
         # Only apply sequencing bias for zone/edge/chase intents (not waste pitches)
-        if intent == 'ball':
+        if intent == 'waste':
             return target_x, target_y
 
         prev_is_fastball = prev_pitch in self.FASTBALL_TYPES

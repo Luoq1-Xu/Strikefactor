@@ -13,7 +13,9 @@ class Degrom(Pitcher):
                          'Jacob deGrom',
                          1100,
                          6.7,
-                         command=0.82)
+                         command=0.82,
+                         throws='R',
+                         pitch_command={'FF': 0.90, 'SL': 0.84, 'CH': 0.72, 'CB': 0.70})
         self.load_img(loadfunc, 'assets/images/degrom/RIGHTY', 9)
         self.add_pitch_type(self.CB, "CB")
         self.add_pitch_type(self.FF, "FF")

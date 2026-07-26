@@ -13,7 +13,9 @@ class Mcclanahan(Pitcher):
                          'Shane Mcclanahan',
                          1200,
                          7.0,
-                         command=0.72)
+                         command=0.72,
+                         throws='L',
+                         pitch_command={'FF': 0.78, 'CH': 0.72, 'SL': 0.68, 'CB': 0.62})
         self.load_img(loadfunc, 'assets/images/mcclanahan/', 17)
         self.add_pitch_type(self.CB, "CB")
         self.add_pitch_type(self.SL, "SL")

@@ -13,7 +13,9 @@ class Yamamoto(Pitcher):
                          'Yoshinobu Yamamoto',
                          1100,
                          6.5,
-                         command=0.75)
+                         command=0.75,
+                         throws='R',
+                         pitch_command={'FF': 0.82, 'SI': 0.78, 'FC': 0.76, 'CB': 0.72, 'FS': 0.64})
         self.load_img(loadfunc, 'assets/images/yamamoto/', 14)
         self.add_pitch_type(self.FB, "FF")
         self.add_pitch_type(self.FS, "FS")

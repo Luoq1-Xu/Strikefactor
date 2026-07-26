@@ -13,6 +13,7 @@ from typing import Optional
 from gameplay.gameday_manager import GameDayManager
 from config import get_path, resource_path
 from ui import gameday_theme as gdt
+from ui.play_by_play_panel import PlayByPlayPanel
 
 
 class GameState(ABC):
@@ -1189,9 +1190,10 @@ class GameDayTransitionState(GameState):
         self.phase = "SHOW_SCORE"  # Phases: SHOW_SCORE, SIMULATING, FINAL
         self.simulation_complete = False
         self.opponent_events = []
-        self._game_log_window = None
         self._labels = []  # Track UILabels for cleanup
         self._gd_fonts = None  # Lazy-init layout fonts
+        self._pbp = None       # PlayByPlayPanel for the GAME LOG overlay
+        self._log_open = False
 
     def _place_button(self, btn, rect):
         btn.set_relative_position(rect[:2])
@@ -1298,9 +1300,7 @@ class GameDayTransitionState(GameState):
         """Called when exiting this state."""
         self.game.ui_manager.hide_box_score()
         self._clear_labels()
-        if self._game_log_window is not None:
-            self._game_log_window.kill()
-            self._game_log_window = None
+        self._log_open = False
 
     def update(self, time_delta: float):
         """Update transition logic."""
@@ -1352,6 +1352,18 @@ class GameDayTransitionState(GameState):
         if event.type == pygame.QUIT:
             return False
 
+        # The GAME LOG overlay is modal: it owns input until it's closed.
+        if self._log_open:
+            if self._pbp is not None and self._pbp.handle_event(event):
+                return True
+            close = (event.type == pygame.KEYDOWN and
+                     event.key in (pygame.K_ESCAPE, pygame.K_RETURN))
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                close = close or not self._LOG_RECT.collidepoint(event.pos)
+            if close:
+                self._close_game_log()
+            return True
+
         if event.type == pygame_gui.UI_BUTTON_PRESSED:
             if event.ui_element == self.game.ui_manager.buttons.get('next_inning'):
                 self._handle_next_inning()
@@ -1401,51 +1413,30 @@ class GameDayTransitionState(GameState):
         self.simulation_complete = True
 
     def _load_and_switch_pitcher(self, pitcher_name: str):
-        """Load and switch to a new pitcher."""
-        import pickle
-        import sys
-        from config import get_path
+        """Switch the active opponent pitcher after a relief substitution.
 
+        The AI is deliberately *not* reloaded here: PitcherManager already
+        attached each pitcher's validated AI (with its pitcher-specific tunnel
+        pairs) at startup. Re-reading the pickle mid-game would drop those
+        tunnel pairs and throw away every Q-update the reliever had learned so
+        far this session — which `save_all_ai()` would then persist over the
+        good model on the way back to the menu.
+        """
         # Clear fatigue from old pitcher
         self.game.current_pitcher.clear_fatigue_stats()
 
-        # Set the new pitcher in the pitcher manager
-        self.game.pitcher_manager.set_current_pitcher(pitcher_name)
-        self.game.current_pitcher = self.game.pitcher_manager.get_current_pitcher()
+        # A name the roster doesn't know would silently no-op in
+        # set_current_pitcher, leaving the old arm on the mound. Say so rather
+        # than letting the sprite and the box score disagree in silence.
+        if self.game.pitcher_manager.get_pitcher(pitcher_name) is None:
+            print(f"Warning: relief pitcher '{pitcher_name}' is not on the "
+                  f"roster; keeping the current sprite on the mound")
+        else:
+            self.game.pitcher_manager.set_current_pitcher(pitcher_name)
+            self.game.current_pitcher = self.game.pitcher_manager.get_current_pitcher()
 
-        # Load AI for the new pitcher
-        import ai.AI_2 as AI_2
-        sys.modules['AI_2'] = AI_2
-
-        # Get the pitcher's actual pitch arsenal
-        pitcher_pitch_names = set(self.game.current_pitcher.get_pitch_names())
-        ai_loaded = False
-
-        try:
-            ai_file = get_path(f"ai/{pitcher_name}_ai.pkl")
-            with open(ai_file, "rb") as f:
-                ai = pickle.load(f)
-
-            # Validate that the AI's action space matches the pitcher's arsenal
-            ai_actions = set(ai.actions)
-            if ai_actions == pitcher_pitch_names:
-                self.game.current_pitcher.attach_ai(ai)
-                ai_loaded = True
-            else:
-                print(f"Warning: AI action space mismatch for {pitcher_name}")
-                print(f"  AI actions: {sorted(ai_actions)}")
-                print(f"  Pitcher arsenal: {sorted(pitcher_pitch_names)}")
-                print(f"  Creating new AI with correct action space")
-        except FileNotFoundError:
-            print(f"Warning: AI file not found for {pitcher_name}, using default AI")
-
-        # If AI wasn't loaded successfully or had wrong actions, create a new one
-        if not ai_loaded:
-            from ai.AI_2 import ERAI
-            ai = ERAI(self.game.current_pitcher.get_pitch_names())
-            self.game.current_pitcher.attach_ai(ai)
-
-        # Attach fatigue stats for the new pitcher
+        # Re-link fatigue tracking to whichever arm the manager now has active,
+        # so pitch counts land on the right PitcherStats row either way.
         self.game.current_pitcher.set_fatigue_stats(
             self.game.gameday_manager.get_active_pitcher_stats()
         )
@@ -1491,77 +1482,72 @@ class GameDayTransitionState(GameState):
         # Transition to gameplay
         self.game.state_manager.change_state('gameplay')
 
+    # GAME LOG overlay geometry (panel + its framed backdrop).
+    _LOG_RECT = pygame.Rect(90, 70, gdt.SCREEN_W - 180, gdt.SCREEN_H - 190)
+    _LOG_PITCHERS_H = 76  # strip under the panel for both bullpens
+
     def _show_game_log(self):
-        """Show the complete game log in a scrollable window."""
-        # Kill existing window if open
-        if self._game_log_window is not None:
-            self._game_log_window.kill()
-            self._game_log_window = None
-
+        """Open the scrollable play-by-play overlay for the live game."""
         gameday_mgr = self.game.gameday_manager
-        log_lines = []
+        if self._pbp is None:
+            self._pbp = PlayByPlayPanel(self._ensure_fonts())
+        self._pbp.set_plays([e.to_dict() for e in gameday_mgr.event_log])
+        # Open on the latest action rather than the first inning.
+        self._pbp.scroll_to_end()
+        self._log_open = True
+        # Modal: hide the phase buttons so they can't be clicked through the veil.
+        self.game.ui_manager.set_visibility_state('pitching')
 
-        # Box score header
-        box_data = gameday_mgr.get_box_score_lines()
-        log_lines.append("<b>BOX SCORE</b><br>")
-        header = "              "
-        for i in range(1, 10):
-            header += f"{i:>3}"
-        header += "  | R"
-        log_lines.append(f"{header}<br>")
+    def _close_game_log(self):
+        self._log_open = False
+        self._setup_phase_ui()
 
-        opp_line = f"{'Opponent':<14}"
-        for r in box_data['opponent']:
-            opp_line += f"{r:>3}"
-        opp_line += f"  | {box_data['opponent_total']}"
-        log_lines.append(f"{opp_line}<br>")
+    def _render_game_log_overlay(self, screen):
+        """Dim the screen and draw the play-by-play panel on top."""
+        f = self._ensure_fonts()
+        veil = pygame.Surface((gdt.SCREEN_W, gdt.SCREEN_H), pygame.SRCALPHA)
+        veil.fill((0, 0, 0, 215))
+        screen.blit(veil, (0, 0))
 
-        plr_line = f"{'Player':<14}"
-        for r in box_data['player']:
-            plr_line += f"{r:>3}"
-        plr_line += f"  | {box_data['player_total']}"
-        log_lines.append(f"{plr_line}<br>")
+        rect = self._LOG_RECT
+        pygame.draw.rect(screen, gdt.BG, rect)
+        pygame.draw.rect(screen, gdt.FG, rect, 1)
 
-        # Play-by-play
-        log_lines.append("<br><b>PLAY-BY-PLAY</b><br><br>")
+        gm = self.game.gameday_manager
+        title = (f"GAME LOG   ·   YOU {gm.player_score}"
+                 f" - {gm.opponent_score} OPP")
+        self._blit_text(screen, title, f['small'],
+                        (rect.left, rect.top - 26), gdt.FG)
+        self._blit_text(screen, "ESC  ·  CLOSE", f['micro'],
+                        (rect.right, rect.top - 22), gdt.DIM, align='right')
 
-        current_inning = 0
-        current_half = None
+        panel_rect = pygame.Rect(rect.left + 10, rect.top + 10,
+                                 rect.width - 20, rect.height - 20 - self._LOG_PITCHERS_H)
+        self._pbp.draw(screen, panel_rect)
+        self._render_log_pitchers(screen, f, panel_rect.bottom + 10, panel_rect)
 
-        for event in gameday_mgr.event_log:
-            half_str = 'top' if event.is_top else 'bottom'
-            if event.inning != current_inning or half_str != current_half:
-                current_inning = event.inning
-                current_half = half_str
-                half_label = "Top" if event.is_top else "Bottom"
-                log_lines.append(f"<br><b>--- {half_label} of Inning {current_inning} ---</b><br>")
+        self._blit_text(screen, "WHEEL / UP-DOWN  SCROLL      TAB  FILTER",
+                        f['micro'], (gdt.SCREEN_W // 2, rect.bottom + 16),
+                        gdt.DIM_SOFT, align='center')
 
-            log_lines.append(f"{str(event)}<br>")
-
-        # Pitcher stats
-        log_lines.append("<br><b>PITCHER STATS</b><br><br>")
-        log_lines.append("<b>Opponent Pitchers:</b><br>")
-        for ps in gameday_mgr.get_opponent_pitcher_stats():
-            log_lines.append(f"  {ps.get_summary()}<br>")
-        log_lines.append("<br><b>Your Team's Pitchers:</b><br>")
-        for ps in gameday_mgr.get_player_pitcher_stats():
-            log_lines.append(f"  {ps.get_summary()}<br>")
-
-        log_text = "".join(log_lines)
-
-        # Create window
-        self._game_log_window = pygame_gui.elements.UIWindow(
-            rect=pygame.Rect((140, 40), (1000, 640)),
-            manager=self.game.ui_manager.manager,
-            window_display_title='Game Log'
+    def _render_log_pitchers(self, screen, f, y, panel_rect):
+        """Two-column pitching lines (yours / opponent's) under the log."""
+        gm = self.game.gameday_manager
+        col_w = panel_rect.width // 2
+        columns = (
+            ("YOUR PITCHERS", gm.get_player_pitcher_stats(), panel_rect.left),
+            ("OPPONENT PITCHERS", gm.get_opponent_pitcher_stats(),
+             panel_rect.left + col_w),
         )
-
-        pygame_gui.elements.UITextBox(
-            html_text=log_text,
-            relative_rect=pygame.Rect((10, 10), (960, 570)),
-            manager=self.game.ui_manager.manager,
-            container=self._game_log_window
-        )
+        for label, stats, x in columns:
+            self._blit_text(screen, label, f['micro'], (x, y), gdt.DIM)
+            ry = y + 20
+            for ps in stats[-2:]:  # most recent two arms per side
+                line = (f"{ps.name.upper()}  {ps.get_ip_display()} IP  "
+                        f"{ps.hits_allowed} H  {ps.runs_allowed} R  "
+                        f"{ps.strikeouts} K  {ps.pitch_count} P")
+                self._blit_text(screen, line, f['micro'], (x, ry), gdt.FG)
+                ry += 18
 
     def _return_to_menu(self):
         """Return to main menu."""
@@ -1971,6 +1957,9 @@ class GameDayTransitionState(GameState):
         else:
             self._render_active(screen)
 
+        if self._log_open and self._pbp is not None:
+            self._render_game_log_overlay(screen)
+
 
 def _fmt_iso(iso, fmt):
     """Format an ISO timestamp, tolerating a missing/garbage value."""
@@ -2190,9 +2179,16 @@ class GameDayHistoryState(_GameDayListState):
     ACTION_LABEL = "VIEW ›"
     VISIBILITY_STATE = 'gameday_history'
 
+    # Detail-view layout: the play-by-play panel fills the space between the
+    # linescore and the BACK button (which lives at y=640).
+    _PBP_RECT = pygame.Rect(gdt.MARGIN_X, 322,
+                            gdt.SCREEN_W - 2 * gdt.MARGIN_X, 302)
+
     def __init__(self, game):
         super().__init__(game)
-        self.selected = None  # a game dict when viewing detail
+        self.selected = None      # a game dict when viewing detail
+        self._pbp = None          # lazily-built PlayByPlayPanel
+        self._detail_plays = []   # play log for `selected` (resolved once)
 
     def _load_items(self):
         return GameDayManager.get_history_games()
@@ -2238,20 +2234,6 @@ class GameDayHistoryState(_GameDayListState):
         player_hits = sum(1 for row in rows if not row['is_top_inning'])
         opponent_hits = sum(1 for row in rows if row['is_top_inning'])
         return player_hits, opponent_hits
-
-    @staticmethod
-    def _format_play_entry(entry):
-        inning = entry.get('inning', '?')
-        half = 'Top' if entry.get('is_top') else 'Bottom'
-        batter = entry.get('batter_name') or ('Opponent' if entry.get('is_top') else 'Player')
-        pitcher = entry.get('pitcher_name') or 'Unknown pitcher'
-        result = (entry.get('result') or 'UNKNOWN').replace('_', ' ')
-        runs = int(entry.get('runs_scored', 0) or 0)
-        if runs:
-            result = f"{result} ({runs} R)"
-        play_index = entry.get('play_index')
-        prefix = f"{play_index:>3}. " if isinstance(play_index, int) else ""
-        return f"{prefix}[{half} {inning}] {batter} - {result} (vs {pitcher})"
 
     @staticmethod
     def _play_log_from_game(item):
@@ -2313,8 +2295,63 @@ class GameDayHistoryState(_GameDayListState):
         self.selected = None
         super().enter()
 
+    @staticmethod
+    def _glance_stats(play_log):
+        """Per-side counting stats derived from the play log, for the
+        'AT A GLANCE' block beside the linescore."""
+        hits = {'SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN'}
+        xbh = {'DOUBLE', 'TRIPLE', 'HOME RUN'}
+        stats = {side: dict(ab=0, hr=0, xbh=0, k=0, bb=0)
+                 for side in ('you', 'opp')}
+        for entry in play_log or []:
+            result = str(entry.get('result') or '').replace('_', ' ').upper()
+            if result.startswith('MOUND VISIT') or result.startswith('PITCHING CHANGE'):
+                continue
+            s = stats['opp' if entry.get('is_top') else 'you']
+            s['ab'] += 1
+            if result in hits:
+                if result in xbh:
+                    s['xbh'] += 1
+                if result == 'HOME RUN':
+                    s['hr'] += 1
+            elif result == 'STRIKEOUT':
+                s['k'] += 1
+            elif result in ('WALK', 'HIT BY PITCH'):
+                s['bb'] += 1
+        return stats
+
+    def _render_glance(self, screen, f, play_log, x, y):
+        """Compact YOU/OPP stat table drawn to the right of the linescore."""
+        stats = self._glance_stats(play_log)
+        you_x, opp_x = x + 210, x + 300
+
+        gdt.blit_text(screen, "AT A GLANCE", f['micro'], (x, y), gdt.DIM)
+        gdt.blit_text(screen, "YOU", f['tiny'], (you_x, y + 24), gdt.DIM, align='right')
+        gdt.blit_text(screen, "OPP", f['tiny'], (opp_x, y + 24), gdt.DIM, align='right')
+        pygame.draw.line(screen, gdt.DIVIDER,
+                         (x, y + 46), (opp_x, y + 46), 1)
+
+        rows = (("HOME RUNS", 'hr'), ("EXTRA-BASE HITS", 'xbh'),
+                ("STRIKEOUTS", 'k'), ("PLATE APPEARANCES", 'ab'))
+        ry = y + 54
+        for label, key in rows:
+            gdt.blit_text(screen, label, f['tiny'], (x, ry), gdt.DIM)
+            gdt.blit_text(screen, str(stats['you'][key]), f['tiny'],
+                          (you_x, ry), gdt.FG, align='right')
+            gdt.blit_text(screen, str(stats['opp'][key]), f['tiny'],
+                          (opp_x, ry), gdt.DIM, align='right')
+            ry += 24
+
+    def _panel(self):
+        if self._pbp is None:
+            self._pbp = PlayByPlayPanel(self._f())
+        return self._pbp
+
     def _on_activate(self, item):
         self.selected = item
+        # Resolved once here (it can hit the pitch DB) rather than per frame.
+        self._detail_plays = self._play_log_from_game(item)
+        self._panel().set_plays(self._detail_plays)
         self.game.ui_manager.set_visibility_state('gameday_history_detail')
 
     # --- result chip + row ---
@@ -2358,10 +2395,13 @@ class GameDayHistoryState(_GameDayListState):
         if self.selected is None:
             return super().handle_event(event)
 
-        # Detail view: only "back" (returns to the list) is available.
+        # Detail view: the play-by-play panel owns scroll/filter input; the
+        # only other action is "back" (returns to the list).
         self.game.ui_manager.process_events(event)
         if event.type == pygame.QUIT:
             return False
+        if self._panel().handle_event(event):
+            return True
         back = (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE)
         if event.type == pygame_gui.UI_BUTTON_PRESSED:
             back = back or (event.ui_element ==
@@ -2387,16 +2427,19 @@ class GameDayHistoryState(_GameDayListState):
         p = game.get('player_score', 0)
         o = game.get('opponent_score', 0)
 
-        gdt.blit_text(screen, date, f['micro'], (gdt.MARGIN_X, 64), gdt.DIM)
+        # Compact summary block — kept short so the play-by-play gets the space.
+        gdt.blit_text(screen, date, f['micro'], (gdt.MARGIN_X, 56), gdt.DIM)
         head = "WIN" if result == 'WIN' else ("LOSS" if result == 'LOSS' else "TIE")
-        gdt.blit_text(screen, head, f['huge'], (gdt.MARGIN_X, 84), gdt.FG)
-        gdt.blit_text(screen, f"{p}-{o}", f['mega'],
-                      (gdt.SCREEN_W - gdt.MARGIN_X, 70), gdt.FG, align='right')
+        gdt.blit_text(screen, head, f['huge'], (gdt.MARGIN_X, 72), gdt.FG)
+        gdt.blit_text(screen, "FINAL", f['micro'],
+                      (gdt.SCREEN_W - gdt.MARGIN_X, 56), gdt.DIM, align='right')
+        gdt.blit_text(screen, f"{p}-{o}", f['huge'],
+                      (gdt.SCREEN_W - gdt.MARGIN_X, 72), gdt.FG, align='right')
 
         diff = (game.get('difficulty') or '').upper()
         starter = (game.get('opponent_starter') or '?').upper()
         gdt.blit_text(screen, f"{diff}   ·   OPPONENT STARTER: {starter}",
-                      f['small'], (gdt.MARGIN_X, 200), gdt.DIM)
+                      f['small'], (gdt.MARGIN_X, 146), gdt.DIM)
 
         player_hits, opponent_hits = self._history_hit_totals(game)
 
@@ -2407,24 +2450,17 @@ class GameDayHistoryState(_GameDayListState):
         opp = list(opp) + [0] * (n - len(opp))
         plr = list(plr) + [0] * (n - len(plr))
         gdt.draw_linescore_from_arrays(
-            screen, gdt.MARGIN_X, 250, f, opp, plr, sum(opp), sum(plr),
+            screen, gdt.MARGIN_X, 178, f, opp, plr, sum(opp), sum(plr),
             opp_hits=opponent_hits, plr_hits=player_hits,
         )
 
-        play_log = self._play_log_from_game(game)
-        play_y = 420
-        gdt.blit_text(screen, "PLAY LOG", f['micro'],
-                      (gdt.MARGIN_X, play_y), gdt.DIM)
-        play_y += 26
-        if play_log:
-            for entry in play_log[-10:]:
-                gdt.blit_text(screen, self._format_play_entry(entry), f['small'],
-                              (gdt.MARGIN_X, play_y), gdt.FG)
-                play_y += 24
-        else:
-            gdt.blit_text(screen, "NO STRUCTURED PLAY LOG AVAILABLE FOR THIS GAME",
-                          f['small'], (gdt.MARGIN_X, play_y), gdt.DIM_SOFT)
+        if self._detail_plays:
+            self._render_glance(screen, f, self._detail_plays, 940, 176)
 
-        gdt.blit_text(screen, "ESC  ·  BACK TO LIST", f['micro'],
+        self._panel().draw(screen, self._PBP_RECT)
+
+        hint = ("WHEEL / UP-DOWN  SCROLL      TAB  FILTER      "
+                "ESC  ·  BACK TO LIST")
+        gdt.blit_text(screen, hint, f['micro'],
                       (gdt.SCREEN_W // 2, gdt.SCREEN_H - 64),
                       gdt.DIM_SOFT, align='center')

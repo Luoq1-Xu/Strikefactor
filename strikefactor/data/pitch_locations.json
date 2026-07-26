@@ -1,0 +1,214 @@
+{
+  "_readme": [
+    "Named location archetypes: the distinct ways a pitch type actually gets used.",
+    "Replaces picking a random zone edge, which made every slider trace the same arc.",
+    "",
+    "Keyed by pitch type, then platoon matchup:",
+    "  same = pitcher and batter same-handed (RHP vs RHB, LHP vs LHB)",
+    "  opp  = opposite-handed (RHP vs LHB, LHP vs RHB)",
+    "Platoon rather than batter hand because LHP-vs-LHB mirrors RHP-vs-RHB, and",
+    "because a pitch's break direction relative to the batter is what changes.",
+    "",
+    "Coordinates are batter-relative, in units of zone half-width / half-height",
+    "measured from the zone center:",
+    "  in_away  +1.0 = inside edge (toward the batter), -1.0 = outside edge",
+    "  height   +1.0 = top of zone, -1.0 = bottom of zone",
+    "Pitcher.in_sign() flips in_away into screen pixels, so the same archetype",
+    "works for both batter hands without duplicated data.",
+    "",
+    "intent must be one of zone/edge/chase/waste and ties the archetype to the",
+    "calibrated INTENT_TABLE mix in pitcher.py -- archetypes choose WHERE within",
+    "an intent, they do not change how often each intent is used. Keep an",
+    "archetype for every intent a pitch uses, or it falls back to generic",
+    "geometry. 'counts' multiplies the weight in the named count states."
+  ],
+
+  "defaults": {
+    "FF": {
+      "same": [
+        {"name": "middle",     "intent": "zone",  "weight": 1.00, "in_away": 0.05, "height": 0.20, "spread_x": 0.34, "spread_z": 0.32},
+        {"name": "up_in",      "intent": "edge",  "weight": 0.40, "in_away": 0.82, "height": 0.80, "spread_x": 0.20, "spread_z": 0.22, "counts": {"ahead": 1.4}},
+        {"name": "away_edge",  "intent": "edge",  "weight": 0.42, "in_away": -0.85, "height": 0.15, "spread_x": 0.18, "spread_z": 0.42},
+        {"name": "low_away",   "intent": "edge",  "weight": 0.28, "in_away": -0.72, "height": -0.80, "spread_x": 0.22, "spread_z": 0.20},
+        {"name": "up_ladder",  "intent": "chase", "weight": 0.70, "in_away": 0.25, "height": 1.55, "spread_x": 0.40, "spread_z": 0.28, "counts": {"ahead": 1.8, "behind": 0.2}},
+        {"name": "in_off",     "intent": "chase", "weight": 0.30, "in_away": 1.45, "height": 0.30, "spread_x": 0.26, "spread_z": 0.45},
+        {"name": "climb",      "intent": "waste", "weight": 1.00, "in_away": 0.20, "height": 2.30, "spread_x": 0.60, "spread_z": 0.45}
+      ],
+      "opp": [
+        {"name": "middle",     "intent": "zone",  "weight": 1.00, "in_away": -0.05, "height": 0.20, "spread_x": 0.34, "spread_z": 0.32},
+        {"name": "up_away",    "intent": "edge",  "weight": 0.45, "in_away": -0.82, "height": 0.78, "spread_x": 0.20, "spread_z": 0.22, "counts": {"ahead": 1.4}},
+        {"name": "in_edge",    "intent": "edge",  "weight": 0.40, "in_away": 0.85, "height": 0.20, "spread_x": 0.18, "spread_z": 0.42},
+        {"name": "low_in",     "intent": "edge",  "weight": 0.25, "in_away": 0.70, "height": -0.80, "spread_x": 0.22, "spread_z": 0.20},
+        {"name": "up_ladder",  "intent": "chase", "weight": 0.70, "in_away": -0.20, "height": 1.55, "spread_x": 0.40, "spread_z": 0.28, "counts": {"ahead": 1.8, "behind": 0.2}},
+        {"name": "away_off",   "intent": "chase", "weight": 0.30, "in_away": -1.45, "height": 0.25, "spread_x": 0.26, "spread_z": 0.45},
+        {"name": "climb",      "intent": "waste", "weight": 1.00, "in_away": -0.20, "height": 2.30, "spread_x": 0.60, "spread_z": 0.45}
+      ]
+    },
+
+    "SI": {
+      "same": [
+        {"name": "middle_in",  "intent": "zone",  "weight": 1.00, "in_away": 0.30, "height": -0.15, "spread_x": 0.34, "spread_z": 0.32},
+        {"name": "in_edge",    "intent": "edge",  "weight": 0.62, "in_away": 0.88, "height": -0.25, "spread_x": 0.18, "spread_z": 0.38},
+        {"name": "low_away",   "intent": "edge",  "weight": 0.38, "in_away": -0.70, "height": -0.82, "spread_x": 0.22, "spread_z": 0.20},
+        {"name": "jam",        "intent": "chase", "weight": 0.72, "in_away": 1.45, "height": -0.10, "spread_x": 0.26, "spread_z": 0.45},
+        {"name": "under",      "intent": "chase", "weight": 0.28, "in_away": 0.40, "height": -1.45, "spread_x": 0.42, "spread_z": 0.25},
+        {"name": "run_off",    "intent": "waste", "weight": 1.00, "in_away": 2.10, "height": -0.20, "spread_x": 0.50, "spread_z": 0.55}
+      ],
+      "opp": [
+        {"name": "middle",     "intent": "zone",  "weight": 1.00, "in_away": -0.20, "height": -0.15, "spread_x": 0.34, "spread_z": 0.32},
+        {"name": "front_door", "intent": "edge",  "weight": 0.50, "in_away": 0.85, "height": -0.20, "spread_x": 0.18, "spread_z": 0.38, "counts": {"behind": 1.5}},
+        {"name": "low_away",   "intent": "edge",  "weight": 0.50, "in_away": -0.78, "height": -0.78, "spread_x": 0.22, "spread_z": 0.22},
+        {"name": "away_off",   "intent": "chase", "weight": 0.60, "in_away": -1.40, "height": -0.35, "spread_x": 0.26, "spread_z": 0.45},
+        {"name": "under",      "intent": "chase", "weight": 0.40, "in_away": -0.30, "height": -1.45, "spread_x": 0.42, "spread_z": 0.25},
+        {"name": "run_off",    "intent": "waste", "weight": 1.00, "in_away": -2.00, "height": -0.30, "spread_x": 0.50, "spread_z": 0.55}
+      ]
+    },
+
+    "FC": {
+      "same": [
+        {"name": "middle",     "intent": "zone",  "weight": 1.00, "in_away": -0.15, "height": 0.05, "spread_x": 0.34, "spread_z": 0.34},
+        {"name": "away_edge",  "intent": "edge",  "weight": 0.60, "in_away": -0.88, "height": 0.05, "spread_x": 0.18, "spread_z": 0.40},
+        {"name": "low_away",   "intent": "edge",  "weight": 0.40, "in_away": -0.72, "height": -0.78, "spread_x": 0.22, "spread_z": 0.22},
+        {"name": "off_away",   "intent": "chase", "weight": 0.75, "in_away": -1.40, "height": -0.45, "spread_x": 0.26, "spread_z": 0.42, "counts": {"ahead": 1.5}},
+        {"name": "under",      "intent": "chase", "weight": 0.25, "in_away": -0.35, "height": -1.40, "spread_x": 0.42, "spread_z": 0.26},
+        {"name": "bury",       "intent": "waste", "weight": 1.00, "in_away": -1.60, "height": -1.70, "spread_x": 0.50, "spread_z": 0.50}
+      ],
+      "opp": [
+        {"name": "middle",     "intent": "zone",  "weight": 1.00, "in_away": 0.15, "height": 0.05, "spread_x": 0.34, "spread_z": 0.34},
+        {"name": "in_edge",    "intent": "edge",  "weight": 0.62, "in_away": 0.88, "height": 0.00, "spread_x": 0.18, "spread_z": 0.40},
+        {"name": "low_in",     "intent": "edge",  "weight": 0.38, "in_away": 0.72, "height": -0.75, "spread_x": 0.22, "spread_z": 0.22},
+        {"name": "in_off",     "intent": "chase", "weight": 0.70, "in_away": 1.40, "height": -0.35, "spread_x": 0.26, "spread_z": 0.42},
+        {"name": "under",      "intent": "chase", "weight": 0.30, "in_away": 0.30, "height": -1.40, "spread_x": 0.42, "spread_z": 0.26},
+        {"name": "bury_in",    "intent": "waste", "weight": 1.00, "in_away": 1.70, "height": -1.60, "spread_x": 0.50, "spread_z": 0.50}
+      ]
+    },
+
+    "SL": {
+      "same": [
+        {"name": "steal_strike", "intent": "zone",  "weight": 1.00, "in_away": -0.15, "height": -0.20, "spread_x": 0.34, "spread_z": 0.32, "counts": {"behind": 1.8, "first_pitch": 1.3}},
+        {"name": "outer_edge",   "intent": "edge",  "weight": 0.62, "in_away": -0.85, "height": -0.45, "spread_x": 0.18, "spread_z": 0.30},
+        {"name": "low_edge",     "intent": "edge",  "weight": 0.38, "in_away": -0.40, "height": -0.85, "spread_x": 0.30, "spread_z": 0.18},
+        {"name": "down_away",    "intent": "chase", "weight": 0.80, "in_away": -1.35, "height": -1.10, "spread_x": 0.26, "spread_z": 0.28, "counts": {"ahead": 1.9, "behind": 0.3}},
+        {"name": "sweep_off",    "intent": "chase", "weight": 0.20, "in_away": -1.70, "height": -0.20, "spread_x": 0.28, "spread_z": 0.38},
+        {"name": "bury",         "intent": "waste", "weight": 1.00, "in_away": -1.50, "height": -1.90, "spread_x": 0.45, "spread_z": 0.45}
+      ],
+      "opp": [
+        {"name": "steal_strike", "intent": "zone",  "weight": 1.00, "in_away": 0.05, "height": -0.20, "spread_x": 0.34, "spread_z": 0.32, "counts": {"behind": 1.8, "first_pitch": 1.3}},
+        {"name": "inner_edge",   "intent": "edge",  "weight": 0.45, "in_away": 0.80, "height": -0.60, "spread_x": 0.20, "spread_z": 0.28},
+        {"name": "backdoor",     "intent": "edge",  "weight": 0.32, "in_away": -0.85, "height": -0.15, "spread_x": 0.18, "spread_z": 0.34},
+        {"name": "low_edge",     "intent": "edge",  "weight": 0.23, "in_away": 0.25, "height": -0.85, "spread_x": 0.30, "spread_z": 0.18},
+        {"name": "back_foot",    "intent": "chase", "weight": 0.62, "in_away": 1.30, "height": -1.30, "spread_x": 0.26, "spread_z": 0.26, "counts": {"ahead": 1.9, "behind": 0.2}},
+        {"name": "down_away",    "intent": "chase", "weight": 0.38, "in_away": -1.15, "height": -1.05, "spread_x": 0.28, "spread_z": 0.30},
+        {"name": "bury_in",      "intent": "waste", "weight": 1.00, "in_away": 1.60, "height": -1.90, "spread_x": 0.45, "spread_z": 0.45}
+      ]
+    },
+
+    "CB": {
+      "same": [
+        {"name": "get_me_over", "intent": "zone",  "weight": 1.00, "in_away": -0.10, "height": 0.05, "spread_x": 0.36, "spread_z": 0.36, "counts": {"behind": 2.0, "first_pitch": 1.5}},
+        {"name": "low_edge",    "intent": "edge",  "weight": 0.66, "in_away": -0.25, "height": -0.88, "spread_x": 0.32, "spread_z": 0.18},
+        {"name": "back_edge",   "intent": "edge",  "weight": 0.34, "in_away": -0.80, "height": -0.55, "spread_x": 0.20, "spread_z": 0.28},
+        {"name": "drop_out",    "intent": "chase", "weight": 0.85, "in_away": -0.35, "height": -1.45, "spread_x": 0.38, "spread_z": 0.30, "counts": {"ahead": 1.8}},
+        {"name": "sweep_off",   "intent": "chase", "weight": 0.15, "in_away": -1.45, "height": -0.85, "spread_x": 0.28, "spread_z": 0.34},
+        {"name": "spike",       "intent": "waste", "weight": 1.00, "in_away": -0.40, "height": -2.20, "spread_x": 0.55, "spread_z": 0.50}
+      ],
+      "opp": [
+        {"name": "get_me_over", "intent": "zone",  "weight": 1.00, "in_away": 0.05, "height": 0.05, "spread_x": 0.36, "spread_z": 0.36, "counts": {"behind": 2.0, "first_pitch": 1.5}},
+        {"name": "low_edge",    "intent": "edge",  "weight": 0.62, "in_away": 0.20, "height": -0.88, "spread_x": 0.32, "spread_z": 0.18},
+        {"name": "front_door",  "intent": "edge",  "weight": 0.38, "in_away": 0.80, "height": -0.30, "spread_x": 0.20, "spread_z": 0.30},
+        {"name": "drop_out",    "intent": "chase", "weight": 0.80, "in_away": 0.30, "height": -1.45, "spread_x": 0.38, "spread_z": 0.30, "counts": {"ahead": 1.8}},
+        {"name": "in_off",      "intent": "chase", "weight": 0.20, "in_away": 1.35, "height": -0.90, "spread_x": 0.28, "spread_z": 0.34},
+        {"name": "spike",       "intent": "waste", "weight": 1.00, "in_away": 0.35, "height": -2.20, "spread_x": 0.55, "spread_z": 0.50}
+      ]
+    },
+
+    "CH": {
+      "same": [
+        {"name": "middle_down", "intent": "zone",  "weight": 1.00, "in_away": 0.15, "height": -0.30, "spread_x": 0.34, "spread_z": 0.32},
+        {"name": "low_in",      "intent": "edge",  "weight": 0.55, "in_away": 0.72, "height": -0.80, "spread_x": 0.22, "spread_z": 0.20},
+        {"name": "low_edge",    "intent": "edge",  "weight": 0.45, "in_away": 0.10, "height": -0.88, "spread_x": 0.32, "spread_z": 0.18},
+        {"name": "fade_under",  "intent": "chase", "weight": 0.70, "in_away": 0.85, "height": -1.35, "spread_x": 0.30, "spread_z": 0.28, "counts": {"ahead": 1.7}},
+        {"name": "drop_out",    "intent": "chase", "weight": 0.30, "in_away": 0.15, "height": -1.50, "spread_x": 0.40, "spread_z": 0.28},
+        {"name": "in_dirt",     "intent": "waste", "weight": 1.00, "in_away": 1.30, "height": -2.10, "spread_x": 0.50, "spread_z": 0.50}
+      ],
+      "opp": [
+        {"name": "middle_down", "intent": "zone",  "weight": 1.00, "in_away": -0.20, "height": -0.30, "spread_x": 0.34, "spread_z": 0.32},
+        {"name": "low_away",    "intent": "edge",  "weight": 0.60, "in_away": -0.78, "height": -0.78, "spread_x": 0.22, "spread_z": 0.20},
+        {"name": "low_edge",    "intent": "edge",  "weight": 0.40, "in_away": -0.15, "height": -0.88, "spread_x": 0.32, "spread_z": 0.18},
+        {"name": "fade_away",   "intent": "chase", "weight": 0.72, "in_away": -1.25, "height": -1.15, "spread_x": 0.28, "spread_z": 0.30, "counts": {"ahead": 1.7}},
+        {"name": "drop_out",    "intent": "chase", "weight": 0.28, "in_away": -0.25, "height": -1.50, "spread_x": 0.40, "spread_z": 0.28},
+        {"name": "away_dirt",   "intent": "waste", "weight": 1.00, "in_away": -1.45, "height": -2.05, "spread_x": 0.50, "spread_z": 0.50}
+      ]
+    },
+
+    "FS": {
+      "same": [
+        {"name": "bottom_zone", "intent": "zone",  "weight": 1.00, "in_away": 0.10, "height": -0.45, "spread_x": 0.34, "spread_z": 0.28, "counts": {"behind": 1.9}},
+        {"name": "low_edge",    "intent": "edge",  "weight": 0.70, "in_away": 0.10, "height": -0.90, "spread_x": 0.32, "spread_z": 0.16},
+        {"name": "low_in",      "intent": "edge",  "weight": 0.30, "in_away": 0.68, "height": -0.82, "spread_x": 0.22, "spread_z": 0.20},
+        {"name": "tumble",      "intent": "chase", "weight": 0.82, "in_away": 0.20, "height": -1.55, "spread_x": 0.38, "spread_z": 0.30, "counts": {"ahead": 2.0, "behind": 0.2}},
+        {"name": "fade_under",  "intent": "chase", "weight": 0.18, "in_away": 0.90, "height": -1.35, "spread_x": 0.30, "spread_z": 0.30},
+        {"name": "dirt",        "intent": "waste", "weight": 1.00, "in_away": 0.25, "height": -2.30, "spread_x": 0.50, "spread_z": 0.45}
+      ],
+      "opp": [
+        {"name": "bottom_zone", "intent": "zone",  "weight": 1.00, "in_away": -0.10, "height": -0.45, "spread_x": 0.34, "spread_z": 0.28, "counts": {"behind": 1.9}},
+        {"name": "low_edge",    "intent": "edge",  "weight": 0.70, "in_away": -0.10, "height": -0.90, "spread_x": 0.32, "spread_z": 0.16},
+        {"name": "low_away",    "intent": "edge",  "weight": 0.30, "in_away": -0.70, "height": -0.80, "spread_x": 0.22, "spread_z": 0.20},
+        {"name": "tumble",      "intent": "chase", "weight": 0.80, "in_away": -0.15, "height": -1.55, "spread_x": 0.38, "spread_z": 0.30, "counts": {"ahead": 2.0, "behind": 0.2}},
+        {"name": "fade_away",   "intent": "chase", "weight": 0.20, "in_away": -1.05, "height": -1.30, "spread_x": 0.30, "spread_z": 0.30},
+        {"name": "dirt",        "intent": "waste", "weight": 1.00, "in_away": -0.20, "height": -2.30, "spread_x": 0.50, "spread_z": 0.45}
+      ]
+    }
+  },
+
+  "pitchers": {
+    "sale": {
+      "SL": {
+        "_note": "Sale's sweeper is his out pitch. vs RHB (opp) it is a back-foot weapon far more than the backdoor look the old code always produced.",
+        "opp": [
+          {"name": "steal_strike", "intent": "zone",  "weight": 1.00, "in_away": 0.10, "height": -0.25, "spread_x": 0.32, "spread_z": 0.30, "counts": {"behind": 1.9, "first_pitch": 1.4}},
+          {"name": "inner_edge",   "intent": "edge",  "weight": 0.50, "in_away": 0.82, "height": -0.62, "spread_x": 0.20, "spread_z": 0.26},
+          {"name": "backdoor",     "intent": "edge",  "weight": 0.26, "in_away": -0.88, "height": -0.10, "spread_x": 0.16, "spread_z": 0.32},
+          {"name": "low_edge",     "intent": "edge",  "weight": 0.24, "in_away": 0.30, "height": -0.88, "spread_x": 0.28, "spread_z": 0.16},
+          {"name": "back_foot",    "intent": "chase", "weight": 0.72, "in_away": 1.35, "height": -1.35, "spread_x": 0.24, "spread_z": 0.24, "counts": {"ahead": 2.0, "behind": 0.2}},
+          {"name": "down_away",    "intent": "chase", "weight": 0.28, "in_away": -1.15, "height": -1.05, "spread_x": 0.28, "spread_z": 0.30},
+          {"name": "bury_in",      "intent": "waste", "weight": 1.00, "in_away": 1.65, "height": -1.95, "spread_x": 0.42, "spread_z": 0.42}
+        ]
+      }
+    },
+    "sasaki": {
+      "FS": {
+        "_note": "Elite vertical splitter -- works straight down off the fastball rather than fading, and is buried below the zone more often than a typical splitter.",
+        "same": [
+          {"name": "bottom_zone", "intent": "zone",  "weight": 1.00, "in_away": 0.05, "height": -0.50, "spread_x": 0.30, "spread_z": 0.26, "counts": {"behind": 2.0}},
+          {"name": "low_edge",    "intent": "edge",  "weight": 0.80, "in_away": 0.05, "height": -0.94, "spread_x": 0.30, "spread_z": 0.15},
+          {"name": "low_in",      "intent": "edge",  "weight": 0.20, "in_away": 0.62, "height": -0.86, "spread_x": 0.20, "spread_z": 0.18},
+          {"name": "tumble",      "intent": "chase", "weight": 0.90, "in_away": 0.10, "height": -1.70, "spread_x": 0.34, "spread_z": 0.30, "counts": {"ahead": 2.1, "behind": 0.2}},
+          {"name": "fade_under",  "intent": "chase", "weight": 0.10, "in_away": 0.80, "height": -1.40, "spread_x": 0.28, "spread_z": 0.30},
+          {"name": "dirt",        "intent": "waste", "weight": 1.00, "in_away": 0.15, "height": -2.45, "spread_x": 0.45, "spread_z": 0.45}
+        ],
+        "opp": [
+          {"name": "bottom_zone", "intent": "zone",  "weight": 1.00, "in_away": -0.05, "height": -0.50, "spread_x": 0.30, "spread_z": 0.26, "counts": {"behind": 2.0}},
+          {"name": "low_edge",    "intent": "edge",  "weight": 0.80, "in_away": -0.05, "height": -0.94, "spread_x": 0.30, "spread_z": 0.15},
+          {"name": "low_away",    "intent": "edge",  "weight": 0.20, "in_away": -0.64, "height": -0.84, "spread_x": 0.20, "spread_z": 0.18},
+          {"name": "tumble",      "intent": "chase", "weight": 0.90, "in_away": -0.08, "height": -1.70, "spread_x": 0.34, "spread_z": 0.30, "counts": {"ahead": 2.1, "behind": 0.2}},
+          {"name": "fade_away",   "intent": "chase", "weight": 0.10, "in_away": -0.95, "height": -1.35, "spread_x": 0.28, "spread_z": 0.30},
+          {"name": "dirt",        "intent": "waste", "weight": 1.00, "in_away": -0.15, "height": -2.45, "spread_x": 0.45, "spread_z": 0.45}
+        ]
+      }
+    },
+    "degrom": {
+      "SL": {
+        "_note": "Tight, hard slider -- lives on the outer edge to RHB and gets used in the zone more than a sweeper would.",
+        "same": [
+          {"name": "steal_strike", "intent": "zone",  "weight": 1.00, "in_away": -0.20, "height": -0.15, "spread_x": 0.30, "spread_z": 0.30, "counts": {"behind": 1.8, "first_pitch": 1.4}},
+          {"name": "outer_edge",   "intent": "edge",  "weight": 0.70, "in_away": -0.88, "height": -0.40, "spread_x": 0.16, "spread_z": 0.28},
+          {"name": "low_edge",     "intent": "edge",  "weight": 0.30, "in_away": -0.45, "height": -0.88, "spread_x": 0.28, "spread_z": 0.16},
+          {"name": "down_away",    "intent": "chase", "weight": 0.85, "in_away": -1.30, "height": -1.15, "spread_x": 0.24, "spread_z": 0.26, "counts": {"ahead": 2.0, "behind": 0.3}},
+          {"name": "sweep_off",    "intent": "chase", "weight": 0.15, "in_away": -1.65, "height": -0.25, "spread_x": 0.26, "spread_z": 0.36},
+          {"name": "bury",         "intent": "waste", "weight": 1.00, "in_away": -1.45, "height": -1.95, "spread_x": 0.42, "spread_z": 0.42}
+        ]
+      }
+    }
+  }
+}

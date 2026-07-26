@@ -35,7 +35,7 @@ PITCHER_HANDEDNESS = {
 }
 
 
-SCHEMA_VERSION = 2  # Bumped when migrations are added; see PitchDB._migrate.
+SCHEMA_VERSION = 4  # Bumped when migrations are added; see PitchDB._migrate.
 
 
 class PitchDB:
@@ -71,6 +71,16 @@ class PitchDB:
         target_z_ft REAL,
         plate_x_ft REAL,
         plate_z_ft REAL,
+
+        -- Command: where the pitch was aimed, vs target_* which is where it
+        -- was actually commanded to. The gap between them is the miss.
+        intent_x_ft REAL,
+        intent_z_ft REAL,
+        intent_kind TEXT,
+        miss_kind TEXT,
+        command_sigma_in REAL,
+        location_archetype TEXT,
+        platoon TEXT,
 
         -- AB / count context
         strikes_before INTEGER,
@@ -190,6 +200,24 @@ class PitchDB:
         ("game_id", "TEXT"),
     ]
 
+    # v3: intent/execution split (see Pitcher.get_pitch_target). Rows written
+    # before v3 have these NULL — target_* was the aim point back then, since
+    # the ball always landed exactly on it.
+    V3_PITCHES_COLUMNS = [
+        ("intent_x_ft", "REAL"),
+        ("intent_z_ft", "REAL"),
+        ("intent_kind", "TEXT"),
+        ("miss_kind", "TEXT"),
+        ("command_sigma_in", "REAL"),
+    ]
+
+    # v4: named location archetypes (see data/pitch_locations.json) and the
+    # platoon matchup they were selected for.
+    V4_PITCHES_COLUMNS = [
+        ("location_archetype", "TEXT"),
+        ("platoon", "TEXT"),
+    ]
+
     # Backup policy
     BACKUP_DIR_NAME = "backups"
     BACKUP_MIN_INTERVAL = timedelta(hours=1)  # don't backup more than once per hour
@@ -219,7 +247,8 @@ class PitchDB:
             # Determine which columns already exist (running this on a fresh
             # v2 db is a no-op because executescript already created them).
             existing_pitches = {row[1] for row in self.conn.execute("PRAGMA table_info(pitches)")}
-            for col, decl in self.V2_PITCHES_COLUMNS:
+            for col, decl in (self.V2_PITCHES_COLUMNS + self.V3_PITCHES_COLUMNS
+                             + self.V4_PITCHES_COLUMNS):
                 if col not in existing_pitches:
                     self.conn.execute(f"ALTER TABLE pitches ADD COLUMN {col} {decl}")
 
@@ -423,6 +452,7 @@ class PitchDataExtractor:
         ctx = sim.new_data_entry
         gd = PitchDataExtractor._gameday_context(sim)
         pitcher_hand = PITCHER_HANDEDNESS.get((sim.pitchername or "").lower())
+        intent = getattr(sim, "pitch_intent", None)
 
         record = {
             "pitch_id": pitch_id,
@@ -447,6 +477,13 @@ class PitchDataExtractor:
             "target_z_ft": sim.target_z_ft,
             "plate_x_ft": plate_x,
             "plate_z_ft": plate_z,
+            "intent_x_ft": getattr(sim, "intent_x_ft", None),
+            "intent_z_ft": getattr(sim, "intent_z_ft", None),
+            "intent_kind": intent.intent_kind if intent else None,
+            "miss_kind": intent.miss_kind if intent else None,
+            "command_sigma_in": intent.command_sigma_in if intent else None,
+            "location_archetype": (intent.archetype or None) if intent else None,
+            "platoon": intent.platoon if intent else None,
             "strikes_before": ctx.get("Strikes", 0),
             "balls_before": ctx.get("Balls", 0),
             "outs_before": ctx.get("Outs", 0),
@@ -556,6 +593,45 @@ class PitchDatabaseService:
             print(f"[pitch_db] start_game failed: {e}")
         self.current_game_id = game_id
         # Reset per-AB state so a new game doesn't inherit a stale AB.
+        self.current_ab_id = None
+        self._ab_pitch_count = 0
+        self._ab_pitcher = None
+        self._ab_hand = None
+        return game_id
+
+    def resume_game(self, game_id):
+        """Reattach to an existing games row so a resumed game keeps one game_id.
+
+        Used by the GameDay resume path. Returns the game_id actually attached,
+        or None if the row no longer exists — the caller should fall back to
+        start_game() in that case. Any currently-open game is closed first, the
+        same as start_game() does.
+        """
+        if not game_id:
+            return None
+        try:
+            row = self.db.conn.execute(
+                "SELECT game_id FROM games WHERE game_id = ?", (game_id,)).fetchone()
+        except Exception as e:
+            print(f"[pitch_db] resume_game lookup failed: {e}")
+            return None
+        if row is None:
+            return None
+
+        if self.current_game_id is not None and self.current_game_id != game_id:
+            self.end_game()
+        # Reopen the row: a mid-game quit stamped ended_at via the auto-end in
+        # start_game(), and leaving that set would mark a live game finished.
+        try:
+            self.db.update_game(game_id, {
+                "ended_at": None,
+                "final_player_score": None,
+                "final_opponent_score": None,
+                "result": None,
+            })
+        except Exception as e:
+            print(f"[pitch_db] resume_game reopen failed: {e}")
+        self.current_game_id = game_id
         self.current_ab_id = None
         self._ab_pitch_count = 0
         self._ab_pitcher = None
