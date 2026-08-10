@@ -10,8 +10,16 @@ import numpy as np
 from matplotlib.gridspec import GridSpec
 
 from .. import metrics, theme
-from ..render_mpl import (draw_strike_zone, draw_zone_grid, empty_figure,
-                          figure_title, note, plt, save, styled_table)
+from ..render_mpl import (
+    draw_strike_zone,
+    draw_zone_grid,
+    empty_figure,
+    figure_title,
+    note,
+    plt,
+    save,
+    styled_table,
+)
 
 AGGREGATE_PANELS = [
     ("density", "Pitch Density", "{:.1f}%", theme.HEAT_CMAP),

@@ -1,13 +1,12 @@
 import pygame
 
-from config import (
-    ABS_PINK,
-    ABS_GREEN,
-    ABS_ZONE,
+from strikefactor.config import (
     ABS_BALL_RADIUS,
+    ABS_GREEN,
+    ABS_PINK,
+    ABS_ZONE,
     get_path,
 )
-
 
 _BALL_IMG = None
 _BALL_IMG_PATH = "assets/images/abs/abs_ball.png"

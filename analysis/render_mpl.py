@@ -7,14 +7,14 @@ everywhere at once.
 
 import os
 
-import numpy as np
 import matplotlib
+import numpy as np
 
 matplotlib.use("Agg")
-import matplotlib.pyplot as plt          # noqa: E402
-import matplotlib.patches as patches     # noqa: E402
+import matplotlib.patches as patches  # noqa: E402
+import matplotlib.pyplot as plt  # noqa: E402
 
-from . import theme                       # noqa: E402
+from . import theme  # noqa: E402
 
 theme.apply_mpl_style()
 
@@ -109,17 +109,6 @@ def draw_strike_zone(ax, linestyle="--", color="#ffffff", linewidth=2, alpha=1.0
     return rect
 
 
-def zone_axes(ax, batter_view=True, hand=None):
-    """Standard catcher's-view framing for a plate-location axis."""
-    ax.set_xlim(-1.9, 1.9)
-    ax.set_ylim(0.2, 4.8)
-    ax.set_aspect("equal")
-    ax.grid(False)
-    if batter_view:
-        ax.set_xlabel("← away    inside →" if hand != "both" else "horizontal (ft)",
-                      fontsize=8, color=theme.MUTED)
-
-
 def draw_zone_grid(ax, values, counts, cmap=None, vmin=None, vmax=None,
                    fmt="{:.0f}%", show_counts=True, na_color="#20283d"):
     """Draw a 5x5 zone grid produced by metrics.zone_grid()."""
@@ -169,11 +158,6 @@ def draw_zone_grid(ax, values, counts, cmap=None, vmin=None, vmax=None,
     ax.set_yticks([])
     for spine in ax.spines.values():
         spine.set_visible(False)
-
-
-def legend_below(fig, handles, ncol=6, y=-0.02):
-    fig.legend(handles=handles, loc="lower center", ncol=ncol, fontsize=10,
-               bbox_to_anchor=(0.5, y), frameon=False)
 
 
 def pitch_legend_handles(pitch_types):

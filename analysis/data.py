@@ -21,10 +21,6 @@ DEFAULT_OUT_DIR = os.path.join(REPO_ROOT, "analysis_output")
 _cache = {}
 
 
-class NoDataError(RuntimeError):
-    """Raised when the active filter selects nothing at all."""
-
-
 def connect(db_path=None):
     path = db_path or DB_PATH
     if not os.path.exists(path):
@@ -34,10 +30,6 @@ def connect(db_path=None):
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     conn.row_factory = sqlite3.Row
     return conn
-
-
-def _table_columns(conn, table):
-    return {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}
 
 
 def load_pitches(db_path=None):
@@ -156,20 +148,6 @@ def _derive(df):
     df["day"] = df["date"].dt.floor("D")
 
     return df
-
-
-# ── Availability probes ──────────────────────────────────────────────────
-def column_fill(df, column):
-    """Fraction of non-null values — used to gate sparse-data figures."""
-    if column not in df.columns or df.empty:
-        return 0.0
-    return float(df[column].notna().mean())
-
-
-def has_data(df, column, min_rows=25):
-    if column not in df.columns:
-        return False
-    return int(df[column].notna().sum()) >= min_rows
 
 
 class Context:

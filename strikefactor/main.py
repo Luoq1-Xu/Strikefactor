@@ -1,37 +1,42 @@
 # StrikeFactor : A baseball batting simulator
-import pygame
-import sys
 import os
 import pickle
+import sys
+
+import pygame
+
+from strikefactor.ai import compat as ai_compat
+from strikefactor.ai.AI_2 import ERAI, build_state
+from strikefactor.ai.batter_profile import BatterProfile
+from strikefactor.ai.pitch_priors import validate_usage_priors
+from strikefactor.config import get_path, resource_path
+from strikefactor.engine.sound_manager import SoundManager
+from strikefactor.gameplay.batter import Batter
+from strikefactor.gameplay.challenge_manager import ChallengeManager
+from strikefactor.gameplay.field_renderer import FieldRenderer
+from strikefactor.gameplay.game_state_manager import GameStateManager
+from strikefactor.gameplay.hit_outcome_manager import HitOutcomeManager
+from strikefactor.gameplay.prewarm import prewarm_gameplay
+from strikefactor.gameplay.random_scenario import RandomScenarioGenerator
+from strikefactor.helpers import ScoreKeeper
+from strikefactor.pitchers.Degrom import Degrom
 
 # Import pitcher classes
-from pitchers.Mcclanahan import Mcclanahan
-from pitchers.Sale import Sale
-from pitchers.Degrom import Degrom
-from pitchers.Yamamoto import Yamamoto
-from pitchers.Sasaki import Sasaki
-from ai.AI_2 import ERAI, build_state
-from ai.batter_profile import BatterProfile
-from ai.pitch_priors import validate_usage_priors
+from strikefactor.pitchers.Mcclanahan import Mcclanahan
+from strikefactor.pitchers.Sale import Sale
+from strikefactor.pitchers.Sasaki import Sasaki
+from strikefactor.pitchers.Yamamoto import Yamamoto
+from strikefactor.settings_manager import SettingsManager
+from strikefactor.ui.abs_challenge_overlay import ABSChallengeOverlay
+from strikefactor.ui.broadcast_hud import BroadcastHUD
 
 # Import game components
-from ui.components import create_pci_cursor
-from engine.sound_manager import SoundManager
-from gameplay.batter import Batter
-from config import get_path, resource_path
-from utils.pitch_physics import DEFAULT_CAMERA
-from gameplay.field_renderer import FieldRenderer
-from gameplay.hit_outcome_manager import HitOutcomeManager
-from ui.ui_manager import UIManager
-from ui.scorebug import Scorebug
-from ui.minimal_hud import MinimalHUD
-from ui.broadcast_hud import BroadcastHUD
-from helpers import ScoreKeeper
-from gameplay.game_state_manager import GameStateManager
-from gameplay.random_scenario import RandomScenarioGenerator
-from gameplay.challenge_manager import ChallengeManager
-from ui.abs_challenge_overlay import ABSChallengeOverlay
-from settings_manager import SettingsManager
+from strikefactor.ui.components import create_pci_cursor
+from strikefactor.ui.minimal_hud import MinimalHUD
+from strikefactor.ui.scorebug import Scorebug
+from strikefactor.ui.ui_manager import UIManager
+from strikefactor.utils.pitch_physics import DEFAULT_CAMERA
+
 
 class AssetManager:
     """Manages loading and caching of game assets."""
@@ -159,23 +164,36 @@ class PitcherManager:
         return self.current_pitcher
 
     def _load_ai(self, name, pitcher):
-        """Load a pitcher's AI from disk, or create a fresh one if unavailable."""
-        import sys
-        import ai.AI_2 as AI_2
-        sys.modules['AI_2'] = AI_2
+        """Load a pitcher's AI from disk, or create a fresh one if unavailable.
 
+        Uses ai.compat so pickles written under the pre-package module paths
+        ('AI_2', 'ai.AI_2') still load — see strikefactor/ai/compat.py.
+        """
         pitcher_pitch_names = set(pitcher.get_pitch_names())
         ai_file = get_path(f"ai/{name}_ai.pkl")
+
+        if not os.path.exists(ai_file):
+            print(f"No saved AI for {name}, creating fresh AI")
+            return ERAI(pitcher.get_pitch_names())
+
         try:
-            with open(ai_file, "rb") as f:
-                ai = pickle.load(f)
-            if set(ai.actions) == pitcher_pitch_names:
-                print(f"Loaded AI for {name} ({len(ai.q)} Q-values)")
-                return ai
-            else:
-                print(f"AI action mismatch for {name}, creating fresh AI")
-        except (FileNotFoundError, Exception) as e:
-            print(f"No saved AI for {name}, creating fresh AI: {e}")
+            ai = ai_compat.load_path(ai_file)
+        except Exception as e:
+            # The file exists but could not be read. Falling back to a fresh
+            # AI discards real training, so make that loud rather than
+            # folding it in with the ordinary "no file yet" case.
+            print(f"WARNING: failed to load AI for {name} from {ai_file}: "
+                  f"{e!r}. Falling back to an untrained AI — the saved "
+                  f"Q-table will be overwritten on exit.")
+            return ERAI(pitcher.get_pitch_names())
+
+        if set(ai.actions) == pitcher_pitch_names:
+            print(f"Loaded AI for {name} ({len(ai.q)} Q-values)")
+            return ai
+
+        print(f"AI action mismatch for {name} "
+              f"(saved {sorted(ai.actions)} vs arsenal "
+              f"{sorted(pitcher_pitch_names)}), creating fresh AI")
         return ERAI(pitcher.get_pitch_names())
 
     def save_all_ai(self):
@@ -200,7 +218,7 @@ class GameStats:
         self.outcome_value = {
             'strike': 0.5, 'ball': -0.25, 'foul': 0.3, 'strikeout': 2, 'walk': -1,
             'SINGLE': -1.5, 'DOUBLE': -2, 'TRIPLE': -2.5, 'HOME RUN': -3,
-            'FLYOUT': 1.5, 'GROUNDOUT': 1.5, 'LINEOUT': 1.5, 'POP_UP': 1.5
+            'FLYOUT': 1.5, 'GROUNDOUT': 1.5, 'LINEOUT': 1.5, 'POP UP': 1.5
         }
         
     def reset_game_stats(self):
@@ -230,6 +248,11 @@ class Game:
         self._setup_display()
         self._initialize_components()
         self._setup_ui_callbacks()
+        # Pull pandas + scikit-learn in on a daemon thread while the player is
+        # still in the menus. Left alone these load during the first pitch —
+        # sklearn on the frame the ball reaches the plate — and freeze the
+        # game for the best part of a second. See gameplay/prewarm.py.
+        prewarm_gameplay()
         
     def _initialize_pygame(self):
         """Initialize pygame subsystems."""
@@ -240,7 +263,7 @@ class Game:
         
     def _setup_display(self):
         """Setup the game display with scaling support."""
-        from config import SCREEN_WIDTH, SCREEN_HEIGHT
+        from strikefactor.config import SCREEN_HEIGHT, SCREEN_WIDTH
         self.internal_width = SCREEN_WIDTH
         self.internal_height = SCREEN_HEIGHT
         self.window = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT), pygame.RESIZABLE)
@@ -341,9 +364,12 @@ class Game:
 
         # Settings management (initialize early so other components can use it)
         self.settings_manager = SettingsManager()
+        # Playback honours master_volume; SoundManager is built before
+        # settings exist, so the reference is attached here.
+        self.sound_manager.set_settings_manager(self.settings_manager)
 
         # Key binding system
-        from key_binding_manager import KeyBindingManager
+        from strikefactor.key_binding_manager import KeyBindingManager
         self.key_binding_manager = KeyBindingManager(self.settings_manager)
         self.key_rebind_action = None  # Track current key rebinding
 
@@ -443,7 +469,6 @@ class Game:
         self.ui_manager.register_button_callback('back_to_main_menu', lambda: self.set_menu_state(0))
         self.ui_manager.register_button_callback('gameday_main_menu', lambda: self.set_menu_state(0))
         self.ui_manager.register_button_callback('visualise', self.toggle_track)
-        self.ui_manager.register_button_callback('return_to_game', lambda: self.exit_view_pitches())
         self.ui_manager.register_button_callback('view_pitches', self.toggle_view_pitches)
         self.ui_manager.register_button_callback('continue_to_summary', lambda: self.continue_to_summary())
         
@@ -472,6 +497,7 @@ class Game:
         self.ui_manager.register_button_callback('toggle_ump_sound_settings', lambda: self.toggle_umpire_sound_setting())
         self.ui_manager.register_button_callback('toggle_strikezone_settings', lambda: self.toggle_strikezone_setting())
         self.ui_manager.register_button_callback('toggle_abs_settings', lambda: self.toggle_abs_setting())
+        self.ui_manager.register_button_callback('toggle_foul_anim_settings', lambda: self.toggle_foul_animation_setting())
         self.ui_manager.register_button_callback('toggle_hud_mode_settings', lambda: self.toggle_hud_mode())
         self.ui_manager.register_button_callback('reset_settings', lambda: self.reset_settings())
 
@@ -485,7 +511,7 @@ class Game:
         self.ui_manager.register_button_callback('reset_keybinds', lambda: self.reset_key_bindings())
 
         # Individual key binding buttons
-        from key_binding_manager import KeyAction
+        from strikefactor.key_binding_manager import KeyAction
         self.ui_manager.register_button_callback('bind_toggle_ui', lambda: self.start_key_rebind(KeyAction.TOGGLE_UI))
         self.ui_manager.register_button_callback('bind_toggle_strikezone', lambda: self.start_key_rebind(KeyAction.TOGGLE_STRIKEZONE))
         self.ui_manager.register_button_callback('bind_toggle_sound', lambda: self.start_key_rebind(KeyAction.TOGGLE_SOUND))
@@ -699,7 +725,7 @@ class Game:
         
         # Set up runners on base
         self.scoreKeeper.reset()
-        from helpers import Runner
+        from strikefactor.helpers import Runner
         for base in scenario['runners']:
             runner = Runner(base)  # Create a runner starting at this base
             runner.base = base     # Make sure they're on the correct base
@@ -744,7 +770,7 @@ class Game:
     def _db_start_game(self, game_mode, pitcher_name=None):
         """Open a games row in the pitch DB so all subsequent pitches share a game_id."""
         try:
-            from data.pitch_database import PitchDatabaseService
+            from strikefactor.data.pitch_database import PitchDatabaseService
             difficulty = self.settings_manager.get_difficulty().value
             PitchDatabaseService.get_instance().start_game(game_mode, difficulty, pitcher_name)
             # Steer the FieldRenderer to the matching aggregate bucket so
@@ -760,7 +786,7 @@ class Game:
         forking into a second, scoreless row.
         """
         try:
-            from data.pitch_database import PitchDatabaseService
+            from strikefactor.data.pitch_database import PitchDatabaseService
             if PitchDatabaseService.get_instance().resume_game(game_id):
                 mode, difficulty = self._current_bucket_key()
                 self.field_renderer.set_active_bucket(mode, difficulty)
@@ -772,7 +798,7 @@ class Game:
     def _db_end_game_if_open(self, player_score=None, opponent_score=None, result=None):
         """Close the active games row, if any. Safe to call from any transition."""
         try:
-            from data.pitch_database import PitchDatabaseService
+            from strikefactor.data.pitch_database import PitchDatabaseService
             svc = PitchDatabaseService.get_instance()
             if svc.current_game_id is not None:
                 svc.end_game(player_score=player_score,
@@ -787,7 +813,7 @@ class Game:
         Falls back to a fresh profile if none is stored yet.
         """
         try:
-            from data.pitch_database import PitchDatabaseService
+            from strikefactor.data.pitch_database import PitchDatabaseService
             mode, difficulty = self._current_bucket_key()
             data = PitchDatabaseService.get_instance().load_batter_profile(mode, difficulty)
             if data is None:
@@ -803,7 +829,7 @@ class Game:
         survives across launches (segregated by game_mode and difficulty).
         """
         try:
-            from data.pitch_database import PitchDatabaseService
+            from strikefactor.data.pitch_database import PitchDatabaseService
             mode, difficulty = self._current_bucket_key()
             PitchDatabaseService.get_instance().save_batter_profile(
                 mode, difficulty, self.batter_profile.to_dict()
@@ -824,7 +850,7 @@ class Game:
 
     def start_gameday_with_starter(self, starter_name: str):
         """Build the GameDayManager with the chosen starter and begin play."""
-        from gameplay.gameday_manager import GameDayManager
+        from strikefactor.gameplay.gameday_manager import GameDayManager
 
         difficulty = self.settings_manager.get_difficulty().value
         self.gameday_manager = GameDayManager(
@@ -866,8 +892,8 @@ class Game:
         GameDayManager is reconstructed from its snapshot and the player is
         dropped back into the transition screen, which recomputes the phase.
         """
-        from gameplay.gameday_manager import GameDayManager
-        from data import gameday_sessions
+        from strikefactor.data import gameday_sessions
+        from strikefactor.gameplay.gameday_manager import GameDayManager
 
         record = gameday_sessions.get_session(session_id)
         if not record or not record.get('state'):
@@ -919,8 +945,8 @@ class Game:
         if not (self.in_gameday_mode and self.gameday_manager is not None):
             return
         try:
-            from data import gameday_sessions
-            from data.pitch_database import PitchDatabaseService
+            from strikefactor.data import gameday_sessions
+            from strikefactor.data.pitch_database import PitchDatabaseService
             record = gameday_sessions.build_record(
                 self.gameday_manager, phase,
                 db_game_id=PitchDatabaseService.get_instance().current_game_id)
@@ -933,7 +959,7 @@ class Game:
         if not session_id:
             return
         try:
-            from data import gameday_sessions
+            from strikefactor.data import gameday_sessions
             gameday_sessions.remove_session(session_id)
         except Exception as e:
             print(f"[gameday] clear_gameday_session failed: {e}")
@@ -1006,42 +1032,60 @@ class Game:
             if pitch_index < len(pitch_names):
                 state.toggle_pitch(pitch_names[pitch_index])
 
-    def return_to_mode_select(self):
-        """Return to main mode selection menu."""
+    def _teardown_active_session(self):
+        """Persist and clear everything tied to the session being left.
+
+        Shared by every path that backs out of an in-progress game (mode
+        select, Arcade menu, Sandbox menu) so no one path forgets to flush
+        the AI/profile or close the DB game.
+        """
         self.pitcher_manager.save_all_ai()
         self._save_batter_profile_for_current_bucket()
         self._db_end_game_if_open()
-        self.menu_state = 'mode_select'
         self.current_gamemode = 0
         self.inning_ended = False
         self.in_gameday_mode = False
         self.gameday_manager = None
         self.previous_mode_before_pitchviz = None
+        # Reset game stats so a fresh game can be started
         self.game_stats.reset_game_stats()
         # Clear fatigue stats if a pitcher has them
         if hasattr(self.current_pitcher, 'clear_fatigue_stats'):
             self.current_pitcher.clear_fatigue_stats()
+
+    def return_to_mode_select(self):
+        """Return to main mode selection menu."""
+        self._teardown_active_session()
+        self.menu_state = 'mode_select'
         self.state_manager.change_state('mode_select')
+
+    def return_to_sandbox_menu(self):
+        """Back out of a Sandbox session to the Sandbox pitcher-select menu."""
+        self._teardown_active_session()
+        self.menu_state = 'sandbox_menu'
+        self.state_manager.change_state('sandbox_menu')
+
+    def exit_to_menu(self):
+        """MAIN_MENU hotkey: return to the menu belonging to the *current* mode.
+
+        Sandbox has its own pitcher-select screen, so escaping out of a
+        Sandbox session must land there rather than in the Arcade menu.
+        `current_gamemode` stays `'sandbox_gameplay'` for the whole session,
+        including detours through view-pitches/visualization.
+        """
+        if self.current_gamemode == 'sandbox_gameplay' or \
+                self.state_manager.current_state_name in ('sandbox_gameplay', 'sandbox_menu'):
+            self.return_to_sandbox_menu()
+        else:
+            self.set_menu_state(0)
 
     def set_menu_state(self, state):
         """Set the current menu state."""
         self.menu_state = state
         if state == 0:  # Returning to main menu
-            self.pitcher_manager.save_all_ai()
-            self._save_batter_profile_for_current_bucket()
-            self._db_end_game_if_open()
-            self.current_gamemode = 0
-            self.inning_ended = False
-            self.in_gameday_mode = False
-            self.gameday_manager = None
-            self.previous_mode_before_pitchviz = None
-            # Reset game stats so a fresh game can be started
-            self.game_stats.reset_game_stats()
-            # Clear fatigue stats if a pitcher has them
-            if hasattr(self.current_pitcher, 'clear_fatigue_stats'):
-                self.current_pitcher.clear_fatigue_stats()
+            self._teardown_active_session()
         self.state_manager.handle_menu_state_change(state)
-        
+
     def exit_view_pitches(self):
         """Exit the view pitches mode."""
         self.ui_manager.hide_view_window()
@@ -1164,6 +1208,13 @@ class Game:
             self.pending_challenge = None
         self.ui_manager.update_settings_button_states(self.settings_manager)
 
+    def toggle_foul_animation_setting(self):
+        """Toggle the foul-ball hit animation on or off. Read per-foul at
+        trigger time, so no mid-game teardown is needed."""
+        current = self.settings_manager.get_setting("foul_animation_enabled")
+        self.settings_manager.set_setting("foul_animation_enabled", not current)
+        self.ui_manager.update_settings_button_states(self.settings_manager)
+
     def _draw_active_hud(self, surface):
         """Dispatch to the HUD selected by the current setting. Only renders
         on the gameplay-style states where the legacy scorebug also showed."""
@@ -1221,7 +1272,7 @@ class Game:
 
     def _setup_key_binding_callbacks(self):
         """Setup key binding system callbacks for various actions."""
-        from key_binding_manager import KeyAction
+        from strikefactor.key_binding_manager import KeyAction
 
         # Register callbacks for key actions
         self.key_binding_manager.register_callback(KeyAction.TOGGLE_UI, self.toggle_ui_visibility)
@@ -1230,7 +1281,7 @@ class Game:
         self.key_binding_manager.register_callback(KeyAction.TOGGLE_BATTER, lambda: self.batter.toggle_handedness())
         self.key_binding_manager.register_callback(KeyAction.QUICK_PITCH, self.quick_pitch)
         self.key_binding_manager.register_callback(KeyAction.VIEW_PITCHES, self.toggle_view_pitches)
-        self.key_binding_manager.register_callback(KeyAction.MAIN_MENU, lambda: self.set_menu_state(0))
+        self.key_binding_manager.register_callback(KeyAction.MAIN_MENU, self.exit_to_menu)
         self.key_binding_manager.register_callback(KeyAction.TOGGLE_TRACK, self.toggle_track)
         self.key_binding_manager.register_callback(KeyAction.CHALLENGE, self.request_abs_challenge)
         self.key_binding_manager.register_callback(KeyAction.TOGGLE_HUD_MODE, self.toggle_hud_mode)
@@ -1259,7 +1310,7 @@ class Game:
         """Start rebinding a key for the given action."""
         self.key_rebind_action = action
         # Update the button to show it's waiting for input
-        from key_binding_manager import KeyAction
+        from strikefactor.key_binding_manager import KeyAction
         action_name = self.key_binding_manager.get_action_name(action)
         button_mapping = {
             KeyAction.TOGGLE_UI: 'bind_toggle_ui',
@@ -1340,7 +1391,7 @@ class Game:
                 self.ui_manager.update_key_binding_buttons(self.key_binding_manager)
             else:
                 # Key is already in use, show error
-                from key_binding_manager import KeyAction
+                from strikefactor.key_binding_manager import KeyAction
                 key_name = self.key_binding_manager.get_key_name(new_key)
                 # Find which action uses this key
                 for action in KeyAction:
@@ -1578,14 +1629,14 @@ class Game:
         }
 
     def _challenge_window_active(self):
-        from config import CHALLENGE_WINDOW_MS
+        from strikefactor.config import CHALLENGE_WINDOW_MS
         if not self.pending_challenge:
             return False
         elapsed = pygame.time.get_ticks() - self.pending_challenge['opened_at']
         return elapsed <= CHALLENGE_WINDOW_MS
 
     def challenge_seconds_remaining(self):
-        from config import CHALLENGE_WINDOW_MS
+        from strikefactor.config import CHALLENGE_WINDOW_MS
         if not self.pending_challenge:
             return 0.0
         elapsed = pygame.time.get_ticks() - self.pending_challenge['opened_at']

@@ -173,7 +173,7 @@ def _outcome_metrics(g):
     t3 = counts.get("TRIPLE", 0)
     hr = counts.get("HOME RUN", 0)
     go = counts.get("GROUNDOUT", 0)
-    ao = sum(counts.get(o, 0) for o in ("FLYOUT", "LINEOUT", "POP_UP"))
+    ao = sum(counts.get(o, 0) for o in ("FLYOUT", "LINEOUT", "POP UP"))
 
     h = s1 + d2 + t3 + hr
     ab = pa - bb
@@ -218,11 +218,6 @@ def plate_discipline(ctx):
         rows.append(row)
     df = pd.DataFrame(rows)
     return df.sort_values("pitches", ascending=False).reset_index(drop=True) if len(df) else df
-
-
-def batting_line(ctx):
-    """Player's slash line against each pitcher (same rows, batter's framing)."""
-    return plate_discipline(ctx)
 
 
 def pitching_line(ctx):
@@ -770,16 +765,6 @@ def outcome_breakdown(ctx):
         if o not in tab.columns:
             tab[o] = 0
     return tab[list(theme.OUTCOME_ORDER)]
-
-
-def speed_distributions(ctx):
-    """Raw speed samples per (pitcher, pitch type) for violin/box plots."""
-    if ctx.empty:
-        return {}
-    out = {}
-    for (pn, pt), g in ctx.pitches.groupby(["pitcher_name", "pitch_type"]):
-        out.setdefault(pn, {})[pt] = g["speed_mph"].dropna().tolist()
-    return out
 
 
 # ── Formatting helpers shared by both renderers ──────────────────────────

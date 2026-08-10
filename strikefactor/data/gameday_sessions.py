@@ -13,7 +13,7 @@ import json
 import os
 from datetime import datetime
 
-from utils.io import atomic_write_json
+from strikefactor.utils.io import atomic_write_json
 
 SESSIONS_FILE = os.path.join(os.path.dirname(__file__), 'gameday_sessions.json')
 

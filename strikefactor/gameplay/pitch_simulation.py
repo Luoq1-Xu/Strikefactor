@@ -1,20 +1,51 @@
+import random
 from typing import TYPE_CHECKING
 
-import random
+import pandas as pd
 import pygame
 import pygame.gfxdraw
-import pandas as pd
-from utils.physics import collision
-from helpers import EnhancedPitchRecord
-from utils.pitch_physics import PitchTrajectory, UmpireCamera, DEFAULT_CAMERA
+
+from strikefactor.helpers import EnhancedPitchRecord
+from strikefactor.utils.physics import collision
+from strikefactor.utils.pitch_physics import DEFAULT_CAMERA, PitchTrajectory, UmpireCamera
 
 if TYPE_CHECKING:
-    from main import Game
+    from strikefactor.main import Game
 
-# Load the model once, ideally passed in or as a singleton
 import pickle
-from config import get_path, ABS_ZONE, ABS_BALL_RADIUS, CHALLENGE_WINDOW_MS
-model = pickle.load(open(get_path("ai/ai_umpire.pkl"), "rb"))
+import threading
+
+from strikefactor.config import ABS_BALL_RADIUS, ABS_ZONE, CHALLENGE_WINDOW_MS, get_path
+
+# The ball/strike model is loaded lazily and cached. Loading it at import time
+# made importing this module (and so anything that touches gameplay) require
+# the pickle on disk plus scikit-learn, which is what kept the gameplay layer
+# out of reach of tests.
+#
+# The pickle itself is ~6 KB and unpickles in well under a millisecond, but it
+# holds an SVC, so unpickling triggers the first `import sklearn.svm` of the
+# process — ~680 ms of import chain. The only caller is _make_ball_strike_call,
+# reached the first frame past plate arrival, so left to fire on its own that
+# cost lands as a visible freeze on the first taken or swung-through pitch of a
+# session (mid-swing-animation, for a whiff). prewarm() moves it off the
+# critical path; the lock keeps a prewarm in flight from racing a real call
+# into loading it twice.
+_umpire_model = None
+_umpire_model_lock = threading.Lock()
+
+
+def get_umpire_model():
+    """Return the trained ball/strike SVC, loading it on first use."""
+    global _umpire_model
+    # Fast path: assignment is atomic, so a non-None read is always a fully
+    # constructed model and needs no lock. Per-pitch calls never contend.
+    if _umpire_model is not None:
+        return _umpire_model
+    with _umpire_model_lock:
+        if _umpire_model is None:
+            with open(get_path("ai/ai_umpire.pkl"), "rb") as f:
+                _umpire_model = pickle.load(f)
+    return _umpire_model
 
 class PitchSimulation:
     @staticmethod
@@ -120,6 +151,21 @@ class PitchSimulation:
         self.swing_timing_diff_ms = None  # set in _handle_swing_input
         self.contact_quality = None       # mirrored from HitOutcomeManager.last_quality
         self.vertical_offset_in = None    # mirrored from HitOutcomeManager.last_vertical_offset
+        self.exit_velocity_mph = None     # modelled at contact; drives the contact SFX
+        # Batted-ball record, mirrored off the animation once it resolves (see
+        # _finalize_batted_ball). Type is classified at contact, upstream of
+        # any fielding decision, which is what makes it usable as an
+        # independent slice; role and margin describe the play that decided
+        # the outcome and stay None when no race was run.
+        self.batted_ball_type = None
+        self.fielder_role = None
+        self.play_margin_s = None
+        # Foul contact metrics, computed in _handle_foul_ball. Fouls never
+        # run the hit pipeline, so last_quality is stale for them — these
+        # are the foul's own numbers, shared by the sound and the animation.
+        self._foul_quality = None
+        self._foul_vertical_offset = None
+        self._foul_timing_norm = 0.0
         self.ai_umpire_strike = None      # set in _make_ball_strike_call (taken pitches only)
         self.truth_strike = None          # set in _make_ball_strike_call (taken pitches only)
         self.abs_challenged = False       # toggled by ABS challenge wiring (see _challenge bookkeeping)
@@ -205,7 +251,7 @@ class PitchSimulation:
 
         if elapsed_time >= 10 and current_time - self.starttime > self.windup or (current_time - self.starttime > self.windup and not self.pitch_results_done):
             self.last_time = current_time
-            if current_time > self.starttime + self.traveltime + self.windup and hasattr(self, 'outcome') and self.outcome in ['FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP_UP']:
+            if current_time > self.starttime + self.traveltime + self.windup and hasattr(self, 'outcome') and self.outcome in ['FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP UP']:
                 entry = [self.game.ball[0], self.game.ball[1], self.game.fourseamballsize, (198, 169, 251), "out"]  # Purple for outs
             elif current_time > self.starttime + self.traveltime + self.windup and self.is_hit:
                 entry = [self.game.ball[0], self.game.ball[1], self.game.fourseamballsize, (71, 204, 252), "hit"]
@@ -331,15 +377,25 @@ class PitchSimulation:
         if not self.pitch_results_done:
             self._evaluate_contact()
 
-        # Play contact sounds
+        # Play contact sounds. Fouls and fair contact go through the same
+        # exit-velocity model — the sample is chosen by how hard the ball
+        # was struck, not by which branch we are in, so a scorched foul
+        # cracks and a checked-swing tapper on the screws does not.
         if (current_time > self.contact_time and self.soundplayed == 0 and self.pitch_results_done):
+            swing_type = "power" if self.swing_type == 2 else "contact"
             if self.on_time == 1:
-                self.game.sound_manager.play('foul')
+                self.exit_velocity_mph = self.game.sound_manager.play_contact(
+                    self._foul_quality, swing_type)
                 self.soundplayed += 1
             elif self.on_time == 2:
-                # Pass the outcome to determine appropriate sound
-                outcome = getattr(self, 'outcome', None)
-                self.game.hit_outcome_manager.play_hit_sound(outcome)
+                # On a home run the animation already exists (it is built in
+                # _evaluate_contact, above) and has fixed the carry distance.
+                # Hand that to the sound so the crack matches the FT readout
+                # the player is about to see — the carry model's randomness
+                # means quality alone can put a soft crack under a 460-footer.
+                hr_distance = getattr(self.hit_animation, "hr_distance_ft", None)
+                self.exit_velocity_mph = self.game.hit_outcome_manager.play_hit_sound(
+                    swing_type, hr_distance_ft=hr_distance)
                 self.soundplayed += 1
 
     def _evaluate_contact(self):
@@ -365,8 +421,44 @@ class PitchSimulation:
             else:
                 self._handle_successful_hit()
 
+    def _compute_foul_contact_metrics(self):
+        """Measure the foul's contact quality, offset and signed timing.
+
+        Runs on every foul, not just animated ones: the contact sound is
+        picked from `quality`, so gating this behind foul_animation_enabled
+        would leave players with that setting off hearing one flat sample
+        for every foul — the exact behaviour this refactor removes.
+        Results are cached on self for _start_foul_animation to reuse.
+        """
+        mousepos = self.game.get_mouse_pos()
+
+        # Signed timing error: negative = early swing (pull-side foul),
+        # positive = late (opposite field). The stored swing_timing_diff_ms
+        # is abs()'d, so recompute with the sign here.
+        signed_ms = (self.swing_starttime + 150) - (
+            self.starttime + self.windup + self.traveltime)
+        # Severity: where |signed_ms| sits inside this swing's foul window
+        # (between the perfect and miss thresholds, difficulty-scaled —
+        # mirrors contact_timing_quality / power_timing_quality).
+        multipliers = self.game.settings_manager.get_difficulty_multipliers()
+        if self.swing_type == 1:
+            window = multipliers["contact_timing_window"]
+            lo, hi = 30.0 * window, 60.0 * window
+        else:
+            window = multipliers["power_timing_window"]
+            lo, hi = 20.0 * window, 35.0 * window
+        severity = max(0.0, min(1.0, (abs(signed_ms) - lo) / max(1.0, hi - lo)))
+
+        quality, vertical_offset = self.game.hit_outcome_manager.compute_foul_contact(
+            mousepos[1], self.game.ball[1], abs(signed_ms))
+
+        self._foul_quality = quality
+        self._foul_vertical_offset = vertical_offset
+        self._foul_timing_norm = severity if signed_ms > 0 else -severity
+
     def _handle_foul_ball(self):
         """Handle foul ball outcome."""
+        self._compute_foul_contact_metrics()
         self.outcome = 'foul'
         self.game.strikes += 1
         self.is_strike = True
@@ -376,7 +468,10 @@ class PitchSimulation:
         self.game.pitchnumber += 1
         if self.game.currentstrikes < 2:
             self.game.currentstrikes += 1
-        self.game._display_pitch_results("FOUL", self.pitchtype, self.speed_mph)
+        if self.game.settings_manager.get_setting("foul_animation_enabled"):
+            self._start_foul_animation()
+        else:
+            self.game._display_pitch_results("FOUL", self.pitchtype, self.speed_mph)
 
     def _handle_successful_hit(self):
         """Handle successful hit outcome."""
@@ -423,6 +518,10 @@ class PitchSimulation:
         # the column name keeps "_in" for parity with future units cleanup.
         self.contact_quality = contact_quality
         self.vertical_offset_in = contact_vertical_offset
+        # Classified at contact from (quality, offset), so it is set for home
+        # runs too — those never reach _finalize_batted_ball, and a GB/FB
+        # split that silently omitted every HR would be worse than none.
+        self.batted_ball_type = self.game.hit_outcome_manager.last_batted_ball_type
 
         # Unified contact result. HOME RUN is decided at contact (the ball
         # is aimed past the wall); everything else is deferred to the
@@ -506,7 +605,16 @@ class PitchSimulation:
         score_before = getattr(self, '_pending_hit_score_before', 0)
         pitches_thrown = getattr(self, '_pending_hit_pitchnumber', 0)
 
-        is_out = classified in ("FLYOUT", "GROUNDOUT", "LINEOUT", "POP_UP")
+        # Mirror the animation's fielding record for the DB (schema v7). The
+        # margin stays None unless a race actually decided the play, which is
+        # the distinction that makes the column falsifiable: a ball nobody
+        # fielded has no margin, and recording a 0.0 for it would put a spike
+        # at dead-even in a distribution whose whole purpose is its shape.
+        self.fielder_role = getattr(self.hit_animation, 'fielder_role', None)
+        timing = getattr(self.hit_animation, 'play_timing', None)
+        self.play_margin_s = timing.margin_s if timing is not None else None
+
+        is_out = classified in ("FLYOUT", "GROUNDOUT", "LINEOUT", "POP UP")
         if is_out:
             self.is_hit = False
             self.game.currentouts += 1
@@ -617,8 +725,9 @@ class PitchSimulation:
 
         # Determine umpire's call AND geometric truth at the same point.
         umpire_says_ball = (
-            not model.predict(pd.DataFrame([[self.game.ball[0], self.game.ball[1]]],
-                                           columns=['finalx', 'finaly']))
+            not get_umpire_model().predict(
+                pd.DataFrame([[self.game.ball[0], self.game.ball[1]]],
+                             columns=['finalx', 'finaly']))
             and is_taken
         )
         truth_strike = collision(
@@ -803,7 +912,7 @@ class PitchSimulation:
         """Finish the pitch and clean up."""
         self.running = False
         self.game.ui_manager.set_button_visibility('in_game')
-        from ui.components import create_pci_cursor
+        from strikefactor.ui.components import create_pci_cursor
         pygame.mouse.set_cursor(create_pci_cursor())
         self.cleanup()
 
@@ -823,13 +932,14 @@ class PitchSimulation:
         HOME RUN is fully known up front so its callback just shows the
         banner.
         """
-        from gameplay.hit_animation import HitAnimation
+        from strikefactor.gameplay.hit_animation import HitAnimation
         if outcome == "IN_PLAY":
             on_complete = self._finalize_batted_ball
         else:
-            on_complete = lambda: self.game.ui_manager.show_banner(
-                self._format_display_outcome(banner_text)
-            )
+            def on_complete():
+                self.game.ui_manager.show_banner(
+                    self._format_display_outcome(banner_text)
+                )
 
         # Append a labeled trail entry now — once hit_animation owns the frame,
         # _update_pitch_trajectory stops running, so the contact-point marker
@@ -852,6 +962,50 @@ class PitchSimulation:
             quality=quality,
             batted_ball_type=self.game.hit_outcome_manager.last_batted_ball_type,
             horizontal_inside=self.game.hit_outcome_manager.last_horizontal_inside,
+        )
+
+    def _start_foul_animation(self):
+        """Begin the cosmetic foul-ball animation; defers the FOUL result
+        display until it ends.
+
+        Deliberately does not go through _start_hit_animation: that path
+        reads stale last_batted_ball_type / last_horizontal_inside from the
+        previous hit (fouls never run the hit outcome pipeline) and writes
+        a blue "hit" trail marker where track mode expects the foul's red
+        strike entry.
+        """
+        from strikefactor.gameplay.hit_animation import HitAnimation
+        handedness = self.game.batter.get_handedness()
+
+        quality = self._foul_quality
+        vertical_offset = self._foul_vertical_offset
+        foul_timing_norm = self._foul_timing_norm
+        horizontal_inside = self.game.hit_outcome_manager._compute_horizontal_inside(
+            self.game.ball[0], handedness)
+
+        def on_complete():
+            self.game._display_pitch_results("FOUL", self.pitchtype, self.speed_mph)
+            self.game.ui_manager.show_banner("FOUL BALL")
+
+        # Replicate the trail entry the non-animated foul path writes via
+        # _update_pitch_trajectory (pitch_results_done + is_strike -> red
+        # "strike" marker) — the trajectory tracker stops running once the
+        # animation owns the frame, so track mode would otherwise lose the
+        # foul's contact-point marker.
+        self.game.last_pitch_information.append([
+            self.game.ball[0], self.game.ball[1],
+            self.game.fourseamballsize, (227, 75, 80), "strike",
+        ])
+
+        self.hit_animation = HitAnimation(
+            self.game,
+            outcome="FOUL",
+            on_complete=on_complete,
+            vertical_offset=vertical_offset,
+            quality=quality,
+            batted_ball_type=None,
+            horizontal_inside=horizontal_inside,
+            foul_timing_norm=foul_timing_norm,
         )
 
     def _handle_hit_animation_phase(self, current_time, time_delta):
@@ -959,7 +1113,7 @@ class PitchSimulation:
             self.game.pitch_history = self.game.pitch_history[-5:]
 
         # Build new state with richer representation
-        from ai.AI_2 import build_state
+        from strikefactor.ai.AI_2 import build_state
         new_state = build_state(
             outs=self.game.currentouts,
             strikes=self.game.currentstrikes,
@@ -1002,5 +1156,5 @@ class PitchSimulation:
         self.abs_overturned = bool(getattr(self.game, '_last_pitch_abs_overturned', False))
 
         # Record pitch to SQLite database
-        from data.pitch_database import PitchDatabaseService
+        from strikefactor.data.pitch_database import PitchDatabaseService
         PitchDatabaseService.get_instance().record_pitch(self)

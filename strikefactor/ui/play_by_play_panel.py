@@ -12,7 +12,7 @@ into a caller-supplied rect and consumes raw events.
 
 import pygame
 
-from ui import gameday_theme as gdt
+from strikefactor.ui import gameday_theme as gdt
 
 # --- Result categories (used for chip styling) ---
 _HOMERS = {'HOME RUN', 'HOMERUN', 'HR'}
@@ -120,10 +120,6 @@ class PlayByPlayPanel:
         self.scroll = 0
         self.filter_index = 0
         self._rebuild_rows()
-
-    @property
-    def has_plays(self):
-        return bool(self._plays)
 
     def _rebuild_rows(self):
         """Flatten the filtered plays into half-inning headers + play rows."""

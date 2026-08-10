@@ -1,10 +1,8 @@
 """Scouting Report Panel - displays pitcher stats and arsenal during gameplay."""
 
 import pygame
-import pygame_gui
-from pygame_gui.elements import UIPanel, UILabel
 from pygame_gui.core import ObjectID
-
+from pygame_gui.elements import UILabel, UIPanel
 
 # Pitch type full names
 PITCH_NAMES = {
@@ -268,9 +266,3 @@ class ScoutingReportPanel(UIPanel):
 
             self.stat_labels[stat_name].set_text(f'{formatted}{color_indicator}')
 
-    def toggle(self):
-        """Toggle panel visibility."""
-        if self.visible:
-            self.hide()
-        else:
-            self.show()

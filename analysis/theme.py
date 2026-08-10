@@ -32,13 +32,6 @@ PITCH_NAMES = {
     "FO": "Forkball",
 }
 
-# Coarse buckets used by the sequencing figure.
-PITCH_FAMILY = {
-    "FF": "hard", "SI": "hard", "FC": "hard",
-    "SL": "breaking", "SLD": "breaking", "CB": "breaking",
-    "CH": "offspeed", "FS": "offspeed", "FO": "offspeed",
-}
-
 UNKNOWN_COLOR = "#8899aa"
 
 
@@ -95,10 +88,10 @@ COMMIT_POINT_FT = 23.8
 
 # ── Outcome groups ───────────────────────────────────────────────────────
 HIT_OUTCOMES = ("SINGLE", "DOUBLE", "TRIPLE", "HOME RUN")
-# POP_UP is a real terminal outcome (verified against at_bats.final_outcome)
+# "POP UP" is a real terminal outcome (verified against at_bats.final_outcome)
 # and was previously missing from every one of these groups, silently dropping
 # at-bats from PA/BF/IP/K% denominators.
-BATTED_OUT_OUTCOMES = ("GROUNDOUT", "FLYOUT", "LINEOUT", "POP_UP")
+BATTED_OUT_OUTCOMES = ("GROUNDOUT", "FLYOUT", "LINEOUT", "POP UP")
 IN_PLAY_OUTCOMES = HIT_OUTCOMES + BATTED_OUT_OUTCOMES
 OUT_OUTCOMES = ("strikeout",) + BATTED_OUT_OUTCOMES
 TERMINAL_OUTCOMES = ("strikeout", "walk") + IN_PLAY_OUTCOMES
@@ -112,7 +105,7 @@ OUTCOME_COLORS = {
     "GROUNDOUT": "#95a5a6",
     "FLYOUT": "#7f8c8d",
     "LINEOUT": "#bdc3c7",
-    "POP_UP": "#636e72",
+    "POP UP": "#636e72",
     "SINGLE": "#2ecc71",
     "DOUBLE": "#27ae60",
     "TRIPLE": "#1abc9c",
@@ -121,14 +114,14 @@ OUTCOME_COLORS = {
 }
 
 OUTCOME_ORDER = [
-    "strikeout", "GROUNDOUT", "FLYOUT", "LINEOUT", "POP_UP",
+    "strikeout", "GROUNDOUT", "FLYOUT", "LINEOUT", "POP UP",
     "SINGLE", "DOUBLE", "TRIPLE", "HOME RUN", "walk",
 ]
 
 # Short forms for narrow tables — the full names blow past any terminal width.
 OUTCOME_ABBREV = {
     "strikeout": "K", "GROUNDOUT": "GO", "FLYOUT": "FO", "LINEOUT": "LO",
-    "POP_UP": "PU", "SINGLE": "1B", "DOUBLE": "2B", "TRIPLE": "3B",
+    "POP UP": "PU", "SINGLE": "1B", "DOUBLE": "2B", "TRIPLE": "3B",
     "HOME RUN": "HR", "walk": "BB",
 }
 
@@ -147,7 +140,7 @@ EVENT_RUN_VALUE = {
     "GROUNDOUT": -0.26,
     "FLYOUT": -0.26,
     "LINEOUT": -0.26,
-    "POP_UP": -0.26,
+    "POP UP": -0.26,
 }
 
 

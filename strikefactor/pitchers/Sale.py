@@ -1,6 +1,8 @@
-from .pitcher import Pitcher
 import random
+
 import pygame
+
+from .pitcher import Pitcher
 
 
 class Sale(Pitcher):
@@ -45,28 +47,28 @@ class Sale(Pitcher):
             self.draw(self.screen, 9, 16, 22)
 
     def SL(self, simulation_func):
-        speed_mph = random.gauss(79.0, 1.0)
+        speed_mph = random.gauss(79.4, 1.0)
         pfx_x = random.gauss(15.0, 1.0)
         pfx_z = random.gauss(0.0, 0.5)
         target_x, target_y = self.get_pitch_target('SL')
         simulation_func(self.release_point, 'chrissale', speed_mph, pfx_x, pfx_z, target_x, target_y, 'SL')
 
     def FF(self, simulation_func):
-        speed_mph = random.gauss(94.8, 0.25)
+        speed_mph = random.gauss(96.0, 0.25)
         pfx_x = random.gauss(-9.0, 1.0)
         pfx_z = random.gauss(15.0, 1.0)
         target_x, target_y = self.get_pitch_target('FF')
         simulation_func(self.release_point, 'chrissale', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FF')
 
     def SI(self, simulation_func):
-        speed_mph = random.gauss(93.9, 0.25)
+        speed_mph = random.gauss(95.4, 0.25)
         pfx_x = random.gauss(-8.0, 1.0)
         pfx_z = random.gauss(5.0, 1.0)
         target_x, target_y = self.get_pitch_target('SI')
         simulation_func(self.release_point, 'chrissale', speed_mph, pfx_x, pfx_z, target_x, target_y, 'SI')
 
     def CH(self, simulation_func):
-        speed_mph = random.gauss(87.0, 0.50)
+        speed_mph = random.gauss(88.2, 0.50)
         pfx_x = random.gauss(-18.0, 1.0)
         pfx_z = random.gauss(8.0, 1.0)
         target_x, target_y = self.get_pitch_target('CH')

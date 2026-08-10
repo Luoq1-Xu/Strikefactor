@@ -1,9 +1,12 @@
-import pygame
 import json
 from enum import Enum
-from config import get_path
-from utils.io import atomic_write_json
-from typing import Dict, Callable, Optional, Set
+from typing import Callable, Dict, Optional, Set
+
+import pygame
+
+from strikefactor.config import get_path
+from strikefactor.utils.io import atomic_write_json
+
 
 class KeyAction(Enum):
     TOGGLE_UI = "toggle_ui"

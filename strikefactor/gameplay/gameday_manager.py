@@ -8,14 +8,14 @@ import os
 import random
 import uuid
 from datetime import datetime
-from typing import List, Dict, Tuple, Optional
-from helpers import ScoreKeeper
-from utils.io import atomic_write_json
+from typing import Dict, List, Optional, Tuple
+
 # Single source of truth for the pitcher roster lives in config; re-exported
 # here so existing `from gameplay.gameday_manager import ALL_PITCHERS` imports
 # keep working.
-from config import ALL_PITCHERS
-
+from strikefactor.config import ALL_PITCHERS
+from strikefactor.helpers import ScoreKeeper
+from strikefactor.utils.io import atomic_write_json
 
 # --- Player-team pitcher attributes (roles, caps, quality multipliers) ---
 # Loaded from data/pitcher_attributes.json so designers can tune without
@@ -162,7 +162,7 @@ class PitcherStats:
 
     def record_outcome(self, outcome: str, runs: int = 0):
         """Record the result of an at-bat."""
-        if outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP_UP']:
+        if outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP UP']:
             self.outs_recorded += 1
             if outcome == 'STRIKEOUT':
                 self.strikeouts += 1
@@ -187,13 +187,6 @@ class PitcherStats:
         full_innings = self.outs_recorded // 3
         partial_outs = self.outs_recorded % 3
         return f"{full_innings}.{partial_outs}"
-
-    def get_summary(self) -> str:
-        """Get a summary string of pitcher stats."""
-        ip = self.get_ip_display()
-        return (f"{self.name}: {ip} IP, {self.hits_allowed} H, "
-                f"{self.runs_allowed} R, {self.strikeouts} K, "
-                f"{self.walks} BB, {self.pitch_count} pitches")
 
     # All PitcherStats fields are flat primitives, so (de)serialization is a
     # straight attribute copy. Keyed by this tuple so to_dict/from_dict stay in
@@ -741,7 +734,7 @@ class GameDayManager:
         # Process the outcome
         runs_scored = 0
 
-        if outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP_UP']:
+        if outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP UP']:
             self.current_outs += 1
             if outcome == 'STRIKEOUT':
                 pitcher_stats.record_outcome(outcome)
@@ -824,12 +817,12 @@ class GameDayManager:
         # Track player momentum
         if outcome in ['SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN']:
             self.player_consecutive_hits += 1
-        elif outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP_UP']:
+        elif outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP UP']:
             self.player_consecutive_hits = 0
         # WALK doesn't reset streak
 
         # Check for outs
-        if outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP_UP']:
+        if outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP UP']:
             self.current_outs += 1
 
     def check_walkoff(self) -> bool:
@@ -933,15 +926,6 @@ class GameDayManager:
             'opponent_total': self.opponent_score,
             'player_total': self.player_score,
         }
-
-    def get_score_summary(self) -> str:
-        """Get a formatted score summary."""
-        return f"{self.opponent_name}: {self.opponent_score}  |  {self.player_name}: {self.player_score}"
-
-    def get_inning_summary(self) -> str:
-        """Get current inning info."""
-        half = "Top" if self.is_top_inning else "Bottom"
-        return f"{half} of Inning {self.current_inning} - {self.current_outs} out{'s' if self.current_outs != 1 else ''}"
 
     def get_opponent_pitcher_stats(self) -> List[PitcherStats]:
         """Get stats for opponent pitchers (player bats against)."""
@@ -1089,7 +1073,29 @@ class GameDayManager:
 
         # Drop any non-dict entries so a single bad row can't crash every reader.
         data['games'] = [g for g in data['games'] if isinstance(g, dict)]
+        cls._normalize_legacy_outcomes(data['games'])
         return data
+
+    # Outcome spellings written by older builds, mapped to the current ones.
+    # The live history file is migrated on disk, but a restored archive from
+    # data/gameday_archives/ still carries the old strings — and readers such
+    # as GameDayHistoryState._OUT_RESULTS match on the exact value, so an
+    # unmapped 'POP_UP' would stop counting as an out.
+    _LEGACY_OUTCOMES = {'POP_UP': 'POP UP'}
+
+    @classmethod
+    def _normalize_legacy_outcomes(cls, games: List[dict]) -> None:
+        """Rewrite superseded play-by-play outcome names in place."""
+        for game in games:
+            play_log = game.get('play_log')
+            if not isinstance(play_log, list):
+                continue
+            for play in play_log:
+                if not isinstance(play, dict):
+                    continue
+                mapped = cls._LEGACY_OUTCOMES.get(play.get('result'))
+                if mapped:
+                    play['result'] = mapped
 
     @classmethod
     def _history_games(cls) -> List[dict]:

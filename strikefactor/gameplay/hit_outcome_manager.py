@@ -1,7 +1,7 @@
-import random
 import math
-from utils.physics import collision_angled
+import random
 
+from strikefactor.utils.physics import collision_angled
 
 # Batted-ball type model. Classified at contact from (quality, vertical_offset);
 # drives the trajectory shape passed to the animation. The hit/out split is
@@ -136,6 +136,25 @@ class HitOutcomeManager:
 
         return quality, vertical_offset
 
+    def compute_foul_contact(self, swing_location_y, ball_location_y, timing_diff_ms):
+        """Cosmetic contact metrics for the foul-ball animation.
+
+        Pure: does not touch last_quality / last_vertical_offset /
+        last_batted_ball_type, which belong to the in-play path (DB record,
+        next hit's animation). Timing sigma is relaxed to 70ms — foul-graded
+        swings are 20-60ms off by definition, so the standard 35ms sigma
+        would cap quality ~0.68 and make "foul home runs" unreachable.
+        Returns (quality, vertical_offset).
+        """
+        if swing_location_y is None or ball_location_y is None:
+            vertical_offset = 0.0
+            alignment_score = 0.7
+        else:
+            vertical_offset = swing_location_y - ball_location_y  # positive = bat below ball
+            alignment_score = math.exp(-0.5 * (vertical_offset / 25.0) ** 2)
+        timing_score = math.exp(-0.5 * ((timing_diff_ms or 0.0) / 70.0) ** 2)
+        return math.sqrt(timing_score * alignment_score), vertical_offset
+
     def _classify_batted_ball_type(self, quality, vertical_offset):
         """Pick a batted-ball type from contact metrics.
 
@@ -195,71 +214,6 @@ class HitOutcomeManager:
             self.update_runners_and_score()
             return "HOME RUN"
         return "IN_PLAY"
-
-    def _pick_contact_sound(self):
-        """Choose a non-HR contact sound from contact quality and batted-ball shape."""
-        quality = max(0.0, min(1.0, self.last_quality or 0.0))
-        batted_ball_type = self.last_batted_ball_type
-
-        if batted_ball_type == "POP_UP":
-            candidates = [
-                ("pop2", 4),
-                ("pop3", 4),
-                ("pop4", 3),
-                ("outside", 1),
-            ]
-        elif batted_ball_type == "GROUNDER":
-            if quality < 0.45:
-                candidates = [
-                    ("outside", 4),
-                    ("pop1", 2),
-                    ("single", 1),
-                ]
-            else:
-                candidates = [
-                    ("single", 3),
-                    ("double", 2),
-                    ("outside", 1),
-                ]
-        elif batted_ball_type == "FLY":
-            if quality < 0.7:
-                candidates = [
-                    ("single", 2),
-                    ("double", 3),
-                    ("triple", 1),
-                ]
-            else:
-                candidates = [
-                    ("double", 2),
-                    ("triple", 4),
-                    ("single", 1),
-                ]
-        else:
-            if quality < 0.35:
-                candidates = [
-                    ("outside", 3),
-                    ("pop2", 2),
-                    ("single", 1),
-                ]
-            elif quality < 0.65:
-                candidates = [
-                    ("single", 3),
-                    ("double", 3),
-                    ("outside", 1),
-                ]
-            else:
-                candidates = [
-                    ("double", 3),
-                    ("triple", 3),
-                    ("single", 1),
-                ]
-
-        available = [(name, weight) for name, weight in candidates if name in self.sound_manager.sounds]
-        if not available:
-            return "single"
-
-        names, weights = zip(*available)
-        return random.choices(names, weights=weights, k=1)[0]
 
     def _compute_horizontal_inside(self, ball_location_x, batter_handedness):
         """Signed inside/outside offset (px) relative to the batter's body.
@@ -401,23 +355,24 @@ class HitOutcomeManager:
             else:
                 self.ishomerun = 'GRAND SLAM'
     
-    def play_hit_sound(self, outcome=None):
-        if outcome == "HOME RUN" or self.hit_type == 4:
-            self.sound_manager.play('homerun')
-            return
-        # All other contacts: the outcome isn't known yet (FLYOUT vs
-        # GROUNDOUT vs SINGLE/DOUBLE/TRIPLE emerges from the animation).
-        # Pick a sound from contact quality so weak contact sounds weak
-        # and a hard-hit ball gets a satisfying crack — the actual
-        # outcome banner arrives after the animation.
-        q = self.last_quality
-        if q < 0.4:
-            sound_choice = random.choice(['single', 'foul'])
-        elif q < 0.7:
-            sound_choice = random.choice(['single', 'double'])
-        else:
-            sound_choice = random.choice(['double', 'triple'])
-        self.sound_manager.play(sound_choice)
+    def play_hit_sound(self, swing_type="contact", hr_distance_ft=None):
+        """Play the contact sound for the swing just resolved.
+
+        Deliberately takes no outcome. Sample and loudness come from how
+        hard the ball was hit, so a scorched liner sounds enormous whether
+        it lands for a double or in a glove. This fires at impact, before
+        the animation resolves the result — which is why outcome must not
+        be an input.
+
+        `hr_distance_ft` is not an outcome cue but a better measurement:
+        on a home run the carry model has already fixed the distance, and
+        that distance reflects how hard the ball was struck more faithfully
+        than quality does. See SoundManager.play_contact.
+
+        Returns the modelled exit velocity so the caller can record it.
+        """
+        return self.sound_manager.play_contact(
+            self.last_quality, swing_type, hr_distance_ft=hr_distance_ft)
     
     def get_homerun_text(self):
         return self.ishomerun

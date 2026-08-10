@@ -8,7 +8,7 @@ list, so adding a figure means adding a row here and nothing else.
 from dataclasses import dataclass
 from typing import Callable
 
-from . import arsenal, location, results, sequencing, trends, overview
+from . import arsenal, location, overview, results, sequencing, trends
 
 
 @dataclass(frozen=True)

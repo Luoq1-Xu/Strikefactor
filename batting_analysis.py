@@ -17,18 +17,18 @@ Usage:
 """
 import argparse
 import os
-import numpy as np
-import matplotlib.pyplot as plt
-import matplotlib.patches as patches
-from matplotlib.gridspec import GridSpec
 from collections import defaultdict
+
+import matplotlib.patches as patches
+import matplotlib.pyplot as plt
+import numpy as np
+from matplotlib.gridspec import GridSpec
 
 # Filtering, palettes, and outcome groups are shared with pitch_analysis.py via
 # the analysis package so the two scripts can't drift apart again.
 from analysis import theme
 from analysis.data import DEFAULT_OUT_DIR, connect
-from analysis.filters import (DIFFICULTY_LABEL, Filter, add_filter_args,
-                              filter_from_args)
+from analysis.filters import DIFFICULTY_LABEL, Filter, add_filter_args, filter_from_args
 
 OUT_DIR = DEFAULT_OUT_DIR
 os.makedirs(OUT_DIR, exist_ok=True)
@@ -523,7 +523,7 @@ def fig6_outcomes_by_zone():
 # ═══════════════════════════════════════════════════════════════════════
 # At-bat-terminating outcomes (used to derive PA/AB from the pitches table —
 # at_bats has no game_mode/difficulty columns so it can't honour the filter).
-# Sourced from analysis.theme so POP_UP can't go missing here again: it was
+# Sourced from analysis.theme so "POP UP" can't go missing here again: it was
 # absent from this tuple, silently dropping 86 at-bats from every denominator.
 TERMINAL = theme.TERMINAL_OUTCOMES
 

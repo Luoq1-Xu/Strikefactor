@@ -1,0 +1,78 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "strikefactor"
+version = "0.1.0"
+description = "A pygame-based baseball batting simulator with AI-controlled pitchers."
+requires-python = ">=3.12"
+
+# Runtime dependencies actually imported by the game and the analysis package.
+# scikit-learn is not imported directly — it is required to unpickle the SVC
+# umpire model in ai/ai_umpire.pkl.
+dependencies = [
+    "pygame-ce>=2.5.1",
+    "pygame_gui>=0.6.12",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "matplotlib>=3.9",
+    "scikit-learn>=1.4",
+    "rich>=13.7",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+strikefactor = "strikefactor.__main__:main"
+
+[tool.setuptools]
+# Assets, AI models and seed data live inside the package and are loaded at
+# runtime via config.get_path(), so they must ship with it.
+include-package-data = true
+
+[tool.setuptools.packages.find]
+include = ["strikefactor*", "analysis*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning"]
+# NOTE: SDL is forced to its dummy video/audio drivers in tests/conftest.py,
+# before pygame is imported, so the suite needs no display.
+
+[tool.ruff]
+target-version = "py312"
+line-length = 110
+exclude = [".venv", "analysis_output", "strikefactor/data/gameday_archives"]
+
+[tool.ruff.lint]
+# Deliberately a starter set, chosen so `ruff check` is GREEN today and can act
+# as a real gate. Everything selected here is clean as of the Phase 0 cleanup.
+select = [
+    "E4",   # imports
+    "E7",
+    "E9",
+    "F",    # pyflakes: undefined names, unused imports
+    "I",    # import sorting
+]
+ignore = [
+    "E741",  # ambiguous variable names (l, I) — present throughout the drawing code
+]
+# Phase 5 (hygiene sweep) turns these on and fixes the ~70 findings they raise:
+#   "B"   bugbear   — 2x mutable-argument-default in helpers.StatSwing,
+#                     2x unused loop variable
+#   "UP"  pyupgrade — typing.List -> list, Optional[X] -> X | None,
+#                     redundant open() modes
+#   "E731" lambda-assignment in pitch_simulation._start_hit_animation
+# They are left off rather than ignored so re-enabling is one deliberate edit.
+
+[tool.ruff.lint.per-file-ignores]
+# Re-exports.
+"__init__.py" = ["F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["strikefactor", "analysis"]

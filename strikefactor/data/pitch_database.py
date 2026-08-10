@@ -15,13 +15,12 @@ Tables:
 - batter_profiles: persisted BatterProfile aggregates per (mode, difficulty)
 """
 
-import sqlite3
-import uuid
-import os
 import glob
 import json
+import os
+import sqlite3
+import uuid
 from datetime import datetime, timedelta
-
 
 # Pitcher handedness — used to populate pitches.pitcher_hand. Kept here
 # rather than on the Pitcher class so the existing pitcher constructors
@@ -35,7 +34,15 @@ PITCHER_HANDEDNESS = {
 }
 
 
-SCHEMA_VERSION = 4  # Bumped when migrations are added; see PitchDB._migrate.
+SCHEMA_VERSION = 7  # Bumped when migrations are added; see PitchDB._migrate.
+
+# v5 renamed the pop-up outcome from "POP_UP" to "POP UP", so it reads like
+# every other recorded outcome ("HOME RUN", "LINEOUT"). Data written before v5
+# carries the old spelling; _migrate rewrites it in place. Without that the
+# analysis package groups on the raw string and would silently split pop-ups
+# into two buckets, under-counting every PA/BF/out denominator that includes
+# them.
+V5_OUTCOME_RENAMES = (("POP_UP", "POP UP"),)
 
 
 class PitchDB:
@@ -105,6 +112,12 @@ class PitchDB:
         swing_timing_diff_ms REAL,
         contact_quality REAL,
         vertical_offset_in REAL,
+        exit_velocity_mph REAL,
+
+        -- Batted ball (NULL unless the ball was put in play)
+        batted_ball_type TEXT,
+        fielder_role TEXT,
+        play_margin_s REAL,
 
         -- Umpire / ABS
         ai_umpire_strike INTEGER,
@@ -218,6 +231,43 @@ class PitchDB:
         ("platoon", "TEXT"),
     ]
 
+    # v6: modelled exit velocity at contact (engine/contact_audio.py). Set on
+    # every bat-on-ball event, fouls included; NULL on takes and whiffs. Note
+    # the asymmetry with contact_quality, which stays NULL on fouls: fouls
+    # never run the hit pipeline that populates it, and widening it now would
+    # silently change what every existing contact_quality aggregate means.
+    # EV is a model output, not a measurement — derived from quality and swing
+    # type with jitter — so it adds no information. It is stored because it is
+    # the number the contact SFX keyed off, which makes "why did that sound
+    # like that" answerable after the fact.
+    V6_PITCHES_COLUMNS = [
+        ("exit_velocity_mph", "REAL"),
+    ]
+
+    # v7: what actually happened to the batted ball, so the fielding and
+    # timing models can be checked against recorded play instead of only
+    # against a Monte Carlo of themselves.
+    #
+    # Before this the DB could not tell a ground ball from a fly ball. Every
+    # aggregate that wanted "GB BABIP" or "how often is a fielded grounder
+    # beaten out" had to infer type from `outcome`, which is circular — the
+    # outcome is what the model produced. `batted_ball_type` is classified at
+    # *contact* by HitOutcomeManager, upstream of any fielding decision, so it
+    # is an independent axis to slice on.
+    #
+    # `play_margin_s` is the decisive race's margin in seconds, signed so
+    # positive favours the defense (see infield_timing.PlayTiming.margin_s).
+    # It is the falsifiable output of the timing model: a healthy distribution
+    # is centred well above zero with a visible bang-bang shoulder, and if it
+    # ever comes out bimodal-at-the-extremes the model has stopped deciding
+    # anything. NULL when no race was run — a ball nobody fielded, or a
+    # fly/liner caught in the air, has no throw to beat.
+    V7_PITCHES_COLUMNS = [
+        ("batted_ball_type", "TEXT"),
+        ("fielder_role", "TEXT"),
+        ("play_margin_s", "REAL"),
+    ]
+
     # Backup policy
     BACKUP_DIR_NAME = "backups"
     BACKUP_MIN_INTERVAL = timedelta(hours=1)  # don't backup more than once per hour
@@ -248,7 +298,8 @@ class PitchDB:
             # v2 db is a no-op because executescript already created them).
             existing_pitches = {row[1] for row in self.conn.execute("PRAGMA table_info(pitches)")}
             for col, decl in (self.V2_PITCHES_COLUMNS + self.V3_PITCHES_COLUMNS
-                             + self.V4_PITCHES_COLUMNS):
+                             + self.V4_PITCHES_COLUMNS + self.V6_PITCHES_COLUMNS
+                             + self.V7_PITCHES_COLUMNS):
                 if col not in existing_pitches:
                     self.conn.execute(f"ALTER TABLE pitches ADD COLUMN {col} {decl}")
 
@@ -256,6 +307,19 @@ class PitchDB:
             for col, decl in self.V2_AT_BATS_COLUMNS:
                 if col not in existing_ab:
                     self.conn.execute(f"ALTER TABLE at_bats ADD COLUMN {col} {decl}")
+
+            # v5: outcome-string renames. Idempotent — re-running finds no rows
+            # with the old spelling. Both tables store the outcome as free text,
+            # so this is a value rewrite rather than a schema change.
+            if version < 5:
+                for old, new in V5_OUTCOME_RENAMES:
+                    self.conn.execute(
+                        "UPDATE pitches SET outcome = ? WHERE outcome = ?", (new, old)
+                    )
+                    self.conn.execute(
+                        "UPDATE at_bats SET final_outcome = ? WHERE final_outcome = ?",
+                        (new, old),
+                    )
 
             self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -502,6 +566,10 @@ class PitchDataExtractor:
             "swing_timing_diff_ms": getattr(sim, "swing_timing_diff_ms", None),
             "contact_quality": getattr(sim, "contact_quality", None),
             "vertical_offset_in": getattr(sim, "vertical_offset_in", None),
+            "exit_velocity_mph": getattr(sim, "exit_velocity_mph", None),
+            "batted_ball_type": getattr(sim, "batted_ball_type", None),
+            "fielder_role": getattr(sim, "fielder_role", None),
+            "play_margin_s": getattr(sim, "play_margin_s", None),
             "ai_umpire_strike": _nullable_int(getattr(sim, "ai_umpire_strike", None)),
             "truth_strike": _nullable_int(getattr(sim, "truth_strike", None)),
             "abs_challenged": int(bool(getattr(sim, "abs_challenged", False))),

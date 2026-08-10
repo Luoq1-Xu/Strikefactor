@@ -12,7 +12,7 @@ All draw helpers are plain functions taking ``screen`` + a ``fonts`` dict from
 
 import pygame
 
-from config import get_path, resource_path
+from strikefactor.config import get_path, resource_path
 
 # --- Palette (matches BroadcastHUD) ---
 BG = (0, 0, 0)

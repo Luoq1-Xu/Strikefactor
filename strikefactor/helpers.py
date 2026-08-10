@@ -1,27 +1,16 @@
-import pygame
-import pygame_gui
 import random
 from dataclasses import dataclass
 from typing import List, Tuple
-from pygame_gui.elements.ui_window import UIWindow
-from pygame_gui.elements.ui_image import UIImage
+
+import pygame
+import pygame_gui
+from pygame_gui.core import ObjectID
 from pygame_gui.elements.ui_button import UIButton
+from pygame_gui.elements.ui_horizontal_slider import UIHorizontalSlider
+from pygame_gui.elements.ui_image import UIImage
 from pygame_gui.elements.ui_label import UILabel
 from pygame_gui.elements.ui_scrolling_container import UIScrollingContainer
-from pygame_gui.core import ObjectID
-from pygame_gui.elements.ui_horizontal_slider import UIHorizontalSlider
-
-
-# Pitch type display name mapping
-PITCH_TYPE_NAMES = {
-    'FF': 'Fastball', 'SI': 'Sinker', 'FC': 'Cutter',
-    'SL': 'Slider', 'CB': 'Curveball', 'CU': 'Curveball',
-    'CH': 'Changeup', 'FS': 'Splitter', 'FO': 'Forkball', 'KC': 'Knuckle Curve',
-    'FF_strike': 'Fastball', 'FF_chase': 'Fastball',
-    'SL_strike': 'Slider', 'SL_chase': 'Slider',
-    'CB_strike': 'Curveball', 'CB_chase': 'Curveball',
-    'CH_strike': 'Changeup', 'CH_chase': 'Changeup',
-}
+from pygame_gui.elements.ui_window import UIWindow
 
 # Outcome color mapping
 OUTCOME_COLORS = {
@@ -37,7 +26,7 @@ OUTCOME_COLORS = {
     'FLYOUT': (198, 169, 251),      # Purple
     'GROUNDOUT': (198, 169, 251),   # Purple
     'LINEOUT': (198, 169, 251),     # Purple
-    'POP_UP': (198, 169, 251),      # Purple
+    'POP UP': (198, 169, 251),      # Purple
 }
 
 
@@ -56,11 +45,20 @@ class EnhancedPitchRecord:
         """Get color based on outcome for display."""
         return OUTCOME_COLORS.get(self.outcome, (255, 255, 255))
 
-    def get_pitch_type_display(self) -> str:
-        """Get user-friendly pitch type name."""
-        # Extract base pitch type (remove _strike, _chase suffixes)
-        base_type = self.pitch_type.split('_')[0] if '_' in self.pitch_type else self.pitch_type
-        return PITCH_TYPE_NAMES.get(self.pitch_type, PITCH_TYPE_NAMES.get(base_type, self.pitch_type))
+    def get_flight_length(self) -> int:
+        """Number of trail frames up to and including plate arrival.
+
+        In-flight entries carry an empty outcome label (index 4); the first
+        labeled entry is the frame the ball reached the plate. Called pitches
+        keep appending labeled entries for the ~700 ms the simulation spends
+        resolving the call, while a batted ball's trail stops dead at contact
+        because the hit animation takes over the frame. So raw `len()` is not
+        comparable across outcomes — this is.
+        """
+        for i, frame in enumerate(self.trajectory):
+            if len(frame) > 4 and frame[4]:
+                return i + 1
+        return len(self.trajectory)
 
 # Runner class
 class Runner:
@@ -142,7 +140,7 @@ class ScoreKeeper:
                 for runner in self.runners[:]:
                     if runner.base in (2, 3):
                         runner.advance(1)
-        elif outcome in ('LINEOUT', 'POP_UP'):
+        elif outcome in ('LINEOUT', 'POP UP'):
             pass
         else:
             batter = Runner(1)
@@ -212,6 +210,11 @@ class StatSwing(UIWindow):
     PITCH_LIST_WIDTH = 280
     CONTROLS_HEIGHT = 50
     PITCH_ITEM_HEIGHT = 55
+
+    # Hold frames appended after the *longest* selected trajectory reaches the
+    # plate, so every loop ends on a readable pause instead of snapping back.
+    # ~20 ms per animation frame at 60 FPS, so 20 frames is roughly 400 ms.
+    PAUSE_FRAMES = 20
 
     def __init__(self,
                  position,
@@ -439,13 +442,28 @@ class StatSwing(UIWindow):
         self._rebuild_pitch_list()
         self._update_selected_records()
 
+    def _cycle_length(self) -> int:
+        """Frames in one full replay loop, shared by every selected pitch.
+
+        Each trajectory is drawn only up to its own plate arrival and then
+        held in place until the loop restarts, so a batted ball (whose trail
+        stops at contact) occupies exactly as much wall-clock time as a called
+        pitch (whose trail runs on through the umpire's call). The loop is the
+        longest flight plus a fixed pause, which guarantees every pitch gets
+        at least PAUSE_FRAMES of hold at its endpoint.
+        """
+        longest_flight = max(
+            (r.get_flight_length() for r in self.selected_records if r.trajectory),
+            default=1
+        )
+        return max(1, longest_flight) + self.PAUSE_FRAMES
+
     def _update_selected_records(self):
         """Update the list of selected records and redraw."""
         self.selected_records = [r for r in self.pitch_records if r.selected]
 
         # Update slider range based on selected trajectories
-        max_frames = max((len(r.trajectory) for r in self.selected_records if r.trajectory), default=1)
-        new_max = max(1, max_frames - 1)
+        new_max = max(1, self._cycle_length() - 1)
         self.frame_slider.value_range = (0, new_max)
 
         # Clamp animation frame to valid range
@@ -503,11 +521,8 @@ class StatSwing(UIWindow):
         x_offset = game_strikezone_center_x - (self.viz_width // 2)
         y_offset = game_strikezone_center_y - (self.viz_height // 2)
 
-        # Get max frame count for animation
-        max_frames = 0
-        for record in self.selected_records:
-            if record.trajectory:
-                max_frames = max(max_frames, len(record.trajectory))
+        # One shared loop length for every selected pitch
+        cycle_length = self._cycle_length()
 
         # Draw each selected trajectory with transparency
         if self.selected_records:
@@ -523,8 +538,11 @@ class StatSwing(UIWindow):
                 color = record.get_display_color()
                 color_with_alpha = (*color, alpha)
 
-                # Draw trajectory up to current frame
-                frame_limit = min(self.animation_frame + 1, len(trajectory))
+                # Draw trajectory up to current frame, stopping at plate
+                # arrival — the post-arrival entries are all at the same spot
+                # anyway, and clamping here is what makes the remainder of the
+                # cycle read as a pause rather than dead frames.
+                frame_limit = min(self.animation_frame + 1, record.get_flight_length())
 
                 for i in range(frame_limit):
                     frame = trajectory[i]
@@ -544,7 +562,7 @@ class StatSwing(UIWindow):
                     pygame.draw.circle(surface, (*color, 255), (x_pos, y_pos), 8, 2)
 
         # Update frame label
-        self.frame_label.set_text(f'Frame: {self.animation_frame}/{max_frames}')
+        self.frame_label.set_text(f'Frame: {self.animation_frame}/{cycle_length}')
 
         # Update the image element
         self.viz_surface_element.set_image(surface)
@@ -651,12 +669,12 @@ class StatSwing(UIWindow):
         """Update animation state."""
         current_time = pygame.time.get_ticks()
 
-        # Calculate max frames from selected trajectories
-        max_frames = max((len(r.trajectory) for r in self.selected_records if r.trajectory), default=1)
+        # One loop length for every selected pitch — see _cycle_length()
+        cycle_length = self._cycle_length()
 
         # Update slider range if it changed
         current_range = self.frame_slider.value_range
-        new_max = max(1, max_frames - 1)
+        new_max = max(1, cycle_length - 1)
         if current_range[1] != new_max:
             self.frame_slider.value_range = (0, new_max)
 
@@ -667,9 +685,7 @@ class StatSwing(UIWindow):
             if current_time - self.last_time > frame_interval:
                 self.animation_frame += 1
                 self.last_time = current_time
-
-                if max_frames > 0:
-                    self.animation_frame %= max_frames
+                self.animation_frame %= cycle_length
 
                 # Sync slider to current frame
                 self.frame_slider.set_current_value(self.animation_frame)

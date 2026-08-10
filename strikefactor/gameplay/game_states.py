@@ -3,17 +3,17 @@ Game state classes for StrikeFactor baseball simulator.
 Each state handles its own rendering, input processing, and state transitions.
 """
 
-import pygame
-import pygame.gfxdraw
-import pygame_gui
 import os
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Optional
-from gameplay.gameday_manager import GameDayManager
-from config import get_path, resource_path
-from ui import gameday_theme as gdt
-from ui.play_by_play_panel import PlayByPlayPanel
+
+import pygame
+import pygame.gfxdraw
+import pygame_gui
+
+from strikefactor.gameplay.gameday_manager import GameDayManager
+from strikefactor.ui import gameday_theme as gdt
+from strikefactor.ui.play_by_play_panel import PlayByPlayPanel
 
 
 class GameState(ABC):
@@ -348,8 +348,8 @@ class GameplayState(GameState):
             self._draw_abs_challenge_prompt(screen)
 
     def _draw_abs_challenge_prompt(self, screen):
-        from key_binding_manager import KeyAction
-        from config import ABS_PINK
+        from strikefactor.config import ABS_PINK
+        from strikefactor.key_binding_manager import KeyAction
         if not hasattr(self, '_abs_prompt_font'):
             self._abs_prompt_font = pygame.font.SysFont("arial", 18, bold=True)
 
@@ -1078,7 +1078,7 @@ class GameDayState(GameState):
 
     def __init__(self, game):
         super().__init__(game)
-        from ui.pitcher_carousel import PitcherCarousel
+        from strikefactor.ui.pitcher_carousel import PitcherCarousel
         self.carousel = PitcherCarousel(
             self.game.pitcher_manager,
             self.game.ui_manager,
@@ -1229,7 +1229,6 @@ class GameDayTransitionState(GameState):
         """Called when entering transition state."""
         # Hide any lingering banners and panels
         self.game.ui_manager.hide_banner()
-        self.game.ui_manager.hide_box_score()
         self.game.ui_manager.hide_scouting_panel()
         self.game.ui_manager.hide_lap_log_panel()
 
@@ -1298,7 +1297,6 @@ class GameDayTransitionState(GameState):
 
     def exit(self):
         """Called when exiting this state."""
-        self.game.ui_manager.hide_box_score()
         self._clear_labels()
         self._log_open = False
 
@@ -1319,7 +1317,7 @@ class GameDayTransitionState(GameState):
 
         # Grab the open pitch-DB ids BEFORE end_game closes them so we can
         # write them into gameday_history.json as foreign keys.
-        from data.pitch_database import PitchDatabaseService
+        from strikefactor.data.pitch_database import PitchDatabaseService
         svc = PitchDatabaseService.get_instance()
         game_id = svc.current_game_id
         session_id = svc.session_id
@@ -1563,7 +1561,6 @@ class GameDayTransitionState(GameState):
     # setup, transition, final, resume, and history screens stay identical.
     # ============================================================
     _SCREEN_W = gdt.SCREEN_W
-    _SCREEN_H = gdt.SCREEN_H
     _MARGIN_X = gdt.MARGIN_X
 
     # Palette — strict black / white / gray, matches BroadcastHUD.
@@ -1572,12 +1569,10 @@ class GameDayTransitionState(GameState):
     _DIM = gdt.DIM
     _DIM_SOFT = gdt.DIM_SOFT
     _DIVIDER = gdt.DIVIDER
-    _HIGHLIGHT_BG = gdt.HIGHLIGHT_BG
-    _HIGHLIGHT_FG = gdt.HIGHLIGHT_FG
 
     # Hit / out classification reused across screens.
     _HIT_RESULTS = ('SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN')
-    _OUT_RESULTS = ('STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP_UP')
+    _OUT_RESULTS = ('STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP UP')
     # Compact labels for notable-play display.
     _HIT_ABBREV = {
         'SINGLE': '1B', 'DOUBLE': '2B', 'TRIPLE': '3B', 'HOME RUN': 'HR',
@@ -1730,7 +1725,7 @@ class GameDayTransitionState(GameState):
         self._blit_text(screen, "ARMS FACED", f['micro'], (x, y), self._DIM)
         y += 26
 
-        from ui.pitcher_carousel import PITCHER_HANDEDNESS
+        from strikefactor.ui.pitcher_carousel import PITCHER_HANDEDNESS
 
         line_h = 36
         shown = 0
@@ -1887,7 +1882,7 @@ class GameDayTransitionState(GameState):
         self._blit_text(screen, "ON THE MOUND", f['micro'], (x, y), self._DIM)
         y += 26
 
-        from ui.pitcher_carousel import PITCHER_HANDEDNESS
+        from strikefactor.ui.pitcher_carousel import PITCHER_HANDEDNESS
         hand = PITCHER_HANDEDNESS.get(ps.name, '')
         hand_letter = 'L' if hand == 'LHP' else 'R' if hand == 'RHP' else ''
 
@@ -2139,7 +2134,7 @@ class GameDayResumeState(_GameDayListState):
     VISIBILITY_STATE = 'gameday_resume'
 
     def _load_items(self):
-        from data import gameday_sessions
+        from strikefactor.data import gameday_sessions
         return gameday_sessions.load_sessions()
 
     def _on_activate(self, item):

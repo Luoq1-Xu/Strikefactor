@@ -1,6 +1,8 @@
-from .pitcher import Pitcher
 import random
+
 import pygame
+
+from .pitcher import Pitcher
 
 
 class Mcclanahan(Pitcher):

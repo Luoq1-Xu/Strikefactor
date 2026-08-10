@@ -6,7 +6,7 @@ Generates random game situations with different pitchers, counts, runners, and o
 import random
 from typing import Dict, List
 
-from config import ALL_PITCHERS
+from strikefactor.config import ALL_PITCHERS
 
 
 class RandomScenarioGenerator:

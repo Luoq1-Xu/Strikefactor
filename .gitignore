@@ -70,3 +70,7 @@ analysis_output/
 # User-local config
 settings.json
 key_bindings.json
+
+# Stale AI model backups (e.g. sasaki_ai.pkl.pre-fo-merge)
+*.pkl.pre-*
+

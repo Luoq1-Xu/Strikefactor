@@ -1,5 +1,6 @@
 import math
 
+
 def collision(circlex, circley, radius, rectmiddlex, rectmiddley, rectwidth, rectheight):
     """Check collision between circle and rectangle"""
     circleDistancex = abs(circlex - rectmiddlex)

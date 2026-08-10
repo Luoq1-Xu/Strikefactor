@@ -1,5 +1,5 @@
 {
-  "difficulty": "all_star",
+  "difficulty": "amateur",
   "umpire_sound": true,
   "master_volume": 1.0,
   "show_strikezone": true,
@@ -8,5 +8,6 @@
   "display_fps": 120,
   "engine_fps": 120,
   "abs_enabled": false,
-  "hud_mode": "broadcast"
+  "hud_mode": "broadcast",
+  "foul_animation_enabled": true
 }

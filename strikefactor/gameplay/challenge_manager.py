@@ -1,4 +1,4 @@
-from config import CHALLENGES_PER_SIDE
+from strikefactor.config import CHALLENGES_PER_SIDE
 
 
 class ChallengeManager:

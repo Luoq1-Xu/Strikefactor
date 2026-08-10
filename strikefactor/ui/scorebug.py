@@ -1,7 +1,8 @@
-import pygame
 import os
 
-from config import ABS_PINK
+import pygame
+
+from strikefactor.config import ABS_PINK
 
 
 class Scorebug:

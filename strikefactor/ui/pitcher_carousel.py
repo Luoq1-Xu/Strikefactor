@@ -9,9 +9,8 @@ handling and calls into these methods.
 
 import pygame
 
-from gameplay.gameday_manager import GameDayManager, ALL_PITCHERS
-from ui.scouting_panel import COLOR_GRAY
-
+from strikefactor.gameplay.gameday_manager import ALL_PITCHERS, GameDayManager
+from strikefactor.ui.scouting_panel import COLOR_GRAY
 
 # Pitcher handedness is encoded only in sprite paths (e.g. ".../sale/LEFTY"),
 # so keep a small static map here rather than reaching into each pitcher class.

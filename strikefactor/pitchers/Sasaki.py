@@ -1,6 +1,8 @@
-from .pitcher import Pitcher
 import random
+
 import pygame
+
+from .pitcher import Pitcher
 
 
 class Sasaki(Pitcher):
@@ -54,9 +56,9 @@ class Sasaki(Pitcher):
             self.draw(self.screen, 14, -9, 12)
 
     def FF(self, simulation_func):
-        speed_mph = random.gauss(97.1, 0.8)
+        speed_mph = random.gauss(97.8, 0.8)
         pfx_x = random.gauss(7.0, 1.0)
-        pfx_z = random.gauss(16.0, 1.0)
+        pfx_z = random.gauss(16.1, 1.0)
         target_x, target_y = self.get_pitch_target('FF')
         simulation_func(self.release_point, 'rokisasaki', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FF')
 
@@ -65,14 +67,14 @@ class Sasaki(Pitcher):
         # real pitch with near-identical shapes, which split usage two ways and
         # looked identical out of the hand. Sits at the harder end of the pair
         # with slightly tighter break.
-        speed_mph = random.gauss(91.0, 1.0)
+        speed_mph = random.gauss(90.2, 1.0)
         pfx_x = random.gauss(8.0, 1.1)
-        pfx_z = random.gauss(-0.4, 0.9)
+        pfx_z = random.gauss(1.2, 1.0)
         target_x, target_y = self.get_pitch_target('FS')
         simulation_func(self.release_point, 'rokisasaki', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FS')
 
     def SL(self, simulation_func):
-        speed_mph = random.gauss(86.0, 1.0)
+        speed_mph = random.gauss(86.6, 1.0)
         pfx_x = random.gauss(-1.0, 1.0)
         pfx_z = random.gauss(-2.0, 1.0)
         target_x, target_y = self.get_pitch_target('SL')

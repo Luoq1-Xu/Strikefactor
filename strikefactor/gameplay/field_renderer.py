@@ -1,12 +1,13 @@
-import pygame
-import pygame.gfxdraw
 import colorsys
 import json
 import os
 import shutil
 from datetime import datetime
-from utils.io import atomic_write_json
 
+import pygame
+import pygame.gfxdraw
+
+from strikefactor.utils.io import atomic_write_json
 
 # Bucket key sentinel used until the Game tells us which (mode, difficulty)
 # bucket is active. Pitches recorded under this key indicate the bucket
@@ -73,9 +74,6 @@ class FieldRenderer:
         # The bucket that record_* writes into. Game.set_active_bucket(mode,
         # difficulty) flips this when the user enters a new (mode, difficulty).
         self._active_key = DEFAULT_BUCKET_KEY
-        # Optional rendering override: None = active bucket, "all" = sum of
-        # all buckets, "{mode}|{difficulty}" = a specific bucket.
-        self._view_override_key = None
 
         # Initialize the default bucket and bind instance attrs as live
         # references so existing record_* code mutates the bucket directly.
@@ -134,45 +132,11 @@ class FieldRenderer:
         self._active_key = new_key
         self._bind_instance_to_active()
 
-    def get_active_bucket_key(self) -> str:
-        return self._active_key
-
-    def list_buckets(self) -> list:
-        """Return the keys of all known buckets."""
-        return list(self._buckets.keys())
-
-    def set_view_override(self, key_or_mode: str = None, difficulty: str = None):
-        """Set the bucket that the heatmap renders.
-
-        - None: render the active bucket (default).
-        - "all": render the sum across all buckets.
-        - "{mode}|{difficulty}" or (mode, difficulty): render that bucket.
-        """
-        if key_or_mode is None:
-            self._view_override_key = None
-            return
-        if difficulty is not None:
-            self._view_override_key = self._key(key_or_mode, difficulty)
-            return
-        self._view_override_key = key_or_mode  # may be "all" or a key string
-
     def _render_view(self) -> dict:
         """Return the bucket dict that the heatmap should display."""
-        if self._view_override_key is None:
-            # Sync ints into the active bucket so the renderer sees current totals.
-            self._sync_ints_to_bucket()
-            return self._buckets[self._active_key]
-        if self._view_override_key == "all":
-            combined = _fresh_bucket()
-            self._sync_ints_to_bucket()
-            for b in self._buckets.values():
-                for i in range(9):
-                    combined['heatmap_data'][i] += b['heatmap_data'][i]
-                    combined['heatmap_attempts'][i] += b['heatmap_attempts'][i]
-                for f in self.BUCKET_INT_FIELDS:
-                    combined[f] += b.get(f, 0)
-            return combined
-        return self._buckets.get(self._view_override_key, _fresh_bucket())
+        # Sync ints into the active bucket so the renderer sees current totals.
+        self._sync_ints_to_bucket()
+        return self._buckets[self._active_key]
 
     # ----------------- Drawing -----------------
 
@@ -533,9 +497,7 @@ class FieldRenderer:
 
     def _heatmap_label(self) -> str:
         """Human-readable bucket label for the heatmap header."""
-        if self._view_override_key == "all":
-            return "ALL"
-        key = self._view_override_key or self._active_key
+        key = self._active_key
         if "|" in key:
             mode, diff = key.split("|", 1)
             return f"{mode.upper()} / {diff.upper()}"

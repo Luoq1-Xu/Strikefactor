@@ -4,8 +4,7 @@ import numpy as np
 from matplotlib.gridspec import GridSpec
 
 from .. import metrics, theme
-from ..render_mpl import (empty_figure, figure_title, note, plt, save,
-                          styled_table)
+from ..render_mpl import empty_figure, figure_title, note, plt, save, styled_table
 
 
 def outcomes(ctx):

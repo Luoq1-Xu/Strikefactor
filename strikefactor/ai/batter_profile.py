@@ -5,7 +5,7 @@ Records swing decisions by zone quadrant, pitch type, and count to help
 the AI exploit patterns in the player's behavior.
 """
 
-import config
+from strikefactor import config
 
 
 class BatterProfile:

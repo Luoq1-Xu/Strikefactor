@@ -1,8 +1,10 @@
 import random
 from dataclasses import dataclass
-from utils.pitch_physics import DEFAULT_CAMERA
+
+from strikefactor import config
+from strikefactor.utils.pitch_physics import DEFAULT_CAMERA
+
 from .pitch_locations import get_archetypes
-import config
 
 
 @dataclass
@@ -249,9 +251,6 @@ class Pitcher:
     def update_basic_stats(self, input_dict):
         for key in input_dict:
             self.basic_stats[key] += input_dict[key]
-
-    def get_basic_stats(self):
-        return self.basic_stats
 
     def draw_pitcher(self, start_time, current_time):
         return

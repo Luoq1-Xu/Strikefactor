@@ -1,5 +1,7 @@
 import pygame
-from config import get_path, resource_path
+
+from strikefactor.config import get_path, resource_path
+
 
 class Batter:
     def __init__(self, screen):

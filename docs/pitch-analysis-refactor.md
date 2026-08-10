@@ -66,6 +66,13 @@ Dataset-wide impact: Whiff% 32.3% → 55.2%, CSW% 38.7% → 53.6%.
 
 ### 2.2 `POP_UP` missing from every outcome group
 
+> **Naming note (schema v5, later):** this outcome is now recorded as `POP UP`,
+> matching `HOME RUN`. `PitchDB._migrate` rewrote the existing rows, so the
+> names below are historical — current code matches the spaced form. The
+> trajectory-shape enum in `hit_animation.py` still uses `POP_UP`; it is a
+> different namespace.
+
+
 86 terminal at-bats (verified against `at_bats.final_outcome`) are absent from
 `TERMINAL_OUTCOMES_TUPLE`, `TERMINAL_OUTCOMES_SQL`, `OUT_OUTCOMES`,
 `IN_PLAY_OUTCOMES`, and fig4's `outcome_order`. They silently disappear from

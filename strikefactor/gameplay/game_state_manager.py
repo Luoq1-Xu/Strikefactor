@@ -4,11 +4,22 @@ Manages state transitions and coordinates between different game states.
 """
 
 from typing import Dict, Optional
+
 from .game_states import (
-    GameState, ModeSelectState, MenuState, GameplayState, SummaryState,
-    VisualizationState, ViewPitchesState, InningEndState, SandboxMenuState,
-    SandboxGameplayState, GameDayState, GameDayTransitionState,
-    GameDayResumeState, GameDayHistoryState
+    GameDayHistoryState,
+    GameDayResumeState,
+    GameDayState,
+    GameDayTransitionState,
+    GameplayState,
+    GameState,
+    InningEndState,
+    MenuState,
+    ModeSelectState,
+    SandboxGameplayState,
+    SandboxMenuState,
+    SummaryState,
+    ViewPitchesState,
+    VisualizationState,
 )
 
 
@@ -61,10 +72,6 @@ class GameStateManager:
         """Get the current active state."""
         return self.current_state
         
-    def get_current_state_name(self) -> str:
-        """Get the name of the current active state."""
-        return self.current_state_name
-        
     def update(self, time_delta: float):
         """Update the current state."""
         if self.current_state:
@@ -87,7 +94,7 @@ class GameStateManager:
             self.change_state('menu')
         elif menu_state_value == 'mode_select':
             self.change_state('mode_select')
-        elif menu_state_value == 'sandbox':
+        elif menu_state_value in ('sandbox', 'sandbox_menu'):
             self.change_state('sandbox_menu')
         elif menu_state_value == 100:
             self.change_state('summary')

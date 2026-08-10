@@ -1,8 +1,10 @@
 import json
 import os
 from enum import Enum
-from config import get_path
-from utils.io import atomic_write_json
+
+from strikefactor.config import get_path
+from strikefactor.utils.io import atomic_write_json
+
 
 class DifficultyLevel(Enum):
     ROOKIE = "rookie"
@@ -30,6 +32,7 @@ class SettingsManager:
             "display_fps": 60,           # Options: 60, 120
             "engine_fps": 60,            # Options: 60, 120 (60 = original physics)
             "abs_enabled": True,         # MLB-style ball/strike challenge system
+            "foul_animation_enabled": True,  # Play the hit animation for foul balls
             "hud_mode": "legacy"         # "legacy" | "broadcast" | "minimal"
         }
         self.current_settings = self.load_settings()

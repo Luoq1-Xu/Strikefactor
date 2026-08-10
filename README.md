@@ -7,8 +7,11 @@ A pygame baseball batting simulator that puts you in the batter's box against el
 ### Setup
 ```bash
 pip install -r requirements.txt
-python strikefactor/main.py
+python -m strikefactor
 ```
+
+Run from the repository root. (`python strikefactor/main.py` no longer works —
+`strikefactor` is a proper package now, so it must be launched as a module.)
 
 ### How to Play
 1. **Choose your mode** - Select Arcade or Sandbox from the main menu
@@ -30,7 +33,7 @@ Face a single inning of continuous at-bats against your selected pitcher. Access
 Full 9-inning baseball simulation featuring:
 - Player batting in bottom innings
 - Simulated opponent at-bats in top innings with a 9-batter lineup
-- Starting pitcher (Yamamoto) with reliever substitutions (Sasaki, deGrom, McClanahan) based on pitch count, innings pitched, and runs allowed
+- Starting pitcher with reliever substitutions based on pitch count, innings pitched, and runs allowed
 - Pitcher fatigue system that increases hit probability from pitch 50 onward
 - Momentum bonuses for consecutive hits (up to +8%)
 - Clutch bonuses with runners in scoring position (+3%)

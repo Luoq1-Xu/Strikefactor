@@ -480,7 +480,7 @@ def render(ctx, sections=None, console=None, width=None):
         return console
 
     header(ctx, console)
-    from .figures import SECTIONS, SECTION_TITLES
+    from .figures import SECTION_TITLES, SECTIONS
     wanted = [s for s in SECTIONS if not sections or s in sections]
     for name in wanted:
         renderer = SECTION_RENDERERS.get(name)

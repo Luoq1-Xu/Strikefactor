@@ -5,8 +5,7 @@ from matplotlib.gridspec import GridSpec
 from matplotlib.patches import Ellipse
 
 from .. import metrics, theme
-from ..render_mpl import (diverging_colors, empty_figure, figure_title, note,
-                          plt, save)
+from ..render_mpl import diverging_colors, empty_figure, figure_title, note, plt, save
 
 
 def velocity(ctx):

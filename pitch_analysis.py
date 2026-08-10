@@ -21,7 +21,8 @@ import argparse
 import sys
 import time
 
-from analysis import data, figures as fig_registry, filters, report
+from analysis import data, filters, report
+from analysis import figures as fig_registry
 
 
 def parse_args(argv=None):

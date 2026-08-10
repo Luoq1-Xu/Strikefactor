@@ -18,9 +18,6 @@ import math
 # Gravity constant (ft/s^2)
 GRAVITY = 32.174
 
-# Mound distance (ft)
-MOUND_DISTANCE = 60.5
-
 # Realistic air drag deceleration (ft/s^2).
 # A 95 mph fastball typically arrives at ~85 mph, losing ~10 mph over ~0.4s.
 # decel ≈ (139.3 - 124.7) / 0.4 ≈ 30 ft/s²
@@ -48,13 +45,6 @@ class PitchTrajectory:
         y = self.y0 + self.vy0 * t + 0.5 * self.ay * t * t
         z = self.z0 + self.vz0 * t + 0.5 * self.az * t * t
         return x, y, z
-
-    def velocity_at(self, t):
-        """Get 3D velocity at time t (seconds)."""
-        vx = self.vx0 + self.ax * t
-        vy = self.vy0 + self.ay * t
-        vz = self.vz0 + self.az * t
-        return vx, vy, vz
 
     @property
     def travel_time(self):
@@ -208,13 +198,6 @@ class UmpireCamera:
         x_ft = (self.screen_center_x - screen_x) * depth_at_plate / self.scale_x
         z_ft = self.cam_height - (screen_y - self.screen_center_y) * depth_at_plate / self.scale_y
         return x_ft, z_ft
-
-    def world_to_screen_at_plate(self, x_ft, z_ft):
-        """Convert real-world feet at plate to screen pixel coordinates."""
-        result = self.project(x_ft, 0.0, z_ft)
-        if result is None:
-            return 0.0, 0.0
-        return result[0], result[1]
 
 
 # Default camera calibrated to match existing strike zone:

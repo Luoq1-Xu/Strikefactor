@@ -12,12 +12,12 @@ say one game while the analysis still aggregates every pitch ever thrown, which
 is how a five-game career line appears for a career the history says never
 happened. Keep the two halves together.
 
-Run from the ``strikefactor/`` directory::
+Run from the repository root as a module::
 
-    python data/gameday_maintenance.py                     # archive + wipe
-    python data/gameday_maintenance.py --keep-latest       # wipe all but newest game
-    python data/gameday_maintenance.py --list              # list snapshots
-    python data/gameday_maintenance.py --restore 20260725_210000
+    python -m strikefactor.data.gameday_maintenance                  # archive + wipe
+    python -m strikefactor.data.gameday_maintenance --keep-latest    # wipe all but newest
+    python -m strikefactor.data.gameday_maintenance --list           # list snapshots
+    python -m strikefactor.data.gameday_maintenance --restore 20260725_210000
 """
 
 from __future__ import annotations
@@ -27,20 +27,11 @@ import json
 import os
 import shutil
 import sqlite3
-import sys
 from datetime import datetime
 
-# Running this file directly puts data/ on sys.path rather than the package root,
-# so the sibling packages it imports below (utils, gameplay) wouldn't resolve.
-_PACKAGE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _PACKAGE_ROOT not in sys.path:
-    sys.path.insert(0, _PACKAGE_ROOT)
-
-from utils.io import atomic_write_json
-
-from data import gameday_sessions
-from gameplay.gameday_manager import GameDayManager
-
+from strikefactor.data import gameday_sessions
+from strikefactor.gameplay.gameday_manager import GameDayManager
+from strikefactor.utils.io import atomic_write_json
 
 ARCHIVE_ROOT = os.path.join(os.path.dirname(__file__), 'gameday_archives')
 DB_PATH = os.path.join(os.path.dirname(__file__), 'strikefactor.db')
