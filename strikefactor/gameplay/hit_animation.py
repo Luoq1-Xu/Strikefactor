@@ -33,7 +33,12 @@ from dataclasses import dataclass
 import pygame
 
 from strikefactor.engine import contact_audio
-from strikefactor.gameplay import ball_flight, extra_bases, infield_timing
+from strikefactor.gameplay import (
+    ball_flight,
+    extra_bases,
+    ground_roll,
+    infield_timing,
+)
 
 HOME = (640, 670)
 
@@ -200,6 +205,22 @@ FLYOUT_CATCH_HOLD      =  500
 HIT_BASE_DURATION_MS = 3300
 HR_DURATION_MS = 5000
 
+# HR distance readout, measured from the landing (`duration_ms`). The
+# number is the payoff of the play, and showing it mid-flight answers
+# the one question the flight is asking — so it is held until the ball
+# is down, with a beat after that before it fades up. The ball has
+# already dropped out of sight behind the fence a frame or two earlier
+# (see `_ball_behind_wall`), so the reveal lands into an empty outfield
+# instead of competing with the ball for the eye.
+#
+# Pacing, not physics, so both are stated directly in ms — the same
+# footing as FLYOUT_CATCH_HOLD, and the units `_elapsed` is already in.
+# The delay is kept short on purpose: the outcome banner fires at
+# landing and the continue prompt with it, so a player who hits a key
+# the instant the banner appears can still outrun the reveal.
+HR_DISTANCE_REVEAL_DELAY_MS = 350
+HR_DISTANCE_FADE_MS         = 220
+
 # Fly-arc peak (px) for HOME RUN. HIT shapes derive their peak from
 # LINER_PEAK_RANGE / quality-scaled FLY peak / POPUP_PEAK_RANGE.
 HR_PEAK_H = 200
@@ -290,87 +311,54 @@ HIT_LANDING_FT = {
 # flight time and took triples from 8% of hits to 23% with the constants
 # untouched. A threshold on an animated duration is not a baseball fact.
 #
-# Rolling friction during the post-landing phase, in real ft/s². Uniform
-# across hit outcomes — once a baseball is on the grass, friction is a
-# property of the surface, not how the ball got there. Distance-to-stop
-# scales as v²/(2a), so harder hits naturally roll farther without any
-# per-outcome tuning.
+# Everything about what the ball does after it lands — how fast it is
+# going when it gets there, how it bounces, how far it rolls — now lives in
+# `gameplay/ground_roll.py`, in real feet and seconds. This file converts
+# it to screen motion once, in `_init_ball_on_ground`.
 #
-# Real grass rolls a baseball down at ~3–10 ft/s² (≈0.1–0.3g); this sits
-# at the top of that band, which keeps balls from routinely reaching the
-# wall while still letting one clearly roll for a second or two after the
-# bounces stop.
+# Six constants died to make that possible and are worth naming, because
+# every one of them was a physical quantity wearing a render unit:
 #
-# It was `ROLLING_DECEL_PX_MS2 = 0.000035` — px per *animated* ms², which
-# made stopping distance a function of presentation pacing. See
-# `_roll_decel_px_ms2` for what that cost.
-ROLLING_DECEL_FT_S2 = 16.0
-
-# Speed the ball starts its roll at, as a fraction of its *average* flight
-# speed. Liner skips through; grounder has been bleeding speed the whole
-# way; fly drops nearly vertically and loses most of its horizontal carry;
-# pop-up deadens hard. This is the only place shape affects post-landing
-# speed — once the ball is on the ground, friction is a property of the
-# grass, not the trajectory shape, so rolling decel is uniform across
-# shapes (see ROLLING_DECEL_FT_S2).
+#   SHAPE_LAND_FACTOR           landing speed as a fraction of the flight
+#                               average — 0.35 on a fly, which dropped the
+#                               ball from 78 ft/s to 27 ft/s in one frame.
+#                               A real fly ball lands at 52 ft/s, and it is
+#                               the same 52 ft/s whether it was struck at
+#                               75 mph or 108, because it is at terminal
+#                               velocity by then.
+#   ROLLING_DECEL_FT_S2 = 16.0  twice the high end of real grass. It had to
+#                               be, to stop a ball that arrived at a third
+#                               of its true speed.
+#   BOUNCE_INITIAL_DURATION_MS  a hop's air time as a fixed 620 *animated*
+#                               ms, independent of how hard the ball hit
+#                               the ground. A hop's duration is 2u/g.
+#   BOUNCE_COR / _HEIGHT_FRAC / a bounce schedule in pixels with rolling
+#   _HEIGHT_MAX_PX              friction running underneath it, so the ball
+#                               was braked by the grass while airborne.
+#   BOUNCE_HORIZONTAL_RETENTION one flat 4% per bounce, which cannot tell a
+#                               line drive skipping off the grass from a fly
+#                               ball being gripped by it. Nearly all the
+#                               horizontal loss is at the *first* contact
+#                               and its size is set by the descent angle.
 #
-# These are the designated calibration dial for roll distance, and they
-# were 1.00 / 0.92 / 0.80 / 0.55 — near-lossless, which is why the friction
-# constant had to run at ~50 ft/s², five times real grass, to stop the ball
-# at all. The two are interchangeable for stopping distance (v²/2a), so the
-# choice of which to bend is the interesting one: grass friction is a
-# measurable surface property and how much energy an arbitrary batted ball
-# leaves in its bounces is not, so the calibration belongs here and the
-# friction constant gets to stay near its real value. Same principle as
-# `infield_timing`'s release time being the dial there.
+# Together they produced the reported bug: a ball landed in the outfield,
+# lost half its speed instantly, took three cosmetic hops while friction
+# ate the rest, and stopped 14 ft (median, over 500 fly balls) from where
+# it touched down. `tests/test_ground_roll.py` fails if one comes back.
 #
-# Note these multiply the *average* flight speed, not the impact speed —
-# `_init_ball_on_ground` samples (hit_end - HOME) / duration_ms — so 0.35
-# on a grounder averaging 94 ft/s starts the roll at 33 ft/s, which is a
-# ball that has already taken its hops through the infield.
-SHAPE_LAND_FACTOR = {
-    "LINER":    0.45,
-    "GROUNDER": 0.35,
-    "FLY":      0.35,
-    "POP_UP":   0.25,
-}
+# Glove reach above the ground, in feet. A ball higher than this is over
+# the fielder, not in their glove — which never came up when the first hop
+# was a 3 px cosmetic bump, and matters now that a fly ball's first bounce
+# clears 7 ft.
+GLOVE_REACH_FT = 8.0
 
-# Post-landing bouncing — modeled as a sequence of parabolic hops with a
-# coefficient of restitution. Real baseballs on natural grass have vertical
-# COR ≈ 0.55 (so each bounce retains ~30% of height — h_{n+1} = COR² · h_n).
-# Air time scales with √h, so duration shrinks per bounce: T_{n+1} = COR · T_n.
-# We use a slightly higher COR than reality for game-feel — more visible
-# bounces — but the profile is otherwise the realistic decay (chest-high
-# first hop, then half, then a quarter, settling into a roll).
-BOUNCE_COR                 = 0.62
-BOUNCE_INITIAL_DURATION_MS = 620   # first hop's air time
-# Visibility cutoff for the bounce schedule. Set deliberately high (3 px ≈
-# 2 ft) so the ball bounces "at most a few times" — typically 2 hops on
-# liners/fly singles, 3 on triples — and then transitions to a clean roll.
-# Lower values produced 4–5 micro-bounces whose combined air-time gave
-# friction enough window to nuke the velocity before the ball could roll.
-BOUNCE_HEIGHT_THRESHOLD_PX = 3.0
-
-# Per-bounce horizontal velocity loss. Each time the ball completes a
-# bounce, ground friction during the impact removes a small fraction of
-# horizontal speed. Continuous friction (ROLLING_DECEL_PX_MS2) handles the slow
-# decay during air time and rolling; this captures the impulse-style loss
-# at each impact. 4% per bounce is on the low end of real grass-impact
-# friction, chosen so the ball still has meaningful momentum when it
-# settles into rolling — combined with the reduced bounce count, this
-# leaves a clear, visible roll phase after the hops stop.
-BOUNCE_HORIZONTAL_RETENTION = 0.96
-
-# Initial bounce height per shape, derived from the in-flight peak. A liner
-# skips with most of its energy — chest-high first hop. A fly comes down
-# nearly vertically and dampens hard against the grass. A pop-up plops.
-SHAPE_BOUNCE_HEIGHT_FRAC = {
-    "LINER":    0.65,
-    "GROUNDER": 0.55,
-    "FLY":      0.28,
-    "POP_UP":   0.15,
-}
-BOUNCE_HEIGHT_MAX_PX = 26   # cap so a tall fly doesn't moonshot the first hop
+# Resolution and horizon of the ball's forward forecast (`_forecast_ball`),
+# on the animated clock. 80 ms is finer than the ~30 ft a sprinting fielder
+# and a rolling ball close on each other in one sample, and 90 steps covers
+# 7.2 animated seconds — past the longest roll `ground_roll` produces, so
+# the search never runs out of path before it runs out of fielder.
+FORECAST_STEP_MS  = 80.0
+FORECAST_MAX_STEPS = 90
 
 # Wall containment. Landings clamp inside the wall arc so a deep gapper
 # doesn't visually start past it. Rolling balls clamp closer to the wall
@@ -378,6 +366,22 @@ BOUNCE_HEIGHT_MAX_PX = 26   # cap so a tall fly doesn't moonshot the first hop
 # restitution < 1 so the carom loses energy.
 LANDING_WALL_MARGIN_PX  = 25
 BALL_WALL_MARGIN_PX     = 8
+# The ball's margin in normalized-ellipse units — √((dx/a)² + (dy/b)²),
+# which is 1 on the wall — since that is the form the containment step
+# works in. Stated once because it is also the *boundary of the park*
+# for `_point_outside_wall`: a live ball is pulled back to exactly this
+# limit, so testing against it is what makes "out of the park" and "in
+# play at the foot of the fence" the same question asked twice with the
+# same answer, rather than two thresholds that can disagree by a pixel.
+BALL_WALL_LIMIT_NORM    = 1.0 - BALL_WALL_MARGIN_PX / min(WALL_SEMI_X,
+                                                          WALL_SEMI_Y)
+# Fielder containment lives with the fielder constants
+# (FIELDER_WALL_MARGIN_PX, below BODY_RADIUS_PX).
+#
+# Real fence height. A ball beyond the wall is hidden from a camera on
+# this side of it only while it is below the top of the fence — see
+# `_ball_behind_wall`.
+WALL_HEIGHT_FT          = 10.0
 # Coefficient of restitution for wall contact during the rolling phase.
 # Real ball-on-padded-wall COR is ~0.45–0.55; we run a bit under that
 # (0.45) so a screamer still loses meaningful energy on impact but
@@ -663,6 +667,26 @@ BODY_RADIUS_PX          = 8
 BODY_COLOR              = (220, 220, 220)
 GLOVE_COLOR             = (255, 200, 100)
 
+# How close to the fence a fielder may get, and the *only* thing that
+# stops them leaving the park: every target a defender is given is the
+# answer to a physical question — where the ball is, where it will land,
+# where it will come to rest — and a wall-candidate or HOME RUN
+# `_hit_end` is beyond the fence by construction. Nothing downstream of
+# that has any notion of a boundary, so an outfielder chasing one ran
+# straight through the wall into the black.
+#
+# Containment is applied at the mover (`_step_fielder`) and once more
+# over every fielder at the end of `update`, rather than at each of the
+# half-dozen places a target is set. The targets are allowed to be off
+# the field — a fielder running at a ball that leaves the park is what
+# a fielder does — it is only the body that isn't.
+#
+# WALL_FACE_HEIGHT_PX is the inward offset from the wall ellipse (which
+# is the *top* of the fence, the camera-far edge) down to where the wall
+# meets the grass, so it is what puts a fielder at the base of the
+# fence; the body radius keeps their whole marker on the field.
+FIELDER_WALL_MARGIN_PX  = WALL_FACE_HEIGHT_PX + BODY_RADIUS_PX
+
 # Ball sprite. Deliberately *not* to scale: a real baseball is ~0.24 ft
 # across against a fielder's ~2 ft of shoulder, which at this projection
 # would be a 2 px dot — invisible while moving, and the ball is the one
@@ -826,39 +850,117 @@ def _lerp(a, b, t):
     return (a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t)
 
 
-def _arc_fly(a, b, peak, t):
-    """Standard sin-shaped arc."""
-    t = max(0.0, min(1.0, t))
-    x, y = _lerp(a, b, t)
-    lift = peak * math.sin(math.pi * t)
-    return (x, y - lift)
+# ---- Flight deceleration ---------------------------------------------------
+#
+# A batted ball is slower when it reaches the grass than it was when it
+# left the bat, and `ground_roll` already says by how much. The flight did
+# not: horizontal motion was linear in time, so the ball crossed its whole
+# path at its *average* speed and then changed speed in a single frame at
+# the landing transition — down to 53% of it on a 90 mph grounder and to
+# 8% on a 45 mph roller, which is the ball visibly hitting a wall of
+# molasses the moment it reaches the outfield grass. Every shape had it
+# (0.61-0.95 across the airborne ones); the grounder is worst because its
+# whole path is the part where a ball is decelerating hardest.
+#
+# The fix is not a new model — it is the model that was already written
+# down. `ground_roll.grounder_landing_fraction` derives the end-of-path
+# speed by assuming a roughly uniform deceleration from v0 to v_end whose
+# time-average is the retention curve's `r * v0`; all that was missing was
+# for the animation to fly that profile instead of the average of it.
+# Velocity linear in time makes position quadratic, and parameterising on
+# `f` = landing speed / average speed gives the whole family at once:
+#
+#     p(u) = (2 - f) u - (1 - f) u²
+#
+# f = 1 is the old linear motion, f = 0 is a ball that dies exactly as it
+# arrives. It covers the same path in the same time as the linear one, so
+# `flight_time_s`, `duration_ms` and every whole-flight schedule built on
+# them are untouched; what changes is that the ball arrives travelling at
+# precisely the speed `_init_ball_on_ground` then hands to `ground_roll`.
+#
+# The implied contact speed, `(2 - f) * v_avg`, is the check that this is
+# physics and not an easing curve: on a grounder it comes out at the exit
+# velocity itself (v_avg = r·EV and v_end = (2r-1)·EV, so v0 = EV), and on
+# a 100 mph line drive at 145 ft/s against a horizontal component of 143.
 
 
-def _arc_liner(a, b, peak, t):
-    """Low fast arc with linear horizontal motion. Ease-out (1−(1−t)²) was
-    used here previously for a 'shot' feel, but it pulls horizontal velocity
-    to zero at landing — which read as the ball pausing before its
-    post-landing roll picked up. Linear t keeps the ball at constant pace
-    so the hand-off into ball-on-ground physics is seamless.
+def _decel_path_fraction(u, end_speed_ratio):
+    """Fraction of the path covered at time fraction `u`.
+
+    `end_speed_ratio` is the ball's speed at landing over its average
+    speed across the flight. Clamped into [0, 1]: above 1 would mean a
+    ball that speeds up on its way down, and below 0 one that goes
+    backwards.
+    """
+    u = max(0.0, min(1.0, u))
+    f = max(0.0, min(1.0, end_speed_ratio))
+    return (2.0 - f) * u - (1.0 - f) * u * u
+
+
+def _decel_time_fraction(s, end_speed_ratio):
+    """Inverse of `_decel_path_fraction` — when the ball reaches `s`.
+
+    The positive root of `(1-f)u² - (2-f)u + s = 0`. Needed wherever the
+    defense asks "when does the ball get *here*" about a point partway
+    down the path, which is `_path_intercept` on the two low shapes.
+    """
+    s = max(0.0, min(1.0, s))
+    f = max(0.0, min(1.0, end_speed_ratio))
+    a = 1.0 - f
+    if a < 1e-9:
+        return s
+    b = 2.0 - f
+    disc = max(0.0, b * b - 4.0 * a * s)
+    return max(0.0, min(1.0, (b - math.sqrt(disc)) / (2.0 * a)))
+
+
+def _arc_fly(a, b, peak, t, phase=None):
+    """Standard sin-shaped arc.
+
+    `t` places the ball along the path and `phase` drives the vertical
+    arc. They are the same number only when the flight is unretarded: the
+    apex is halfway through the *flight time*, which under a decelerating
+    horizontal is past the halfway point of the path.
     """
     t = max(0.0, min(1.0, t))
+    phase = t if phase is None else max(0.0, min(1.0, phase))
     x, y = _lerp(a, b, t)
-    lift = peak * math.sin(math.pi * t)
+    lift = peak * math.sin(math.pi * phase)
     return (x, y - lift)
 
 
-def _arc_grounder(a, b, peaks, t):
+def _arc_liner(a, b, peak, t, phase=None):
+    """Low fast arc. Ease-out (1−(1−t)²) was used here previously for a
+    'shot' feel, but it pulls horizontal velocity to zero at landing —
+    which read as the ball pausing before its post-landing roll picked up.
+    The pacing is no longer a feel choice at all: `_decel_path_fraction`
+    hands this the ball's real position and it arrives at the speed
+    `ground_roll` is about to take it at.
+    """
+    t = max(0.0, min(1.0, t))
+    phase = t if phase is None else max(0.0, min(1.0, phase))
+    x, y = _lerp(a, b, t)
+    lift = peak * math.sin(math.pi * phase)
+    return (x, y - lift)
+
+
+def _arc_grounder(a, b, peaks, t, phase=None):
     """Variable-bounce arc; one parabolic hop per entry in `peaks`, with the
-    ball touching ground at every segment boundary. Splits the flight into
-    len(peaks) equal-duration segments — combined with linear x,y motion
-    from _lerp, each segment also covers an equal fraction of the path, so
-    bounces are evenly spaced along the trajectory.
+    ball touching ground at every segment boundary.
+
+    The hops are split evenly over `phase`, the flight *time*, not over
+    `t`, the path — so a decelerating grounder takes hops of equal
+    duration that cover progressively less ground, which is what a ball
+    losing speed does. Keying them to the path instead spends the same
+    hop count over a shrinking distance per unit time, and the last hop
+    of a dying roller becomes one long float through 58% of the flight.
     """
     t = max(0.0, min(1.0, t))
+    phase = t if phase is None else max(0.0, min(1.0, phase))
     x, y = _lerp(a, b, t)
     n = len(peaks)
-    bounce_idx = min(n - 1, int(t * n))
-    bounce_t = (t * n) % 1.0
+    bounce_idx = min(n - 1, int(phase * n))
+    bounce_t = (phase * n) % 1.0
     lift = peaks[bounce_idx] * math.sin(math.pi * bounce_t)
     return (x, y - lift)
 
@@ -932,6 +1034,26 @@ def _clamp_inside_wall(point, margin):
         return point
     s = limit / dist
     return (HOME[0] + dx * s, HOME[1] - dy_math * s)
+
+
+def _point_outside_wall(point):
+    """True when a point on the *ground* lies beyond the outfield wall.
+
+    The boundary is BALL_WALL_LIMIT_NORM — the exact line a live ball is
+    pulled back to by `_step_ball_on_ground` — so a ball that reached the
+    fence and is rattling around at its foot reads False here no matter
+    how hard it caromed. Anything that reads True got there by being
+    *aimed* past the wall: a home run, or the overshoot point of a
+    wall-candidate flight.
+
+    Home runs clear the fence by as little as a pixel of screen radius
+    (the carry distribution is dominated by wall-scrapers), so a test
+    with any slack in it would call half of them still in the park.
+    """
+    dx = point[0] - HOME[0]
+    dy_math = HOME[1] - point[1]
+    ellipse_d = math.hypot(dx / WALL_SEMI_X, dy_math / WALL_SEMI_Y)
+    return ellipse_d > BALL_WALL_LIMIT_NORM + 1e-9
 
 
 def _polar_point(angle, dist_px):
@@ -1009,7 +1131,8 @@ def _px_per_ft_at(angle):
     return 1.0 / ft_per_px
 
 
-def _pick_hit_landing(outcome, shape, quality=1.0, horizontal_inside=0.0, batter_handedness='R'):
+def _pick_hit_landing(outcome, shape, quality=1.0, horizontal_inside=0.0,
+                      batter_handedness='R', ev_mph=None):
     """Pick a landing point for the contact.
 
     For IN_PLAY (the unified ball-in-play outcome) the landing is sampled
@@ -1028,7 +1151,10 @@ def _pick_hit_landing(outcome, shape, quality=1.0, horizontal_inside=0.0, batter
     """
     if outcome == "IN_PLAY":
         dist_min, dist_max = IN_PLAY_LANDING_FT.get(shape, IN_PLAY_LANDING_FT["LINER"])
-        ev = contact_audio.exit_velocity_mph(quality)
+        # Passed in, not re-drawn: `exit_velocity_mph` jitters, so drawing
+        # it here would give this ball a different speed from the one its
+        # hang time and wall candidacy were computed against.
+        ev = ev_mph if ev_mph is not None else contact_audio.exit_velocity_mph(quality)
         # Depth comes from how hard the ball was hit, through the same
         # projectile identity that gives it its hang time — not from a
         # linear map on contact quality, whose real distribution sits at
@@ -1341,10 +1467,25 @@ class HitAnimation:
         self._fielded_at_ms = 0.0
 
         # Stateful ball-on-ground physics (SDT). Lazy-initialized at the
-        # landing transition by _init_ball_on_ground.
+        # landing transition by _init_ball_on_ground, which is also where
+        # `ground_roll`'s feet and seconds become screen motion.
         self._ball_pos = None
         self._ball_v = None
-        self._ball_decel = 0.0
+        self._ground_path = None
+        self._landing_path_cache = None
+        # Landing speed over average flight speed — the `f` of
+        # `_decel_path_fraction`. 1.0 is undecelerated motion, which is
+        # what the scripted flights (HOME RUN, fouls) keep.
+        self._flight_end_speed_ratio = 1.0
+        self._ball_px_per_ft = FT_TO_PX_X
+        self._bounces = []
+        self._bounces_end_ms = 0.0
+        self._bounces_completed = 0
+        # Per-frame cache for _forecast_ball.
+        self._forecast = None
+        self._forecast_at_ms = None
+        # Set only when nobody can catch the ball — see _pick_retrieval_role.
+        self._retrieval_point = None
 
         # Set true the first time the rolling ball reflects off the elliptical
         # outfield wall (see _step_ball_on_ground). Drives an XBH override in
@@ -1352,6 +1493,9 @@ class HitAnimation:
         # definition, past every OF, so it should never resolve as a single
         # regardless of how quickly the ricochet brings it back to a fielder.
         self._wall_hit = False
+        # Struck the wall in the air, as opposed to rolling into it. Only
+        # this one forces an extra base — see `_resolve_extra_bases`.
+        self._wall_hit_in_flight = False
 
         # Build the 9-fielder roster. Random sway phases + reaction delays so
         # fielders don't move in lockstep — the team reads the ball with
@@ -1383,6 +1527,17 @@ class HitAnimation:
         # canonical source — vertical_offset is only a fallback for
         # legacy callers.
         self.shape = _pick_shape(outcome, vertical_offset, batted_ball_type)
+
+        # This batted ball's exit velocity. Drawn once, here, because
+        # `contact_audio.exit_velocity_mph` carries jitter — identical
+        # swings must not sound mechanically identical — so calling it per
+        # use gives one ball several different speeds. Carry, hang time,
+        # whether it reaches the wall and the infield verdict were being
+        # computed from four independent draws, which is the same "two
+        # models of one thing" mistake as the two clocks, at a smaller
+        # scale: a ball could be given a 380 ft carry and the hang time of
+        # a 340 ft one.
+        self.exit_velocity_mph = contact_audio.exit_velocity_mph(quality)
 
         # Whether the pitcher can handle a ball hit back at them on this
         # play. Rolled once, up front, rather than per-frame: a coin
@@ -1486,8 +1641,8 @@ class HitAnimation:
         # the distance the same ball would have been given anyway.
         self._is_wall_candidate = False
         if outcome == "IN_PLAY" and self.shape in ("FLY", "LINER"):
-            ev = contact_audio.exit_velocity_mph(self.quality)
-            carry_ft = ball_flight.carry_distance_ft(self.shape, ev)
+            carry_ft = ball_flight.carry_distance_ft(
+                self.shape, self.exit_velocity_mph)
             # Measured toward centre field, the shallowest part of the
             # park; the angle isn't chosen yet, and picking the deepest
             # reference keeps this from over-selecting balls that only
@@ -1542,6 +1697,7 @@ class HitAnimation:
                 outcome, self.shape, self.quality,
                 horizontal_inside=self.horizontal_inside,
                 batter_handedness=handedness,
+                ev_mph=self.exit_velocity_mph,
             )
 
         # Peak chosen per shape. HOME RUN uses its scripted peak; HIT uses
@@ -1591,8 +1747,7 @@ class HitAnimation:
             landing_ft = _ft_dist(self._hit_end[0] - HOME[0],
                                   self._hit_end[1] - HOME[1])
             self.flight_time_s = ball_flight.flight_time_s(
-                self.shape, contact_audio.exit_velocity_mph(self.quality),
-                landing_ft)
+                self.shape, self.exit_velocity_mph, landing_ft)
             self.duration_ms = int(self._anim_ms(self.flight_time_s))
 
         # Fielder reaction delays are stored in real seconds (they are
@@ -1623,6 +1778,13 @@ class HitAnimation:
             self.fielders[primary].target = self._primary_stop
             self._lean_excluded = {primary}
             return
+
+        # How much slower the ball is at the end of its flight than the
+        # average it is about to be flown at. Fixed here, before anything
+        # asks where the ball is or when it gets there — `_path_intercept`
+        # runs inside `_assign_in_play_targets` below and has to be timing
+        # the same flight the viewer sees.
+        self._flight_end_speed_ratio = self._landing_speed_ratio()
 
         # Route every plausible defender to their best intercept point on
         # the ball's path. The fielder whose intercept timing best matches
@@ -1931,7 +2093,12 @@ class HitAnimation:
             ball_arrives = self.duration_ms
         else:
             intercept = (HOME[0] + t_proj * px, HOME[1] + t_proj * py)
-            ball_arrives = t_proj * self.duration_ms
+            # Not `t_proj * duration_ms`: the ball decelerates, so it is
+            # ahead of the linear schedule everywhere in between and only
+            # meets it at the two ends. Timing an infielder against the
+            # linear one would have them break on a ball that is already
+            # past them.
+            ball_arrives = self._flight_time_fraction(t_proj) * self.duration_ms
 
         f_dist_ft = _ft_dist(intercept[0] - home[0], intercept[1] - home[1])
         f_travel = self._travel_ms(fielder, home, intercept)
@@ -2009,13 +2176,19 @@ class HitAnimation:
         # initial scramble has a sensible lead.
         pool_sorted = sorted(pool, key=score)
         makeable = [r for r in pool_sorted if intercepts[r]["can_make"]]
+        retrieval_point = None
         if makeable:
             self._primary_role = min(
                 makeable,
                 key=lambda r: (intercepts[r]["fielder_dist_ft"], score(r)),
             )
         else:
-            self._primary_role = self._closest_role_in(pool, self._hit_end)
+            self._primary_role, retrieval_point = self._pick_retrieval_role(pool)
+        # Where the primary is actually going, when it isn't the landing
+        # spot. Read back by the in-flight motion block, which would
+        # otherwise overwrite the target with the landing point on every
+        # frame and undo the pick above.
+        self._retrieval_point = retrieval_point
         primary = self.fielders[self._primary_role]
         pri_int = intercepts[self._primary_role]
 
@@ -2024,10 +2197,11 @@ class HitAnimation:
         # This is what the cover man's deadline is measured from.
         self._fielded_at_ms = score(self._primary_role)
 
-        # Clamped, because the no-makeable-fielder fallback above picks
-        # on raw distance-to-landing and would otherwise send a fielder
-        # sprinting to a point their own range cap just disqualified.
-        primary.target = self._range_limited_point(primary, pri_int["point"])
+        # Clamped, because the no-makeable-fielder fallback above can pick
+        # a fielder whose own range cap disqualifies the point they were
+        # picked for.
+        primary.target = self._range_limited_point(
+            primary, retrieval_point or pri_int["point"])
         primary.decel_radius_px = SECURE_RADIUS_PX
         self._primary_start = primary.home_pos
         self._primary_full_speed = primary.max_speed
@@ -2053,6 +2227,30 @@ class HitAnimation:
                                     f_dist_ft / budget_s)
 
         excluded = {self._primary_role}
+
+        # The outfielder whose part of the field it is runs the ball down
+        # from the first frame, whether or not anyone in front of them has
+        # a play on it. That is what an outfielder does, and leaving it out
+        # was the largest remaining hole in the defense once the ball
+        # stopped dying where it landed.
+        #
+        # What it looked like: a line drive down the right-field line, the
+        # 1B picked as primary because they genuinely can reach the path,
+        # tracking it to within 10 ft at 100 ft out — and missing. By then
+        # the ball had 130 ft of roll left and the right fielder, who had
+        # moved 15 ft in two and a half seconds, was 92 ft behind it and
+        # never got there. The ball reached the wall on 23% of line drives
+        # and doubles ran at 46% of hits against a real 25%.
+        #
+        # `_pick_retrieval_role` is the same path search the primary
+        # fallback uses, restricted to the three outfielders, so the answer
+        # is "where do I meet this ball", not "where does it land".
+        backup_role, backup_point = self._pick_retrieval_role(OUTFIELD_ROLES)
+        if backup_role is not None and backup_role != self._primary_role:
+            backup = self.fielders[backup_role]
+            backup.target = backup_point
+            backup.decel_radius_px = SECURE_RADIUS_PX
+            excluded.add(backup_role)
 
         # Grounders: somebody covers the bag from the first frame — the 1B
         # normally, the pitcher/2B when the 1B is the one fielding it.
@@ -2115,6 +2313,59 @@ class HitAnimation:
                 excluded.add(cutoff)
 
         self._lean_excluded = excluded
+
+    def _pick_retrieval_role(self, pool):
+        """Nobody can catch it, so the play is a retrieval: whoever gets to
+        the ball first once it is on the ground. Returns `(role, point)`.
+
+        The fallback this replaced picked whoever's *home* was nearest the
+        landing spot, which is only the same question when the ball stops
+        where it lands. It does not: a line drive coming down at 226 ft is
+        still doing 71 ft/s and has 130 ft to go. So the ball went to the
+        second baseman, who chased it into right field while the right
+        fielder — standing 76 ft beyond the landing point, with the ball
+        rolling straight at them — held their ground and watched. The ball
+        then reached the wall on 23% of line drives.
+
+        Searching the ball's own path fixes it without a special case for
+        who plays where: a fielder beyond the landing point wins because
+        the ball comes to them, one in front of it loses because it is
+        running away, and the flight time counts toward everybody's
+        journey because they are all already moving.
+        """
+        path = self._landing_ground_path()
+        px_per_ft = self._landing_px_per_ft()
+        dx = self._hit_end[0] - HOME[0]
+        dy = self._hit_end[1] - HOME[1]
+        norm = math.hypot(dx, dy)
+        ux, uy = (dx / norm, dy / norm) if norm > 1e-9 else (0.0, -1.0)
+        flight_ms = self._anim_ms(self.flight_time_s)
+        # One path, walked once — every fielder is racing the same ball.
+        route = [(flight_ms + self._anim_ms(t_s),
+                  _clamp_inside_wall(
+                      (self._hit_end[0] + ux * dist_ft * px_per_ft,
+                       self._hit_end[1] + uy * dist_ft * px_per_ft),
+                      BALL_WALL_MARGIN_PX))
+                 for t_s, dist_ft in ground_roll.trajectory(path)]
+
+        best_role, best_point, best_ms = None, None, None
+        for role in pool:
+            fielder = self.fielders[role]
+            for arrives_ms, point in route:
+                if self._eta_to_point(fielder, point) <= arrives_ms:
+                    if best_ms is None or arrives_ms < best_ms:
+                        best_role, best_point, best_ms = role, point, arrives_ms
+                    break
+        if best_role is None:
+            # Nobody beats it anywhere on its path — a ball to the wall.
+            # Closest home to where it comes to rest, so the scramble at
+            # least starts in the right direction.
+            rest = _clamp_inside_wall(
+                (self._hit_end[0] + ux * path.total_distance_ft * px_per_ft,
+                 self._hit_end[1] + uy * path.total_distance_ft * px_per_ft),
+                BALL_WALL_MARGIN_PX)
+            return self._closest_role_in(pool, rest), rest
+        return best_role, best_point
 
     def _eta_to_point(self, fielder, point, reaction_ms=None):
         """Approximate ms for `fielder` to reach `point` from where they
@@ -2425,7 +2676,13 @@ class HitAnimation:
             fielder.current_speed_frac = max(0.0, fielder.current_speed_frac - frac_step)
             return
 
-        tx, ty = fielder.target
+        # Run at the target, but never past the fence. Clamping here as
+        # well as after the step matters: a target beyond the wall left
+        # the fielder pinned against the clamp with `dist` still large,
+        # so they never stopped sprinting and jittered at the wall. Aimed
+        # at the containment point instead, they arrive and settle like
+        # any other arrival.
+        tx, ty = _clamp_inside_wall(fielder.target, FIELDER_WALL_MARGIN_PX)
         dx = tx - fielder.pos[0]
         dy = ty - fielder.pos[1]
         dist = math.hypot(dx, dy)
@@ -2465,31 +2722,64 @@ class HitAnimation:
             fielder.pos[0] += dx / dist * step
             fielder.pos[1] += dy / dist * step
 
+    def _ball_behind_wall(self):
+        """True when the wall is between the ball and the camera.
+
+        Two conditions, and both are needed. The ball has to be out of
+        the park — asked of its *shadow*, the ground point — and it has
+        to be below the top of the fence, or we would be hiding a ball
+        that is sailing over it. That second term is why a home run
+        stays on screen for its whole arc and then drops out of sight in
+        its last few feet, instead of blinking out at the apex the
+        moment it crossed the fence line.
+
+        Without this the HOME RUN branch of `_update_hit` parked the
+        ball at its landing point and left it sitting in the black
+        beyond the wall for the remaining seconds of the animation.
+
+        The lift is read off the rendered pair — the ball is drawn at
+        `shadow_y - lift` — and converted with FT_TO_PX_Y, the same
+        vertical scale the glove-reach test uses.
+        """
+        if not _point_outside_wall(self._ball_shadow):
+            return False
+        lift_px = self._ball_shadow[1] - self._ball[1]
+        return lift_px < WALL_HEIGHT_FT * FT_TO_PX_Y
+
+    def _contain_fielders(self):
+        """Keep every defender inside the outfield wall.
+
+        See FIELDER_WALL_MARGIN_PX. Cheap enough to run unconditionally
+        over all nine every frame, and it is a no-op for the eight of
+        them who are nowhere near the fence.
+        """
+        for f in self.fielders.values():
+            cx, cy = _clamp_inside_wall(f.pos, FIELDER_WALL_MARGIN_PX)
+            f.pos[0] = cx
+            f.pos[1] = cy
+
     # ---- Ball on ground -------------------------------------------------
 
     def _init_ball_on_ground(self):
         """Initialize stateful ball physics at the landing transition.
 
-        Horizontal motion is linear in all four arc shapes (the sin-based
-        lift only offsets the rendered y), so the ground-frame velocity at
-        landing is exactly (hit_end − HOME) / duration_ms. Trimmed by
-        SHAPE_LAND_FACTOR for impact energy loss. Sampling from the
-        rendered arc (with lift) instead leaks the arc's vertical-lift
-        component into _ball_v[1] — for a sharp grounder, lift at t=0.97
-        is ~3 px, contributing a spurious ~0.04 px/ms downward y-velocity
-        that pushes the ball deeper post-landing. Linear sampling avoids
-        the artifact entirely.
+        `ground_roll` owns the physics and states it in feet and seconds;
+        this is the single place it becomes screen motion. The *direction*
+        comes from the flight — horizontal motion is linear in all four arc
+        shapes, so the ground-frame bearing at landing is exactly
+        (hit_end − HOME); sampling the rendered arc instead would leak the
+        sin lift into the y component and push the ball deeper. The
+        *magnitude* is not taken from the flight either: a batted ball
+        lands at its own speed, near terminal velocity, and how fast the
+        animation happened to fly it has no claim on what that is.
+
+        It is no longer a change of speed, though. The flight decelerates
+        onto exactly this number — `_landing_speed_ratio` reads it off the
+        same cached `GroundPath` — so this transition is now continuous in
+        velocity as well as position, and the ball stops appearing to hit
+        a wall of molasses where the model changes hands.
         """
         self._ball_pos = [self._hit_end[0], self._hit_end[1]]
-        # Friction is a real deceleration in ft/s²; the animated clock and
-        # the projection are applied here, once. Left as a raw px-per-
-        # animated-ms² constant it was a hidden function of pacing —
-        # distance-to-stop goes as v²/2a, so unifying the clock (which
-        # raised every ball's px/ms velocity) silently multiplied roll
-        # distance by about 1.7 and sent 18.5% of line-drive hits rolling
-        # to the wall, where each one is forced to a double.
-        self._ball_decel = self._roll_decel_px_ms2(
-            self._hit_end[0] - HOME[0], self._hit_end[1] - HOME[1])
 
         # The flight is over, so nobody is pulled up any more — it is a
         # ranging state that only exists while the ball is in the air. This
@@ -2502,43 +2792,112 @@ class HitAnimation:
                 f.pulled_up = False
                 f.max_speed = f.base_max_speed
 
-        factor = SHAPE_LAND_FACTOR.get(self.shape, 1.0)
-        self._ball_v = [
-            (self._hit_end[0] - HOME[0]) / self.duration_ms * factor,
-            (self._hit_end[1] - HOME[1]) / self.duration_ms * factor,
-        ]
+        dx = self._hit_end[0] - HOME[0]
+        dy = self._hit_end[1] - HOME[1]
+        dist_px = math.hypot(dx, dy)
+        self._ball_px_per_ft = self._landing_px_per_ft()
+        self._ground_path = self._landing_ground_path()
 
-        # Precompute a bounce schedule: a list of (start_ms, duration_ms, height_px)
-        # entries running from landing forward. Each bounce retains COR² of the
-        # previous height and COR of the previous duration (since t_air ∝ √h).
-        # Generation stops when height drops below the visibility threshold.
-        if self.shape == "GROUNDER" and self._grounder_peaks:
-            base_peak = max(self._grounder_peaks)
+        speed_px_ms = self._fts_to_px_ms(self._ground_path.speed_fts)
+        if dist_px > 1e-9:
+            self._ball_v = [dx / dist_px * speed_px_ms,
+                            dy / dist_px * speed_px_ms]
         else:
-            base_peak = self._hit_peak
-        h = base_peak * SHAPE_BOUNCE_HEIGHT_FRAC.get(self.shape, 0.4)
-        h = min(h, BOUNCE_HEIGHT_MAX_PX)
+            self._ball_v = [0.0, 0.0]
 
+        # Hop schedule on the animated clock: (start_ms, duration_ms,
+        # height_px, retention). The retention is applied to the velocity
+        # at the *start* of its hop — that is the ground contact — and then
+        # the ball is left alone until the next one, because a ball in the
+        # air is not being braked by grass.
         self._bounces = []
         t_start = 0.0
-        T = float(BOUNCE_INITIAL_DURATION_MS)
-        # Grounders skip the post-flight bounce schedule. Their bounces are
-        # already modeled in-flight (see _grounder_peaks / _arc_grounder),
-        # so layering a fresh schedule on top re-bounces a ball that should
-        # be settling into a roll — and the long bounce window combined with
-        # friction + per-bounce loss kills the ball's velocity before it
-        # gets through the infield. Pure rolling matches the real motion of
-        # a grounder that's already taken its hops.
-        if self.shape != "GROUNDER":
-            while h > BOUNCE_HEIGHT_THRESHOLD_PX:
-                self._bounces.append((t_start, T, h))
-                t_start += T
-                h *= BOUNCE_COR * BOUNCE_COR
-                T *= BOUNCE_COR
+        for hop in self._ground_path.hops:
+            dur = self._anim_ms(hop.duration_s)
+            self._bounces.append(
+                (t_start, dur, hop.height_ft * FT_TO_PX_Y, hop.retention))
+            t_start += dur
         self._bounces_end_ms = t_start  # ball is rolling after this
-        # Bounces fully completed so far — used to apply the per-bounce
-        # horizontal-velocity impulse exactly once per impact.
+        # Impacts already applied — the schedule has one per hop plus the
+        # contact that ends the hopping, so this runs to len(hops) + 1.
         self._bounces_completed = 0
+
+    def _landing_px_per_ft(self):
+        """Pixels per foot along the ball's bearing.
+
+        The projection is anisotropic, so this is the only honest way to
+        carry a real speed or a real distance onto the screen — same
+        reasoning as `_ft_dist` and `_px_per_ft_at`.
+        """
+        dx = self._hit_end[0] - HOME[0]
+        dy = self._hit_end[1] - HOME[1]
+        dist_ft = _ft_dist(dx, dy)
+        if dist_ft <= 1e-9:
+            return FT_TO_PX_X
+        return math.hypot(dx, dy) / dist_ft
+
+    def _landing_ground_path(self):
+        """The ball's post-landing physics, from `ground_roll`.
+
+        Deterministic in the shape, the exit velocity and where the ball
+        comes down, all of which are fixed at setup — so the defense can
+        ask this before the ball has landed, which is what
+        `_pick_retrieval_role` needs to route the right fielder at it.
+        Cached for the same reason: it is one ball, and the routing pass
+        and the landing transition have to be looking at the same one.
+        """
+        if self._landing_path_cache is not None:
+            return self._landing_path_cache
+        dist_ft = _ft_dist(self._hit_end[0] - HOME[0], self._hit_end[1] - HOME[1])
+        ev = self.exit_velocity_mph
+        if self.shape == "GROUNDER":
+            # A grounder has no landing transition — it has been on the
+            # grass the whole way and its hops are already modelled in
+            # flight (_grounder_peaks / _arc_grounder). What it has is an
+            # end-of-path speed, taken from the same retention curve the
+            # infield verdict is computed against, and no rebound to give
+            # it a fresh hop.
+            average = dist_ft / max(1e-6, self.flight_time_s)
+            path = ground_roll.ground_path(
+                self.shape, average * ground_roll.grounder_landing_fraction(ev),
+                descent_deg=0.0)
+        else:
+            path = ground_roll.ground_path(
+                self.shape,
+                ground_roll.landing_speed_fts(
+                    self.shape, ev, dist_ft, self.flight_time_s),
+                ev_mph=ev)
+        self._landing_path_cache = path
+        return path
+
+    def _landing_speed_ratio(self):
+        """The ball's landing speed as a fraction of its average, or 1.0.
+
+        The single number the flight's deceleration is parameterised on —
+        see the note above `_decel_path_fraction`. Taken from the same
+        cached `GroundPath` that `_init_ball_on_ground` will start the
+        roll from, which is what makes the two continuous: whatever speed
+        the ball is handed to `ground_roll` at is the speed it was already
+        travelling on the last frame of the flight.
+
+        1.0 for the scripted flights, which have no landing to be
+        continuous with — a HOME RUN never touches the grass in view.
+        """
+        if not self._needs_secure or self.flight_time_s <= 0:
+            return 1.0
+        dist_ft = _ft_dist(self._hit_end[0] - HOME[0], self._hit_end[1] - HOME[1])
+        average = dist_ft / self.flight_time_s
+        if average <= 1e-6:
+            return 1.0
+        return max(0.0, min(1.0, self._landing_ground_path().speed_fts / average))
+
+    def _flight_path_fraction(self, u):
+        """Where along the path the ball is at time fraction `u`."""
+        return _decel_path_fraction(u, self._flight_end_speed_ratio)
+
+    def _flight_time_fraction(self, s):
+        """When the ball reaches path fraction `s`, as a time fraction."""
+        return _decel_time_fraction(s, self._flight_end_speed_ratio)
 
     def _fielded_ft(self):
         """Where the ball was actually gloved, in feet from home.
@@ -2551,26 +2910,60 @@ class HitAnimation:
         pos = self._inflight_catch_pos or self._ball
         return math.hypot(*_to_field_ft(pos))
 
-    def _roll_decel_px_ms2(self, dx_px, dy_px):
-        """Rolling friction as px per animated ms², along a screen bearing.
+    def _fts_to_px_ms(self, speed_fts):
+        """A real ft/s onto the animated clock, along the ball's bearing.
 
         Direction-dependent for the same reason fielder speed is: the
-        projection is anisotropic, so one scalar px/ms² would be two
-        different real decelerations depending on which way the ball rolled.
+        projection is anisotropic, so one scalar px/ms would be two
+        different real speeds depending on which way the ball went.
         """
-        px = math.hypot(dx_px, dy_px)
-        ft = _ft_dist(dx_px, dy_px)
-        px_per_ft = (px / ft) if ft > 1e-9 else FT_TO_PX_X
-        return ROLLING_DECEL_FT_S2 * px_per_ft / (1000.0 * self.time_scale) ** 2
+        return speed_fts * self._ball_px_per_ft / (1000.0 * self.time_scale)
+
+    def _px_ms_to_fts(self, speed_px_ms):
+        """Inverse of `_fts_to_px_ms` — the ball's live speed in real ft/s,
+        which is the unit `ground_roll` reasons in."""
+        if self._ball_px_per_ft <= 1e-9:
+            return 0.0
+        return speed_px_ms * 1000.0 * self.time_scale / self._ball_px_per_ft
+
+    def _end_hopping(self):
+        """Drop the rest of the hop schedule — the ball is rolling now.
+
+        Both callers are wall contacts, where the wall has absorbed the
+        vertical component. `_ground_path` has to be replaced as well as
+        the animated schedule, because `_predict_ball_stop` reads its hops
+        to work out how much travel is left; leaving them there would aim
+        the chasing fielder at a hop the ball is no longer going to take.
+        """
+        self._bounces = []
+        self._bounces_end_ms = 0.0
+        self._bounces_completed = 0
+        if self._ground_path is not None:
+            self._ground_path = ground_roll.GroundPath(
+                speed_fts=0.0, hops=(), final_retention=1.0,
+                grass_decel_ft_s2=self._ground_path.grass_decel_ft_s2)
+
+    def _hops_completed(self, tau_ms):
+        """Ground contacts already made at `tau_ms` since landing."""
+        n = 0
+        for t_start, t_dur, _h, _r in self._bounces:
+            if tau_ms >= t_start + t_dur:
+                n += 1
+            else:
+                break
+        return n
 
     def _predict_ball_stop(self):
-        """Predicted resting point of the rolling ball under linear friction.
+        """Predicted resting point of the ball, hops included.
 
-        Stopping distance with constant deceleration a is v² / (2a). The
-        prediction extrapolates from the ball's current velocity, so it
-        adapts each frame as friction (and per-bounce impulses) shave
-        speed off. Clamped inside the elliptical wall so a long chase
-        target doesn't sit in geometry the fielder can't reach.
+        Delegates the distance to `ground_roll.remaining_distance_ft`,
+        which walks the rest of the hop schedule before applying the
+        rolling solution — a ball two feet off the ground is not
+        decelerating, so the naive v²/2a used to under-predict by most of
+        the remaining travel and parked the chasing outfielder well short
+        of where the ball was actually going. Clamped inside the
+        elliptical wall so a long chase target doesn't sit in geometry the
+        fielder can't reach.
 
         Used as the chaser's target instead of the live ball position —
         running straight to where the ball will come to rest reaches the
@@ -2590,65 +2983,146 @@ class HitAnimation:
         speed = math.hypot(vx, vy)
         if speed < 1e-4:
             return (self._ball_pos[0], self._ball_pos[1])
-        stop_dist = (speed * speed) / (2.0 * max(1e-6, self._ball_decel))
-        px = self._ball_pos[0] + vx / speed * stop_dist
-        py = self._ball_pos[1] + vy / speed * stop_dist
+        stop_ft = ground_roll.remaining_distance_ft(
+            self._ground_path, self._px_ms_to_fts(speed),
+            min(self._bounces_completed, len(self._ground_path.hops)))
+        stop_px = stop_ft * self._ball_px_per_ft
+        px = self._ball_pos[0] + vx / speed * stop_px
+        py = self._ball_pos[1] + vy / speed * stop_px
         return _clamp_inside_wall((px, py), BALL_WALL_MARGIN_PX)
 
     def _current_bounce_lift(self, tau_ms):
         """Visual lift (px above ground) at time `tau_ms` since landing,
-        looked up from the precomputed bounce schedule. Each entry is a
-        parabolic hop with its own height and air-time. After the last
-        bounce, the ball is rolling on the ground and lift is 0.
+        looked up from the precomputed hop schedule. Each entry is a real
+        projectile arc whose height and air-time both come from the same
+        rebound speed. After the last hop, the ball is rolling on the
+        ground and lift is 0.
         """
         if tau_ms >= self._bounces_end_ms:
             return 0.0
-        for t_start, t_dur, h in self._bounces:
+        for t_start, t_dur, h, _r in self._bounces:
             if t_start <= tau_ms < t_start + t_dur:
                 phase = (tau_ms - t_start) / t_dur
                 return h * math.sin(math.pi * phase)
         return 0.0
 
-    def _step_ball_on_ground(self, dt_ms, tau_ms):
-        """Integrate ball with linear friction; on contact with the elliptical
-        wall, reflect the velocity component along the ellipse's outward
-        normal (not the radial direction — the two only coincide for a
-        circle). Restitution < 1 so a hard double caroms back toward the
-        chasing fielder with reduced speed.
+    def _integrate_ball(self, pos, vel, completed, tau_ms, dt_ms):
+        """One step of the ball's ground physics, wall excluded.
 
-        Each time `tau_ms` crosses a bounce boundary, an impulse-style
-        horizontal velocity loss (BOUNCE_HORIZONTAL_RETENTION) is applied
-        on top of the continuous friction — captures ground friction during
-        the impact, which is otherwise unmodeled by linear drag alone.
+        Returns fresh `(pos, vel, completed)` rather than mutating, which
+        is what lets `_forecast_ball` run the same physics forward off the
+        live state without touching it. The wall stays in
+        `_step_ball_on_ground`: a forecast that caroms would have the
+        chasing fielder reacting to a bounce that has not happened yet.
+        """
+        vel = [vel[0], vel[1]]
+
+        # Ground contacts crossed by this step. There is one impact per hop
+        # plus the one that ends the hopping, hence `final_retention`.
+        crossed = self._hops_completed(tau_ms)
+        if tau_ms >= self._bounces_end_ms:
+            crossed = len(self._bounces) + 1
+        while completed < crossed:
+            if completed < len(self._bounces):
+                retention = self._bounces[completed][3]
+            else:
+                retention = self._ground_path.final_retention
+            vel[0] *= retention
+            vel[1] *= retention
+            completed += 1
+
+        airborne = tau_ms < self._bounces_end_ms
+        speed = math.hypot(vel[0], vel[1])
+        if speed > 0 and not airborne:
+            # Grass plus air drag, evaluated at the live speed — the drag
+            # term is quadratic, so it cannot be folded into a constant.
+            decel_fts2 = ground_roll.roll_decel_ft_s2(
+                self._px_ms_to_fts(speed), self._ground_path.grass_decel_ft_s2)
+            decel_px_ms2 = (self._fts_to_px_ms(decel_fts2)
+                            / (1000.0 * self.time_scale))
+            new_speed = max(0.0, speed - decel_px_ms2 * dt_ms)
+            if new_speed == 0.0:
+                vel[0] = 0.0
+                vel[1] = 0.0
+            else:
+                s = new_speed / speed
+                vel[0] *= s
+                vel[1] *= s
+        return ([pos[0] + vel[0] * dt_ms, pos[1] + vel[1] * dt_ms],
+                vel, completed)
+
+    def _forecast_ball(self, tau_ms):
+        """Where the live ball will be from here on, as `(dt_ms, (x, y))`
+        samples on the animated clock. Cached per frame.
+
+        This is what lets a fielder *charge*. Aiming the chase at the
+        ball's resting point is right for a ball rolling away into the gap
+        and exactly wrong for one coming at you: an outfielder standing at
+        300 ft with a line drive landing at 220 ft would turn and retreat
+        to its predicted stop at 390 ft while the ball rolled underneath
+        them, and the ball reached the wall — which forces a double. That
+        alone took doubles to 69% of hits. A ball dying in front of a
+        fielder is a fielder charging, the most ordinary play in baseball,
+        and it is the same argument `_path_intercept` makes for the
+        in-flight phase.
+        """
+        if self._forecast_at_ms == tau_ms and self._forecast is not None:
+            return self._forecast
+        samples = []
+        if self._ball_pos is not None and self._ball_v is not None:
+            pos, vel = list(self._ball_pos), list(self._ball_v)
+            completed = self._bounces_completed
+            t = tau_ms
+            for _ in range(FORECAST_MAX_STEPS):
+                if math.hypot(*vel) < 1e-5:
+                    break
+                t += FORECAST_STEP_MS
+                pos, vel, completed = self._integrate_ball(
+                    pos, vel, completed, t, FORECAST_STEP_MS)
+                samples.append((t - tau_ms,
+                                _clamp_inside_wall(pos, BALL_WALL_MARGIN_PX)))
+        self._forecast = samples
+        self._forecast_at_ms = tau_ms
+        return samples
+
+    def _chase_target(self, fielder, tau_ms):
+        """Where a chasing fielder should run: the first point on the
+        ball's remaining path they can actually get to.
+
+        Falls back to the predicted resting point when they cannot beat the
+        ball anywhere — which is the honest answer for a ball already past
+        them, and the only case the old unconditional `_predict_ball_stop`
+        was right about.
+        """
+        for dt_ms, point in self._forecast_ball(tau_ms):
+            if self._travel_ms(fielder, fielder.pos, point) <= dt_ms:
+                return point
+        return self._predict_ball_stop()
+
+    def _step_ball_on_ground(self, dt_ms, tau_ms):
+        """Integrate the ball forward one frame.
+
+        Three things act on it, and only ever one at a time:
+
+        * **A ground contact** takes a fraction of the horizontal speed.
+          Fires once as `tau_ms` crosses each hop boundary, with the
+          fraction `ground_roll` computed for that specific impact — the
+          first one is by far the largest, and how large depends on the
+          descent angle.
+        * **Friction**, but *only while the ball is on the ground*. It used
+          to run through the hops as well, which braked the ball while it
+          was several feet in the air and is most of why it died so fast.
+        * **The wall**: reflect the velocity component along the ellipse's
+          outward normal (not the radial direction — the two only coincide
+          for a circle), with restitution < 1 so a hard double caroms back
+          toward the chasing fielder with reduced speed.
         """
         if dt_ms <= 0:
             return
-
-        # Per-bounce horizontal impulse — apply once per completed bounce.
-        completed = 0
-        for t_start, t_dur, _ in self._bounces:
-            if tau_ms >= t_start + t_dur:
-                completed += 1
-            else:
-                break
-        if completed > self._bounces_completed:
-            retention = BOUNCE_HORIZONTAL_RETENTION ** (completed - self._bounces_completed)
-            self._ball_v[0] *= retention
-            self._ball_v[1] *= retention
-            self._bounces_completed = completed
-
-        speed = math.hypot(self._ball_v[0], self._ball_v[1])
-        if speed > 0:
-            new_speed = max(0.0, speed - self._ball_decel * dt_ms)
-            if new_speed == 0.0:
-                self._ball_v[0] = 0.0
-                self._ball_v[1] = 0.0
-            else:
-                s = new_speed / speed
-                self._ball_v[0] *= s
-                self._ball_v[1] *= s
-        self._ball_pos[0] += self._ball_v[0] * dt_ms
-        self._ball_pos[1] += self._ball_v[1] * dt_ms
+        (self._ball_pos, self._ball_v,
+         self._bounces_completed) = self._integrate_ball(
+            self._ball_pos, self._ball_v, self._bounces_completed,
+            tau_ms, dt_ms)
 
         # Wall containment for the elliptical wall. Normalized ellipse
         # distance is √((dx/a)² + (dy/b)²); =1 on the wall, <1 inside.
@@ -2660,8 +3134,11 @@ class HitAnimation:
         ellipse_d = math.hypot(dx / a, dy_math / b)
         if ellipse_d <= 0:
             return
-        margin_norm = BALL_WALL_MARGIN_PX / min(a, b)
-        limit = 1.0 - margin_norm
+        # Shared with `_point_outside_wall`, which is the test for whether
+        # the wall is hiding the ball from the camera — the line the ball
+        # is held at and the line past which it is out of the park have to
+        # be the same line.
+        limit = BALL_WALL_LIMIT_NORM
         if ellipse_d > limit:
             # Outward normal at this point is the ellipse-equation gradient
             # ∝ (dx/a², dy_math/b²); normalize, then flip y for pygame.
@@ -2684,14 +3161,12 @@ class HitAnimation:
                 self._ball_v[1] -= k * ny_p
                 # Wall absorbs the vertical bounce energy. A hard liner
                 # that lands just inside LANDING_WALL_MARGIN_PX and rolls
-                # to the wall before its bounce schedule is exhausted
-                # would otherwise keep pogoing in place at the wall as
-                # the remaining hops play out — same visual bug as the
+                # to the wall before its hop schedule is exhausted would
+                # otherwise keep pogoing in place at the wall as the
+                # remaining hops play out — same visual bug as the
                 # in-flight wall impact. Truncate the schedule on contact
                 # so the rebounded ball just rolls.
-                self._bounces = []
-                self._bounces_end_ms = 0.0
-                self._bounces_completed = 0
+                self._end_hopping()
             # Pull ball back inside: scale toward home along the radial line
             # in ellipse-normalized space (linear in pygame coords too).
             s = limit / ellipse_d
@@ -2733,11 +3208,10 @@ class HitAnimation:
         impact_y = HOME[1] - impact_r * math.sin(angle)
         self._hit_end = (impact_x, impact_y)
 
-        # Initialize the on-ground physics with the original duration_ms
-        # so the rolling velocity matches the ball's flight pace, then
-        # scale by the wall-impact restitution and flip inward. The
+        # Initialize the on-ground physics at the ball's landing speed,
+        # then scale by the wall-impact restitution and flip inward. The
         # inward flip is what makes the carom rebound back toward the
-        # field; without it, ROLLING_DECEL takes the ball outward right
+        # field; without it, rolling friction takes the ball outward right
         # back into the rolling-phase wall-containment code, which
         # double-applies the reflection and reads as jittery.
         self._init_ball_on_ground()
@@ -2747,15 +3221,14 @@ class HitAnimation:
         # The wall absorbs the vertical bounce energy on impact — in real
         # video the ball drops down the face and rolls back, it does not
         # pogo at the foot of the wall. _init_ball_on_ground built a fresh
-        # bounce schedule from self._hit_peak (the original arc peak),
-        # which combined with the heavily-damped rebound velocity produced
-        # the "ball clips up and down at the wall then settles dead" bug.
-        # Clearing the schedule lets the ball roll back cleanly from the
-        # impact point.
-        self._bounces = []
-        self._bounces_end_ms = 0.0
+        # hop schedule for a ball landing on grass, which combined with the
+        # heavily-damped rebound velocity produced the "ball clips up and
+        # down at the wall then settles dead" bug. Clearing the schedule
+        # lets the ball roll back cleanly from the impact point.
+        self._end_hopping()
 
         self._wall_hit = True
+        self._wall_hit_in_flight = True
 
         # Render ball at the wall this frame too (otherwise the impact
         # frame briefly shows the ball past the wall before the next
@@ -2884,7 +3357,7 @@ class HitAnimation:
         # faster to release than a set throw, not slower.
         is_charging = math.hypot(*catch_ft) < math.hypot(*home_ft) - 2.0
 
-        ev_mph = contact_audio.exit_velocity_mph(self.quality)
+        ev_mph = self.exit_velocity_mph
 
         # No throw means the fielder carries it to the bag on their own
         # legs, which is far slower per foot than an arm. Feeding the
@@ -2976,9 +3449,20 @@ class HitAnimation:
 
         secured_ft = _to_field_ft(self._ball)
         retrieved_at_s = self._secured_at_ms / (1000.0 * self.time_scale)
-        # A ball that reached the wall is past every outfielder by
-        # definition, so it cannot be a single however the carom returns.
-        min_base = 2 if self._wall_hit else 1
+        # A ball that struck the wall *on the fly* cleared every outfielder
+        # in the air, so it cannot be a single however the carom returns.
+        #
+        # A ball that merely rolled there does not get the override, and
+        # the distinction is load-bearing. When the only way to reach the
+        # wall was to be aimed past it, the two were the same event and
+        # `self._wall_hit` covered both. Honest post-landing physics makes
+        # rolling to the wall an ordinary thing for a line drive to do —
+        # 23% of them — and forcing each one to a double took doubles to
+        # 46% of hits. There is no need to shortcut it: the ball was
+        # retrieved 360 ft from home after five seconds, and the race
+        # below can see both of those and will award most of them a double
+        # on the merits.
+        min_base = 2 if self._wall_hit_in_flight else 1
         base, margin = extra_bases.final_base(
             ball_xy_ft=secured_ft,
             retrieved_at_s=retrieved_at_s,
@@ -3218,6 +3702,12 @@ class HitAnimation:
         else:
             self._update_hit(self._elapsed)
 
+        # Last word on where a defender may stand, after the per-outcome
+        # phase logic has had its turn at writing positions directly (the
+        # HOME RUN retreat eases `pos` rather than stepping toward a
+        # target, and the post-catch flow pins fielders outright).
+        self._contain_fielders()
+
         # Finishing rules:
         #   * Ball secured in flight (FLYOUT/GROUNDOUT branch): the
         #     post-catch sub-animation owns timing — finish once
@@ -3261,13 +3751,21 @@ class HitAnimation:
         in_flight = elapsed <= self.duration_ms
 
         if in_flight:
-            t = elapsed / self.duration_ms
+            # Two parameters, because the ball decelerates: `phase` is how
+            # far through the flight time it is, `t` how far along the
+            # path that puts it. The vertical shape belongs to the first
+            # and the position to the second.
+            phase = elapsed / self.duration_ms
+            t = self._flight_path_fraction(phase)
             if self.shape == "GROUNDER":
-                self._ball = _arc_grounder(HOME, self._hit_end, self._grounder_peaks, t)
+                self._ball = _arc_grounder(HOME, self._hit_end,
+                                           self._grounder_peaks, t, phase)
             elif self.shape == "LINER":
-                self._ball = _arc_liner(HOME, self._hit_end, self._hit_peak, t)
+                self._ball = _arc_liner(HOME, self._hit_end, self._hit_peak,
+                                        t, phase)
             else:
-                self._ball = _arc_fly(HOME, self._hit_end, self._hit_peak, t)
+                self._ball = _arc_fly(HOME, self._hit_end, self._hit_peak,
+                                      t, phase)
             self._ball_shadow = _lerp(HOME, self._hit_end, _shadow_t(self.shape, t))
             # Wall-candidate trajectories aim past the wall; this is what
             # actually stops the ball at the wall and routes it through
@@ -3381,11 +3879,19 @@ class HitAnimation:
             # an unbounded sprint to the landing spot. `_pursuit_point`
             # applies that clamp and keeps a pulled-up fielder moving
             # with the play rather than frozen on the clamp point.
+            #
+            # On a ball nobody can catch, the landing spot is the wrong
+            # place to stand: `_pick_retrieval_role` has already worked out
+            # where on the roll this fielder actually meets the ball, and
+            # this is the line that used to throw that answer away every
+            # frame and send them to watch it land instead.
             if self._chases_in_flight(self._primary_role):
                 self._route_in_flight_chase(primary)
             elif self._primary_role not in ("P", "C"):
-                primary.target = self._pursuit_point(primary, self._hit_end)
+                primary.target = self._pursuit_point(
+                    primary, self._retrieval_point or self._hit_end)
         elif self._needs_secure and not self._secured:
+            tau_now = elapsed - self.duration_ms
             # Reassign the primary to whichever fielder is geographically
             # closest to the live ball. Real baseball — once the ball is
             # rolling, the chase passes to whoever is closest, not to
@@ -3400,12 +3906,17 @@ class HitAnimation:
             # comes off the plate for bunts/pop-fouls (covered by the
             # in-flight intercept gating). The chase belongs to the
             # position players.
+            # Measured against the shadow, not the rendered ball. They are
+            # the same point for a rolling ball and several feet apart
+            # mid-hop, and what decides who is closest to the play is where
+            # the ball is on the *field*.
+            ball_ground = self._ball_shadow
             chase_pool = [r for r in self.fielders.keys() if r not in ("P", "C")]
             closest_role = min(
                 chase_pool,
                 key=lambda r: math.hypot(
-                    self.fielders[r].pos[0] - self._ball[0],
-                    self.fielders[r].pos[1] - self._ball[1],
+                    self.fielders[r].pos[0] - ball_ground[0],
+                    self.fielders[r].pos[1] - ball_ground[1],
                 ),
             )
             if closest_role != self._primary_role:
@@ -3423,10 +3934,12 @@ class HitAnimation:
                 self._lean_excluded.add(closest_role)
 
             primary = self.fielders[self._primary_role]
-            # Aim for the predicted stopping point so the primary cuts
-            # off the roll instead of trailing the live ball — same
-            # straight-line-to-the-spot logic the lean-target chase uses.
-            primary.target = self._predict_ball_stop()
+            # Aim at the first point on the ball's path the primary can
+            # reach, so they cut the ball off instead of trailing it —
+            # charging it when it is coming at them, running to the spot
+            # when it is not. Same straight-line-to-a-fixed-point logic
+            # the lean-target chase uses; only the point is smarter.
+            primary.target = self._chase_target(primary, tau_now)
             # Pacing was for the in-flight phase only — once the ball is on
             # the ground the fielder sprints to chase it down.
             primary.max_speed = self._primary_full_speed
@@ -3437,16 +3950,23 @@ class HitAnimation:
             # the post-landing chase radius in _update_lean_targets can
             # also secure if their step happens to reach first.
             closest_dist = math.hypot(
-                primary.pos[0] - self._ball[0],
-                primary.pos[1] - self._ball[1],
+                primary.pos[0] - ball_ground[0],
+                primary.pos[1] - ball_ground[1],
             )
             for role, f in self.fielders.items():
-                d = math.hypot(f.pos[0] - self._ball[0],
-                               f.pos[1] - self._ball[1])
+                d = math.hypot(f.pos[0] - ball_ground[0],
+                               f.pos[1] - ball_ground[1])
                 if d < closest_dist:
                     closest_dist = d
                     closest_role = role
-            if closest_dist < SECURE_RADIUS_PX:
+            # A ball over their head is not in their glove. Never bound
+            # before, because the old hop schedule topped out at 26 px of
+            # cosmetic lift; a real first bounce off a fly ball clears 7 ft,
+            # and without this the centre fielder gloves it at the top of
+            # its arc.
+            in_reach = (self._ball_shadow[1] - self._ball[1]
+                        <= GLOVE_REACH_FT * FT_TO_PX_Y)
+            if closest_dist < SECURE_RADIUS_PX and in_reach:
                 self._secured = True
                 self._secured_at_ms = self._elapsed
                 if closest_role is not None and closest_role != self._primary_role:
@@ -3484,13 +4004,18 @@ class HitAnimation:
         for fielder in self.fielders.values():
             self._draw_fielder(screen, fielder, self._ball)
 
-        sx, sy = int(self._ball_shadow[0]), int(self._ball_shadow[1])
-        pygame.draw.ellipse(screen, (60, 60, 60), pygame.Rect(
-            sx - BALL_SHADOW_W_PX // 2, sy - BALL_SHADOW_H_PX // 2,
-            BALL_SHADOW_W_PX, BALL_SHADOW_H_PX))
+        # The shadow is the ball's point on the *ground*, so once that is
+        # out of the park it is on the far side of the fence and nothing
+        # on this side can see it — regardless of how high the ball is.
+        if not _point_outside_wall(self._ball_shadow):
+            sx, sy = int(self._ball_shadow[0]), int(self._ball_shadow[1])
+            pygame.draw.ellipse(screen, (60, 60, 60), pygame.Rect(
+                sx - BALL_SHADOW_W_PX // 2, sy - BALL_SHADOW_H_PX // 2,
+                BALL_SHADOW_W_PX, BALL_SHADOW_H_PX))
 
-        bx, by = int(self._ball[0]), int(self._ball[1])
-        pygame.draw.circle(screen, (255, 255, 255), (bx, by), BALL_RADIUS_PX)
+        if not self._ball_behind_wall():
+            bx, by = int(self._ball[0]), int(self._ball[1])
+            pygame.draw.circle(screen, (255, 255, 255), (bx, by), BALL_RADIUS_PX)
 
         if self.hr_distance_ft is not None:
             self._draw_hr_distance(screen)
@@ -3533,12 +4058,29 @@ class HitAnimation:
         gy = int(y + 6 * bdy / bd)
         pygame.draw.circle(screen, GLOVE_COLOR, (gx, gy), 3)
 
+    def _hr_distance_alpha(self):
+        """Reveal ramp for the distance readout: 0 until it appears, then
+        up to 1 over the fade.
+
+        Nothing until the ball is down, then a beat, then fade up — see
+        HR_DISTANCE_REVEAL_DELAY_MS. It used to fade in at 70% of the
+        flight, which put the number on screen while the ball was still
+        on its way to the wall and gave away how far it was going to go
+        before it had gone there.
+
+        Split out from the draw so *when the number appears* is one pure
+        expression, testable without a display.
+        """
+        since_landing = self._elapsed - self.duration_ms
+        if since_landing < HR_DISTANCE_REVEAL_DELAY_MS:
+            return 0.0
+        return min(1.0, (since_landing - HR_DISTANCE_REVEAL_DELAY_MS)
+                   / HR_DISTANCE_FADE_MS)
+
     def _draw_hr_distance(self, screen):
-        # Fade in once t > 0.7 (ball is near/over the wall); full at 0.85.
-        t = self._elapsed / max(1, self.duration_ms)
-        if t < 0.7:
+        alpha = self._hr_distance_alpha()
+        if alpha <= 0.0:
             return
-        alpha = max(0.0, min(1.0, (t - 0.7) / 0.15))
 
         if self._font is None:
             self._font = pygame.font.SysFont(None, 36, bold=True)

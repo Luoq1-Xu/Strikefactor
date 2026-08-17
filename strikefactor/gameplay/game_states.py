@@ -11,9 +11,11 @@ import pygame
 import pygame.gfxdraw
 import pygame_gui
 
-from strikefactor.gameplay.gameday_manager import GameDayManager
+from strikefactor.gameplay.gameday_manager import GameDayManager, get_pitcher_attrs
 from strikefactor.ui import gameday_theme as gdt
+from strikefactor.ui.pitching_box_panel import PitchingBoxPanel, PitchingSide
 from strikefactor.ui.play_by_play_panel import PlayByPlayPanel
+from strikefactor.ui.settings_panel import KeyBindingsPanel, SettingsPanel
 
 
 class GameState(ABC):
@@ -135,6 +137,20 @@ class ModeSelectState(GameState):
 class MenuState(GameState):
     """Main menu state with pitcher selection and typing effect."""
 
+    # Settings / key bindings are sub-modes of the menu rather than states of
+    # their own. Their bodies are drawn by ui/settings_panel.py — see that
+    # module for why they stopped being grids of absolutely-placed buttons.
+    _SETTINGS_ACTIONS = {
+        'toggle_strikezone': 'toggle_strikezone_setting',
+        'toggle_abs': 'toggle_abs_setting',
+        'toggle_foul_animation': 'toggle_foul_animation_setting',
+        'cycle_hud_mode': 'toggle_hud_mode',
+        'toggle_umpire_sound': 'toggle_umpire_sound_setting',
+        'cycle_display_fps': 'cycle_display_fps',
+        'cycle_engine_fps': 'cycle_engine_fps',
+        'set_difficulty': 'set_difficulty',
+    }
+
     def __init__(self, game):
         super().__init__(game)
         self.messages = ["StrikeFactor", "A Baseball At-Bat Simulator"]
@@ -144,7 +160,9 @@ class MenuState(GameState):
         self.messages_finished = 0
         self.done = False
         self.running = True
-        
+        self._settings_panel = SettingsPanel()
+        self._keybinds_panel = KeyBindingsPanel()
+
     def enter(self):
         """Initialize menu state."""
         self.game.ui_manager.hide_banner()
@@ -155,12 +173,10 @@ class MenuState(GameState):
         # Set button visibility based on current menu state
         if self.game.menu_state == 'settings':
             self.game.ui_manager.set_button_visibility('settings')
-            self.game.ui_manager.update_settings_button_states(self.game.settings_manager)
-            self.game.ui_manager.show_settings_info(self.game.settings_manager)
+            self._settings_panel.reset_cursor()
         elif self.game.menu_state == 'key_bindings':
             self.game.ui_manager.set_button_visibility('key_bindings')
-            self.game.ui_manager.update_key_binding_buttons(self.game.key_binding_manager)
-            # Don't show banner for key bindings page
+            self._keybinds_panel.reset_cursor()
         else:
             self.game.ui_manager.set_button_visibility('main_menu')
 
@@ -210,39 +226,100 @@ class MenuState(GameState):
         self.game.ui_manager.process_events(event)
         if event.type == pygame.QUIT:
             return False
+        if self.game.menu_state == 'settings':
+            self._handle_settings_event(event)
+        elif self.game.menu_state == 'key_bindings':
+            self._handle_keybinds_event(event)
         return True
-            
+
+    # --- settings sub-screen -------------------------------------------
+
+    def _dispatch_settings_action(self, action):
+        """Run an ``(action_id, payload)`` from SettingsPanel against Game.
+
+        The panel names an intent; the mapping to a Game method lives here, so
+        the panel can be tested without a Game and Game keeps one method per
+        setting rather than one per widget.
+        """
+        if action is None:
+            return
+        action_id, payload = action
+        method = getattr(self.game, self._SETTINGS_ACTIONS[action_id])
+        method(payload) if payload is not None else method()
+
+    def _handle_settings_event(self, event):
+        panel = self._settings_panel
+        settings = self.game.settings_manager
+
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            key = panel.hit_test(event.pos)
+            if key is not None:
+                panel.select_key(key)
+                self._dispatch_settings_action(panel.activate(key, settings))
+        elif event.type == pygame.KEYDOWN:
+            if event.key == pygame.K_ESCAPE:
+                self.game.exit_settings_menu()
+            elif event.key == pygame.K_UP:
+                panel.move(-1)
+            elif event.key == pygame.K_DOWN:
+                panel.move(1)
+            elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER, pygame.K_RIGHT):
+                self._dispatch_settings_action(panel.activate_selected(settings, 1))
+            elif event.key == pygame.K_LEFT:
+                self._dispatch_settings_action(panel.activate_selected(settings, -1))
+
+    # --- key bindings sub-screen ---------------------------------------
+
+    def _handle_keybinds_event(self, event):
+        panel = self._keybinds_panel
+
+        if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+            action = panel.hit_test(event.pos)
+            if action is not None:
+                panel.select_key(action)
+                self.game.start_key_rebind(action)
+        elif event.type == pygame.KEYDOWN:
+            # A pending rebind swallows every keypress upstream in Game.run,
+            # so anything arriving here means no rebind is armed.
+            if event.key == pygame.K_ESCAPE:
+                self.game.exit_key_bindings_menu()
+            elif event.key == pygame.K_UP:
+                panel.move(-1)
+            elif event.key == pygame.K_DOWN:
+                panel.move(1)
+            elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
+                action = panel.activate_selected()
+                if action is not None:
+                    self.game.start_key_rebind(action)
+
     def render(self, screen):
         """Render the main menu."""
+        if self.game.menu_state == 'settings':
+            self._settings_panel.render(screen, self.game.settings_manager)
+            return
+        if self.game.menu_state == 'key_bindings':
+            self._keybinds_panel.render(
+                screen, self.game.key_binding_manager,
+                pending=getattr(self.game, 'key_rebind_action', None),
+                error=getattr(self.game, 'key_rebind_error', None))
+            return
+
         screen.fill("black")
+        # Draw completed messages
+        if self.messages_finished > 0:
+            offset = 0
+            for i in range(self.messages_finished):
+                self.game.ui_manager.draw_completed_message(
+                    self.messages[i], (100, 170 + offset), use_big_font=True
+                )
+                offset += 100
 
-        # Only render typing effect for main menu, not settings or key bindings
-        if self.game.menu_state not in ['settings', 'key_bindings']:
-            # Draw completed messages
-            if self.messages_finished > 0:
-                offset = 0
-                for i in range(self.messages_finished):
-                    self.game.ui_manager.draw_completed_message(
-                        self.messages[i], (100, 170 + offset), use_big_font=True
-                    )
-                    offset += 100
-
-            # Draw current message with typing effect
-            message = self.messages[self.active_message]
-            self.game.ui_manager.draw_typing_effect(
-                message, self.counter, self.game.speed,
-                (100, 170 + self.textoffset), use_big_font=True
-            )
-        elif self.game.menu_state == 'settings':
-            # For settings screen, just draw a simple title
-            self.game.ui_manager.draw_completed_message(
-                "SETTINGS", (540, 100), use_big_font=True
-            )
-        elif self.game.menu_state == 'key_bindings':
-            # For key bindings screen, just draw a simple title
-            self.game.ui_manager.draw_completed_message(
-                "KEY BINDINGS", (480, 100), use_big_font=True
-            )
+        # Draw current message with typing effect
+        message = self.messages[self.active_message]
+        self.game.ui_manager.draw_typing_effect(
+            message, self.counter, self.game.speed,
+            (100, 170 + self.textoffset), use_big_font=True
+        )
 
 
 class GameplayState(GameState):
@@ -1193,7 +1270,10 @@ class GameDayTransitionState(GameState):
         self._labels = []  # Track UILabels for cleanup
         self._gd_fonts = None  # Lazy-init layout fonts
         self._pbp = None       # PlayByPlayPanel for the GAME LOG overlay
+        self._pitching_box = None  # PitchingBoxPanel for the GAME LOG overlay
         self._log_open = False
+        self._log_tab = 0          # index into _LOG_TABS
+        self._log_tab_rects = []   # [(rect, index)] for tab click hit-testing
 
     def _place_button(self, btn, rect):
         btn.set_relative_position(rect[:2])
@@ -1352,7 +1432,21 @@ class GameDayTransitionState(GameState):
 
         # The GAME LOG overlay is modal: it owns input until it's closed.
         if self._log_open:
-            if self._pbp is not None and self._pbp.handle_event(event):
+            # Tab switching is handled before the panels see the event: the tab
+            # chips are drawn just *outside* _LOG_RECT, so a click on one would
+            # otherwise fall through to the click-outside-to-close branch.
+            if event.type == pygame.KEYDOWN and event.key in (pygame.K_LEFT,
+                                                              pygame.K_RIGHT):
+                step = 1 if event.key == pygame.K_RIGHT else -1
+                self._set_log_tab(self._log_tab + step)
+                return True
+            if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
+                for rect, index in self._log_tab_rects:
+                    if rect.collidepoint(event.pos):
+                        self._set_log_tab(index)
+                        return True
+            panel = self._active_log_panel()
+            if panel is not None and panel.handle_event(event):
                 return True
             close = (event.type == pygame.KEYDOWN and
                      event.key in (pygame.K_ESCAPE, pygame.K_RETURN))
@@ -1480,18 +1574,27 @@ class GameDayTransitionState(GameState):
         # Transition to gameplay
         self.game.state_manager.change_state('gameplay')
 
-    # GAME LOG overlay geometry (panel + its framed backdrop).
+    # GAME LOG overlay geometry (panel + its framed backdrop) and the views it
+    # can show. The pitching box is a *tab* rather than a strip beneath the
+    # play-by-play: the strip it replaced was a fixed 76px, which is two lines
+    # per side, so every arm before the last two was silently unreachable —
+    # there was no screen anywhere that could show a bullpen game's box score.
     _LOG_RECT = pygame.Rect(90, 70, gdt.SCREEN_W - 180, gdt.SCREEN_H - 190)
-    _LOG_PITCHERS_H = 76  # strip under the panel for both bullpens
+    _LOG_TABS = ('PLAY-BY-PLAY', 'PITCHING')
 
     def _show_game_log(self):
-        """Open the scrollable play-by-play overlay for the live game."""
+        """Open the modal GAME LOG overlay for the live game."""
         gameday_mgr = self.game.gameday_manager
+        f = self._ensure_fonts()
         if self._pbp is None:
-            self._pbp = PlayByPlayPanel(self._ensure_fonts())
+            self._pbp = PlayByPlayPanel(f)
         self._pbp.set_plays([e.to_dict() for e in gameday_mgr.event_log])
         # Open on the latest action rather than the first inning.
         self._pbp.scroll_to_end()
+        if self._pitching_box is None:
+            self._pitching_box = PitchingBoxPanel(f)
+        self._pitching_box.set_sides(self._pitching_sides(),
+                                     live=not gameday_mgr.game_over)
         self._log_open = True
         # Modal: hide the phase buttons so they can't be clicked through the veil.
         self.game.ui_manager.set_visibility_state('pitching')
@@ -1500,8 +1603,42 @@ class GameDayTransitionState(GameState):
         self._log_open = False
         self._setup_phase_ui()
 
+    def _pitching_sides(self):
+        """Build both staffs for the pitching box, opponent first (the order the
+        linescore uses, and the arms the player actually faced).
+
+        The two sides carry different tags because different things identify an
+        arm to the player: they *bat* against the opponent's pitchers, so
+        handedness is what matters, while their own staff is only ever simulated
+        and its bullpen role is the useful label. The panel takes the tags as
+        data rather than looking them up, so it stays out of the gameplay layer.
+        """
+        from strikefactor.ui.pitcher_carousel import PITCHER_HANDEDNESS
+
+        gm = self.game.gameday_manager
+        hand_letter = {'LHP': 'L', 'RHP': 'R'}
+        opponent = gm.get_opponent_pitcher_stats()
+        mine = gm.get_player_pitcher_stats()
+        return [
+            PitchingSide(
+                "OPPONENT PITCHING  ·  YOU BATTING", opponent,
+                {ps.name: hand_letter.get(PITCHER_HANDEDNESS.get(ps.name, ''), '')
+                 for ps in opponent}),
+            PitchingSide(
+                "YOUR PITCHING  ·  OPPONENT BATTING", mine,
+                {ps.name: get_pitcher_attrs(ps.name).get('role', '')
+                 for ps in mine}),
+        ]
+
+    def _active_log_panel(self):
+        """The panel the current tab shows, or None before the log is opened."""
+        return self._pbp if self._log_tab == 0 else self._pitching_box
+
+    def _set_log_tab(self, index):
+        self._log_tab = index % len(self._LOG_TABS)
+
     def _render_game_log_overlay(self, screen):
-        """Dim the screen and draw the play-by-play panel on top."""
+        """Dim the screen and draw the active GAME LOG view on top."""
         f = self._ensure_fonts()
         veil = pygame.Surface((gdt.SCREEN_W, gdt.SCREEN_H), pygame.SRCALPHA)
         veil.fill((0, 0, 0, 215))
@@ -1516,36 +1653,23 @@ class GameDayTransitionState(GameState):
                  f" - {gm.opponent_score} OPP")
         self._blit_text(screen, title, f['small'],
                         (rect.left, rect.top - 26), gdt.FG)
-        self._blit_text(screen, "ESC  ·  CLOSE", f['micro'],
-                        (rect.right, rect.top - 22), gdt.DIM, align='right')
+        self._log_tab_rects = gdt.draw_chips(
+            screen, f['micro'], self._LOG_TABS, self._log_tab,
+            rect.right, rect.top - 28)
 
         panel_rect = pygame.Rect(rect.left + 10, rect.top + 10,
-                                 rect.width - 20, rect.height - 20 - self._LOG_PITCHERS_H)
-        self._pbp.draw(screen, panel_rect)
-        self._render_log_pitchers(screen, f, panel_rect.bottom + 10, panel_rect)
+                                 rect.width - 20, rect.height - 20)
+        panel = self._active_log_panel()
+        if panel is not None:
+            panel.draw(screen, panel_rect)
 
-        self._blit_text(screen, "WHEEL / UP-DOWN  SCROLL      TAB  FILTER",
-                        f['micro'], (gdt.SCREEN_W // 2, rect.bottom + 16),
+        hint = "WHEEL / UP-DOWN  SCROLL      "
+        if self._log_tab == 0:
+            hint += "TAB  FILTER      "
+        hint += "LEFT / RIGHT  VIEW      ESC  CLOSE"
+        self._blit_text(screen, hint, f['micro'],
+                        (gdt.SCREEN_W // 2, rect.bottom + 16),
                         gdt.DIM_SOFT, align='center')
-
-    def _render_log_pitchers(self, screen, f, y, panel_rect):
-        """Two-column pitching lines (yours / opponent's) under the log."""
-        gm = self.game.gameday_manager
-        col_w = panel_rect.width // 2
-        columns = (
-            ("YOUR PITCHERS", gm.get_player_pitcher_stats(), panel_rect.left),
-            ("OPPONENT PITCHERS", gm.get_opponent_pitcher_stats(),
-             panel_rect.left + col_w),
-        )
-        for label, stats, x in columns:
-            self._blit_text(screen, label, f['micro'], (x, y), gdt.DIM)
-            ry = y + 20
-            for ps in stats[-2:]:  # most recent two arms per side
-                line = (f"{ps.name.upper()}  {ps.get_ip_display()} IP  "
-                        f"{ps.hits_allowed} H  {ps.runs_allowed} R  "
-                        f"{ps.strikeouts} K  {ps.pitch_count} P")
-                self._blit_text(screen, line, f['micro'], (x, ry), gdt.FG)
-                ry += 18
 
     def _return_to_menu(self):
         """Return to main menu."""
@@ -1721,8 +1845,14 @@ class GameDayTransitionState(GameState):
         f = self._ensure_fonts()
         gm = self.game.gameday_manager
 
-        # Section label
+        # Section label, plus a pointer to the full box score. This block only
+        # covers the arms the player *batted* against; their own staff's lines
+        # live on the GAME LOG overlay's PITCHING tab, which is no use to anyone
+        # who doesn't know it's there.
         self._blit_text(screen, "ARMS FACED", f['micro'], (x, y), self._DIM)
+        self._blit_text(screen, "GAME LOG  >  PITCHING  ·  FULL BOX SCORE",
+                        f['micro'], (x + width, y), self._DIM_SOFT,
+                        align='right')
         y += 26
 
         from strikefactor.ui.pitcher_carousel import PITCHER_HANDEDNESS
@@ -1952,7 +2082,7 @@ class GameDayTransitionState(GameState):
         else:
             self._render_active(screen)
 
-        if self._log_open and self._pbp is not None:
+        if self._log_open:
             self._render_game_log_overlay(screen)
 
 

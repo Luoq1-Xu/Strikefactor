@@ -75,6 +75,26 @@ one of these constants exists to claw that back:
 
 None of those are physics. They are all corrections for the clock.
 
+> **Status: done.** `PRESENTATION_TIME_SCALE = 1.25` is in
+> `hit_animation.py`, every physical quantity is stated in real feet and
+> seconds, and `INFIELD_LOW_BALL_RANGE_PX`, `INFIELD_CHASE_RANGE_PX` and
+> `FIRST_BASE_GROUNDER_RANGE_PX` are gone. The predicted payoff held: a
+> real 27 ft/s sprint spent against a real ~1.5 s grounder covers about
+> 30 ft on its own, which is what the 55 px cap was hand-setting.
+>
+> Two things this section did not anticipate. **A single global scale of
+> 2.5 is not viable** — a fly ball's real hang time is 4–5 s, so 2.5×
+> would put an 11-second cutscene on every routine fly. The scale had to
+> come down near 1.0, which makes grounders quicker on screen than they
+> were and deep flies longer. Both are more watchable, not less.
+>
+> And **the dilation had leaked further than the four constants listed
+> below.** `ROLLING_DECEL_PX_MS2` was px per animated ms², so stopping
+> distance was a function of pacing; the `RETRIEVE_TIME_*` thresholds
+> that decided extra bases were animated milliseconds. Unifying the clock
+> moved both without anyone editing them — triples went from 8% of hits
+> to 23%. Anything whose units mention a millisecond is suspect.
+
 **Correction, after implementing it.** This section originally claimed the
 clock had to be unified *before* the verdict could become time-based —
 that a timing model on the dilated clock "would disagree with the picture."
@@ -394,13 +414,31 @@ would also give `BatterProfile` something new to model.
 
 ## 6. Phasing
 
-> **Status.** The model (`gameplay/infield_timing.py`) and the infield
-> verdict are **done and shipped** — what were Phases 2 and 3. They landed
-> before the clock work because §2's prerequisite claim turned out to be
-> wrong. Measured on 1200 grounders: infield-hit rate on fielded balls
-> **7.6%** (target 6–8%), bang-bang **7.5%**, and the sign flip holds —
-> soft contact beaten out 8.7%, scorched contact 0.0%. Phase 0 (schema),
-> Phase 1 (clock) and Phase 4 (extra bases) remain.
+> **Status: all five phases shipped.**
+>
+> | | sim (before) | sim (now) | MLB |
+> |---|---|---|---|
+> | BABIP | .389 | **.299** | .290 |
+> | 2B/1B | 1.01 | **0.33** | 0.32 |
+> | 3B as share of hits | 8.0% | **0.3%** | ~1% |
+> | GB hit rate | 31.0% | **21.3%** | ~24% |
+> | FB BABIP (non-HR) | .425 | **.19** | .120 |
+> | Infield hits on fielded GB | 3.8% | **7.9%** | 6–8% |
+> | Bang-bang (\|margin\| < 0.15 s) | 2.9% | **5.3%** | 8–12% |
+>
+> Measured over 3000 batted balls with contact sampled from the recorded
+> `(quality, vertical_offset)` distribution in `strikefactor.db`.
+>
+> **The earlier "7.6% infield hits, 7.5% bang-bang" figure was wrong.** It
+> was measured against a *uniform* quality sweep — `(i % 50) / 50.0`, what
+> the tests happened to use. Real contact quality is crowded against 1.0
+> (p25 0.77, p50 0.88, p90 0.98), because quality is only computed for
+> swings that already timed the ball. Under the real distribution the same
+> build gave 3.8%. This is the trap `contact_audio.EV_CALIBRATION`
+> documents, and it has now caused four separate miscalibrations in this
+> codebase: contact audio, infield release time, batted-ball landing
+> depth, and the wall-ball rate. **Any constant tuned against a quality
+> sweep is tuned against a batter who does not exist.**
 
 Each phase is shippable and independently verifiable.
 
@@ -418,6 +456,27 @@ still pass, and out rates must not move — this phase is a change of units, not
 of behaviour.* This is the riskiest phase and it carries no user-visible
 feature, which is exactly why it should be its own step.
 
+> **The "out rates must not move" verification was wrong**, and it is worth
+> recording why rather than quietly dropping it. It assumed the range caps
+> had been compensating for the dilation *exactly*. They had not — they were
+> a hand-fit to one shape of play, so replacing them with honest physics
+> moved rates substantially and correctly (GB hit rate 31% → 21%, FB BABIP
+> .425 → .19). A units change is only behaviour-preserving when the thing
+> being replaced was exactly right, which is never why you are replacing it.
+>
+> Two more things needed converting that this phase did not list, both found
+> by their effects rather than by reading: **`ROLLING_DECEL_PX_MS2`** (px per
+> animated ms², so roll distance scaled with pacing) and the
+> **`RETRIEVE_TIME_*`** thresholds. A useful heuristic fell out of it — grep
+> for `_MS` and `_PX` and ask of each whether a human could state it in
+> seconds or feet. If yes, it is physics wearing render units.
+>
+> Also landed here: **fielder speed is now direction-independent in feet.**
+> The projection is anisotropic (1.85 px/ft across, 1.10 up), so the old
+> scalar `FIELDER_MAX_SPEED_PX_MS = 0.040` meant 21.6 ft/s laterally and
+> 36.4 ft/s straight back — outfielders going back on a ball ran faster than
+> any human has. `_travel_ms` converts the displacement to feet first.
+
 **Phase 2 — build the model.** `infield_timing.py` plus its tests, calibrated
 against the §3 table. Pure, no integration. Verify the five reference plays
 reproduce their expected margins.
@@ -433,6 +492,28 @@ that proves the model, not the geometry, is doing the work.*
 higher-value one). Replace `RETRIEVE_TIME_SINGLE_MAX_MS` / `..._DOUBLE_MAX_MS`
 with a race: runner time to second/third vs retrieve + relay. Target 2B/1B
 0.96 → 0.32 and triples 7% → 1% of hits.
+
+> **Done** — `gameplay/extra_bases.py`, 2B/1B 0.33 and triples 0.3% of hits.
+> It stopped being optional the moment the clock was unified: the thresholds
+> it replaced were animated milliseconds, so Phase 1 invalidated them and
+> triples jumped to 23% of hits until this landed.
+>
+> The decision rule turned out to matter more than the timing. A runner who
+> beats the throw by a tenth is out on the tag more often than not, so
+> `AGGRESSION_MARGIN_S` requires daylight before committing. Without it,
+> runners take every base they can theoretically reach and every gapper is
+> a triple — the same shape the thresholds produced, arrived at honestly.
+
+**Phase 5 — the batted ball itself** (not in the original plan; forced by
+Phase 1). Once flight time became physical, the *landing* had to be too:
+depth was `dist_min + (dist_max - dist_min) * quality`, and on the real
+quality distribution that put nearly every batted ball at the deep end of
+its range. `gameplay/ball_flight.py` now derives both carry and hang time
+from one projectile identity per shape, so a ball's distance and its time
+in the air are two consequences of one flight instead of two independent
+guesses. The drag correction is a *declining* function of exit velocity —
+held constant it gave a 109 mph fly 456 ft against a real ~415, which alone
+put 28.6% of fly balls off the wall, every one of them at minimum a double.
 
 ---
 
@@ -462,3 +543,37 @@ with a race: runner time to second/third vs retrieve + relay. Target 2B/1B
 - **Statcast arm strength must not be used as throw speed.** It is the
   average of a player's top 5% of throws. Use the 100–115 ft/s effective
   flight speed instead.
+
+---
+
+## 8. What is still off, and why
+
+Recorded honestly rather than tuned away. All three are small next to what
+moved, and each has an identified cause.
+
+**Bang-bang plays: 5.3% against a target of 8–12%.** The margin distribution
+is correctly *centred* — components match the §3 reference table play for
+play — but its left tail is still thin. `HARD_PLAY_PROB` supplies that tail
+and is the dial; pushing it further starts inventing fumbles rather than
+modelling difficulty. The real fix is a fielding-difficulty model
+(distance ranged × direction × hop quality) rather than one flat
+probability, which is Statcast's infield OAA and a project of its own.
+
+**Ground-ball hit rate: 21.3% against ~24%.** The residual is that our
+fielders execute a clean route on every ball they can reach; MLB's do not.
+Same root as the bang-bang gap.
+
+**Triples: 0.3% of hits against ~1%.** Now erring low, where the old
+retrieve-time model erred high (8%). Triples need a ball retrieved both
+late *and* far from third, which our park geometry makes rare — the wall is
+~360 ft down the lines (see the `_wall_r_at` note in CLAUDE.md), so the deep
+corners real triples come from do not exist here. Fixing it means reshaping
+the drawn wall, not retuning the runner.
+
+**Not addressed, and out of scope for this document:** home runs are ~25% of
+hits against MLB's ~14%, because the HR gate in `hit_outcome_manager` rolls
+a quality-indexed probability that is *independent of the carry model*. So
+one batted ball is asked "did it clear the fence?" twice, by two systems
+that can disagree — the same structural fault as the two clocks, and the
+last place it survives. Worth doing, but it changes home-run rates, which
+is a game-feel decision rather than a correctness one.

@@ -147,12 +147,17 @@ def test_arriving_at_a_target_does_not_zero_the_speed():
     fielder.max_speed = fielder.base_max_speed
     fielder.current_speed_frac = 1.0                   # at a full sprint
     fielder.decel_radius_px = 0.1                      # isolate: no decel ramp
-    fielder.pos = [100.0, 100.0]
-    fielder.target = (101.0, 100.0)
+    # On the field, not at an arbitrary screen coordinate: `_step_fielder`
+    # contains its target inside the outfield wall, and (100, 100) is well
+    # outside it — the clamp would rewrite the target and the fielder would
+    # run somewhere else entirely.
+    fielder.pos = list(ha.FIELDER_HOMES["SS"])
+    fielder.target = (fielder.pos[0] + 1.0, fielder.pos[1])
     # 100 ms of travel at a sprint covers >3 px, so 1 px away arrives this
     # frame — the `dist <= step` branch, which is the one that zeroed speed.
+    expected = fielder.target
     anim._step_fielder(fielder, 100, 99999)            # past any reaction delay
-    assert tuple(fielder.pos) == (101.0, 100.0), "should still snap position"
+    assert tuple(fielder.pos) == expected, "should still snap position"
     assert fielder.current_speed_frac > 0.0, "speed was zeroed on arrival"
     assert fielder.current_speed_frac < 1.0, "speed should decay"
 

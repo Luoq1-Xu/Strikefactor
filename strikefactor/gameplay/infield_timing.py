@@ -105,6 +105,34 @@ RELEASE_STRETCHED_S = 1.00              # backhand, from the hole, off balance
 RELEASE_STRETCH_FT = 18.0               # ranging this far = fully stretched
 RELEASE_JITTER_S = 0.05                 # footwork noise, play to play
 
+# The plays that don't go cleanly. Not errors — a short hop that eats the
+# fielder up, an in-between hop they have to wait on, a backhand they have
+# to plant out of, a ball stuck in the webbing, a throw that pulls the
+# first baseman off the bag. This is where infield hits actually come from,
+# and none of it is visible to a model that only knows the geometry.
+#
+# Deliberately *not* named for a bobble: it is standing in for every source
+# of play-to-play difficulty the geometry cannot see, which is why 22% is
+# not as high as it first reads. Roughly a fifth of ground balls being
+# something other than a clean set-and-throw is unremarkable.
+#
+# It exists because without it the margin distribution had no left tail at
+# all: p25 sat at +0.82 s, so the *hardest quarter* of plays were still
+# comfortable outs and the infield-hit rate came out at 2-3% against an
+# MLB 6-8%. Every component matched the §3 reference table play for play —
+# ball travel 1.42 s against 1.50, release 0.84 against 0.75, throw
+# distance right for every position — and the rate was still less than half
+# of MLB's, because the spread was far too narrow.
+#
+# The alternative was to raise *mean* release time until the rate came out,
+# which needed 1.08 s: outside even the "poor catcher exchange" end of the
+# sourced range, and wrong in kind, because it makes routine plays close
+# rather than adding hard ones. Variance, not bias, was what was missing —
+# these leave the median play untouched (p50 margin 1.12 s -> 1.03 s) and
+# put the tail where the runner can reach it (p10 0.44 s -> 0.14 s).
+HARD_PLAY_PROB = 0.22
+HARD_PLAY_COST_S = (0.25, 1.40)         # uniform: a hitch at one end, a fumble at the other
+
 
 # ---- Throw ----------------------------------------------------------------
 # Do NOT use Statcast "arm strength" here: it is the average of a player's
@@ -160,6 +188,17 @@ def _interpolate(x, table):
     return table[-1][1]
 
 
+def ground_speed_retention(ev_mph):
+    """Fraction of exit velocity a ground ball holds *on average* over its
+    path, from GROUND_SPEED_RETENTION.
+
+    Public because `ground_roll` derives a grounder's end-of-path speed
+    from the same curve — the ball that reaches the outfield grass has to
+    be the ball the infield verdict was computed against.
+    """
+    return _interpolate(max(0.0, ev_mph or 0.0), GROUND_SPEED_RETENTION)
+
+
 def ball_travel_time_s(ev_mph, distance_ft):
     """Seconds from contact until the ball reaches a fielder `distance_ft` away.
 
@@ -170,7 +209,7 @@ def ball_travel_time_s(ev_mph, distance_ft):
     """
     ev = max(0.0, ev_mph or 0.0)
     speed_fts = max(MIN_GROUND_SPEED_FTS,
-                    ev * MPH_TO_FTS * _interpolate(ev, GROUND_SPEED_RETENTION))
+                    ev * MPH_TO_FTS * ground_speed_retention(ev))
     return max(0.0, distance_ft) / speed_fts
 
 
@@ -187,8 +226,12 @@ def release_time_s(ranging_ft=0.0, is_charging=False, rng=None):
     else:
         stretch = min(1.0, max(0.0, ranging_ft) / RELEASE_STRETCH_FT)
         base = RELEASE_ROUTINE_S + (RELEASE_STRETCHED_S - RELEASE_ROUTINE_S) * stretch
-    if rng is not None and RELEASE_JITTER_S:
-        base += rng.gauss(0.0, RELEASE_JITTER_S)
+    if rng is not None:
+        if RELEASE_JITTER_S:
+            base += rng.gauss(0.0, RELEASE_JITTER_S)
+        # The left tail of the margin distribution — see HARD_PLAY_PROB.
+        if rng.random() < HARD_PLAY_PROB:
+            base += rng.uniform(*HARD_PLAY_COST_S)
     return max(0.35, base)
 
 

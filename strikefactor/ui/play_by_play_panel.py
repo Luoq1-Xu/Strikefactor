@@ -298,25 +298,9 @@ class PlayByPlayPanel:
         }
 
     def _draw_filter_chips(self, screen, y):
-        f = self.fonts['micro']
-        self._filter_rects = []
-        x = self.rect.right - self.PAD
-        for index in range(len(_FILTERS) - 1, -1, -1):
-            label = _FILTERS[index][0]
-            surf = f.render(label, True, gdt.FG)
-            w = surf.get_width() + 16
-            chip = pygame.Rect(x - w, y, w, surf.get_height() + 8)
-            active = index == self.filter_index
-            if active:
-                pygame.draw.rect(screen, gdt.HIGHLIGHT_BG, chip)
-                screen.blit(f.render(label, True, gdt.HIGHLIGHT_FG),
-                            (chip.x + 8, chip.y + 4))
-            else:
-                pygame.draw.rect(screen, gdt.DIVIDER, chip, 1)
-                screen.blit(f.render(label, True, gdt.DIM),
-                            (chip.x + 8, chip.y + 4))
-            self._filter_rects.append((chip, index))
-            x = chip.left - 8
+        self._filter_rects = gdt.draw_chips(
+            screen, self.fonts['micro'], [name for name, _ in _FILTERS],
+            self.filter_index, self.rect.right - self.PAD, y)
 
     def _draw_half_header(self, screen, row, y, view, cols):
         f = self.fonts

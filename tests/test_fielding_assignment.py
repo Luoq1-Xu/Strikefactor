@@ -105,10 +105,19 @@ def test_closest_fielder_wins_over_an_earlier_intercept(monkeypatch):
 def test_fielders_beyond_the_landing_spot_can_still_make_the_play(monkeypatch):
     """A ball that dies in front of a fielder is a fielder charging, not a
     ball nobody can reach. Excluding the far end of the path put the 1B on
-    balls dying at the 2B's feet and stopped outfielders charging bloops."""
+    balls dying at the 2B's feet and stopped outfielders charging bloops.
+
+    The CF's speed is pinned to the nominal sprint because this is a test
+    of the *eligibility* gate, not of the dice: fielders are born with
+    ±22% speed jitter, and now that flight time is physical rather than a
+    flat 3.3 s, a slow draw genuinely cannot charge 80 ft in a 240 ft fly
+    ball's hang time. That is correct behaviour and it is not what this
+    test is about — left unpinned it passes or fails on the RNG.
+    """
     _aim(monkeypatch, ha._to_screen(0.0, 240.0))     # shallow centre field
     anim = _make(shape="FLY", quality=0.4)
-    centerfielder = anim.fielders["CF"]              # home is 310 ft — behind it
+    centerfielder = anim.fielders["CF"]              # home is 320 ft — behind it
+    centerfielder.max_speed = ha.FIELDER_SPRINT_FT_S
     assert anim._path_intercept(centerfielder)["can_make"]
 
 

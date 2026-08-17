@@ -371,7 +371,8 @@ class Game:
         # Key binding system
         from strikefactor.key_binding_manager import KeyBindingManager
         self.key_binding_manager = KeyBindingManager(self.settings_manager)
-        self.key_rebind_action = None  # Track current key rebinding
+        self.key_rebind_action = None  # Action awaiting a keypress, if any
+        self.key_rebind_error = None   # Last collision, drawn by KeyBindingsPanel
 
         self.hit_outcome_manager = HitOutcomeManager(self.scoreKeeper, self.sound_manager, self.settings_manager)
         self.ui_manager = UIManager(self.screen, (1280, 720), theme_path=get_path("assets/theme.json"))
@@ -482,45 +483,15 @@ class Game:
         self.ui_manager.register_button_callback('lap_stats', lambda: self.create_lap())
         self.ui_manager.register_button_callback('view_laps', lambda: self.toggle_lap_log())
 
-        # Settings menu callbacks
+        # Settings + key-binding screens. Only the footer nav is a widget —
+        # the difficulty chips and the setting/binding rows are drawn and
+        # hit-tested by ui/settings_panel.py and dispatched from MenuState.
         self.ui_manager.register_button_callback('settings', lambda: self.enter_settings_menu())
         self.ui_manager.register_button_callback('back_to_main', lambda: self.exit_settings_menu())
-
-        # Difficulty selection callbacks
-        self.ui_manager.register_button_callback('difficulty_rookie', lambda: self.set_difficulty('rookie'))
-        self.ui_manager.register_button_callback('difficulty_amateur', lambda: self.set_difficulty('amateur'))
-        self.ui_manager.register_button_callback('difficulty_professional', lambda: self.set_difficulty('professional'))
-        self.ui_manager.register_button_callback('difficulty_allstar', lambda: self.set_difficulty('all_star'))
-        self.ui_manager.register_button_callback('difficulty_halloffame', lambda: self.set_difficulty('hall_of_fame'))
-
-        # Settings toggle callbacks
-        self.ui_manager.register_button_callback('toggle_ump_sound_settings', lambda: self.toggle_umpire_sound_setting())
-        self.ui_manager.register_button_callback('toggle_strikezone_settings', lambda: self.toggle_strikezone_setting())
-        self.ui_manager.register_button_callback('toggle_abs_settings', lambda: self.toggle_abs_setting())
-        self.ui_manager.register_button_callback('toggle_foul_anim_settings', lambda: self.toggle_foul_animation_setting())
-        self.ui_manager.register_button_callback('toggle_hud_mode_settings', lambda: self.toggle_hud_mode())
         self.ui_manager.register_button_callback('reset_settings', lambda: self.reset_settings())
-
-        # FPS settings callbacks
-        self.ui_manager.register_button_callback('display_fps_setting', lambda: self.cycle_display_fps())
-        self.ui_manager.register_button_callback('engine_fps_setting', lambda: self.cycle_engine_fps())
-
-        # Key binding callbacks
         self.ui_manager.register_button_callback('key_bindings', lambda: self.enter_key_bindings_menu())
         self.ui_manager.register_button_callback('back_from_keybinds', lambda: self.exit_key_bindings_menu())
         self.ui_manager.register_button_callback('reset_keybinds', lambda: self.reset_key_bindings())
-
-        # Individual key binding buttons
-        from strikefactor.key_binding_manager import KeyAction
-        self.ui_manager.register_button_callback('bind_toggle_ui', lambda: self.start_key_rebind(KeyAction.TOGGLE_UI))
-        self.ui_manager.register_button_callback('bind_toggle_strikezone', lambda: self.start_key_rebind(KeyAction.TOGGLE_STRIKEZONE))
-        self.ui_manager.register_button_callback('bind_toggle_sound', lambda: self.start_key_rebind(KeyAction.TOGGLE_SOUND))
-        self.ui_manager.register_button_callback('bind_toggle_batter', lambda: self.start_key_rebind(KeyAction.TOGGLE_BATTER))
-        self.ui_manager.register_button_callback('bind_quick_pitch', lambda: self.start_key_rebind(KeyAction.QUICK_PITCH))
-        self.ui_manager.register_button_callback('bind_view_pitches', lambda: self.start_key_rebind(KeyAction.VIEW_PITCHES))
-        self.ui_manager.register_button_callback('bind_main_menu', lambda: self.start_key_rebind(KeyAction.MAIN_MENU))
-        self.ui_manager.register_button_callback('bind_toggle_track', lambda: self.start_key_rebind(KeyAction.TOGGLE_TRACK))
-        self.ui_manager.register_button_callback('bind_challenge', lambda: self.start_key_rebind(KeyAction.CHALLENGE))
 
         # Setup key binding system callbacks
         self._setup_key_binding_callbacks()
@@ -1164,8 +1135,6 @@ class Game:
         """Enter the settings menu."""
         self.menu_state = 'settings'
         self.ui_manager.set_button_visibility('settings', force_show=True)
-        self.ui_manager.update_settings_button_states(self.settings_manager)
-        self.ui_manager.show_settings_info(self.settings_manager)
         self.state_manager.change_state('menu')
 
     def exit_settings_menu(self):
@@ -1181,8 +1150,6 @@ class Game:
         # heatmap and triple-slash track the right partition immediately.
         mode, difficulty = self._current_bucket_key()
         self.field_renderer.set_active_bucket(mode, difficulty)
-        self.ui_manager.update_settings_button_states(self.settings_manager)
-        self.ui_manager.show_settings_info(self.settings_manager)
 
     def toggle_umpire_sound_setting(self):
         """Toggle umpire sound setting."""
@@ -1190,13 +1157,11 @@ class Game:
         self.settings_manager.set_setting("umpire_sound", not current)
         # Also update the legacy umpsound variable
         self.umpsound = self.settings_manager.get_setting("umpire_sound")
-        self.ui_manager.update_settings_button_states(self.settings_manager)
 
     def toggle_strikezone_setting(self):
         """Toggle strikezone display setting."""
         current = self.settings_manager.get_setting("show_strikezone")
         self.settings_manager.set_setting("show_strikezone", not current)
-        self.ui_manager.update_settings_button_states(self.settings_manager)
 
     def toggle_abs_setting(self):
         """Toggle MLB-style ABS ball/strike challenge system on or off."""
@@ -1206,14 +1171,12 @@ class Game:
         # gameplay overlay stops drawing it immediately.
         if not self.settings_manager.get_setting("abs_enabled"):
             self.pending_challenge = None
-        self.ui_manager.update_settings_button_states(self.settings_manager)
 
     def toggle_foul_animation_setting(self):
         """Toggle the foul-ball hit animation on or off. Read per-foul at
         trigger time, so no mid-game teardown is needed."""
         current = self.settings_manager.get_setting("foul_animation_enabled")
         self.settings_manager.set_setting("foul_animation_enabled", not current)
-        self.ui_manager.update_settings_button_states(self.settings_manager)
 
     def _draw_active_hud(self, surface):
         """Dispatch to the HUD selected by the current setting. Only renders
@@ -1233,7 +1196,6 @@ class Game:
     def toggle_hud_mode(self):
         """Cycle Legacy → Broadcast → Minimal → Legacy."""
         new_mode = self.settings_manager.cycle_hud_mode()
-        self.ui_manager.update_settings_button_states(self.settings_manager)
         # Big field-drawn base diamond is redundant in broadcast/minimal —
         # both draw their own bases.
         self.field_renderer.show_bases = (new_mode == "legacy")
@@ -1255,20 +1217,16 @@ class Game:
         self.settings_manager.reset_to_defaults()
         # Update legacy variables
         self.umpsound = self.settings_manager.get_setting("umpire_sound")
-        self.ui_manager.update_settings_button_states(self.settings_manager)
-        self.ui_manager.show_settings_info(self.settings_manager)
 
     def cycle_display_fps(self):
         """Cycle through display FPS options."""
         self.settings_manager.cycle_display_fps()
-        self.ui_manager.update_settings_button_states(self.settings_manager)
         # Update PitchViz animation timing to match new display FPS
         self.ui_manager.update_view_window_fps(self.settings_manager.get_display_fps())
 
     def cycle_engine_fps(self):
         """Cycle through engine FPS options."""
         self.settings_manager.cycle_engine_fps()
-        self.ui_manager.update_settings_button_states(self.settings_manager)
 
     def _setup_key_binding_callbacks(self):
         """Setup key binding system callbacks for various actions."""
@@ -1290,42 +1248,29 @@ class Game:
         """Enter key bindings configuration menu."""
         self.menu_state = 'key_bindings'
         self.ui_manager.set_button_visibility('key_bindings', force_show=True)
-        self.ui_manager.update_key_binding_buttons(self.key_binding_manager)
-        self.ui_manager.show_key_bindings_info()
+        self.key_rebind_error = None
 
     def exit_key_bindings_menu(self):
         """Exit key bindings menu back to settings."""
         self.menu_state = 'settings'
         self.ui_manager.set_button_visibility('settings', force_show=True)
-        self.ui_manager.update_settings_button_states(self.settings_manager)
-        self.ui_manager.show_settings_info(self.settings_manager)
         self.key_rebind_action = None  # Cancel any active rebind
+        self.key_rebind_error = None
 
     def reset_key_bindings(self):
         """Reset all key bindings to defaults."""
         self.key_binding_manager.reset_to_defaults()
-        self.ui_manager.update_key_binding_buttons(self.key_binding_manager)
+        self.key_rebind_error = None
 
     def start_key_rebind(self, action):
-        """Start rebinding a key for the given action."""
+        """Arm the next keypress to rebind ``action``.
+
+        The 'press a key' prompt is drawn by KeyBindingsPanel from this state
+        rather than written into a button's label, so there is one place that
+        knows what a row looks like.
+        """
         self.key_rebind_action = action
-        # Update the button to show it's waiting for input
-        from strikefactor.key_binding_manager import KeyAction
-        action_name = self.key_binding_manager.get_action_name(action)
-        button_mapping = {
-            KeyAction.TOGGLE_UI: 'bind_toggle_ui',
-            KeyAction.TOGGLE_STRIKEZONE: 'bind_toggle_strikezone',
-            KeyAction.TOGGLE_SOUND: 'bind_toggle_sound',
-            KeyAction.TOGGLE_BATTER: 'bind_toggle_batter',
-            KeyAction.QUICK_PITCH: 'bind_quick_pitch',
-            KeyAction.VIEW_PITCHES: 'bind_view_pitches',
-            KeyAction.MAIN_MENU: 'bind_main_menu',
-            KeyAction.TOGGLE_TRACK: 'bind_toggle_track',
-            KeyAction.CHALLENGE: 'bind_challenge',
-        }
-        if action in button_mapping:
-            button_key = button_mapping[action]
-            self.ui_manager.buttons[button_key].set_text(f"{action_name}: Press any key...")
+        self.key_rebind_error = None
 
     def toggle_ui_visibility(self):
         """Toggle UI visibility using key binding."""
@@ -1382,34 +1327,28 @@ class Game:
 
     def complete_key_rebind(self, new_key):
         """Complete the key rebinding process."""
-        if hasattr(self, 'key_rebind_action') and self.key_rebind_action is not None:
-            # Check if key is already used
-            if self.key_binding_manager.is_key_available(new_key, exclude_action=self.key_rebind_action):
-                # Bind the new key
-                self.key_binding_manager.bind_key(self.key_rebind_action, new_key)
-                # Update the UI buttons
-                self.ui_manager.update_key_binding_buttons(self.key_binding_manager)
+        if getattr(self, 'key_rebind_action', None) is None:
+            return
+
+        if self.key_binding_manager.is_key_available(
+                new_key, exclude_action=self.key_rebind_action):
+            self.key_binding_manager.bind_key(self.key_rebind_action, new_key)
+            self.key_rebind_error = None
+        else:
+            # Collisions report on the key-bindings screen itself. They used
+            # to go through show_banner, i.e. the shared 80px label — the same
+            # hierarchy inversion the difficulty description had.
+            from strikefactor.key_binding_manager import KeyAction
+            key_name = self.key_binding_manager.get_key_name(new_key)
+            for action in KeyAction:
+                if self.key_binding_manager.get_key_for_action(action) == new_key:
+                    used_by = self.key_binding_manager.get_action_name(action)
+                    break
             else:
-                # Key is already in use, show error
-                from strikefactor.key_binding_manager import KeyAction
-                key_name = self.key_binding_manager.get_key_name(new_key)
-                # Find which action uses this key
-                for action in KeyAction:
-                    if self.key_binding_manager.get_key_for_action(action) == new_key:
-                        used_by = self.key_binding_manager.get_action_name(action)
-                        break
-                else:
-                    used_by = "Unknown"
+                used_by = "another action"
+            self.key_rebind_error = f"{key_name} is already bound to {used_by}"
 
-                # Show error message in banner
-                error_msg = f"Key '{key_name}' is already used by {used_by}"
-                self.ui_manager.show_banner(error_msg, typing_speed=0.01)
-
-                # Restore the button text
-                self.ui_manager.update_key_binding_buttons(self.key_binding_manager)
-
-            # Clear rebind state
-            self.key_rebind_action = None
+        self.key_rebind_action = None
 
     def _display_pitch_results(self, outcome: str, pitchtype: str, speed_mph: float):
         """Display pitch results on the scorebug."""

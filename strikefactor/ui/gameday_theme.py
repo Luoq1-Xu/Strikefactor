@@ -65,6 +65,42 @@ def draw_top_chrome(screen, header_text, fonts,
                      (margin_x, 44), (screen_w - margin_x, 44), 1)
 
 
+def draw_chips(screen, font, labels, active_index, x, y,
+               gap=8, pad_x=8, pad_y=4, anchor='right'):
+    """Draw a row of selectable chips (active one inverted).
+
+    ``x`` is the anchored edge: the row's right edge when ``anchor='right'``
+    (laid out right-to-left, so the row keeps that edge however long the
+    labels are) and its left edge when ``anchor='left'``. Right-anchoring
+    suits chips tucked into a panel's top-right corner; the settings screen
+    anchors left because its whole column starts at ``MARGIN_X``.
+
+    Returns ``[(rect, index)]`` for click hit-testing — the caller owns the
+    selection, this only draws it.
+    """
+    hits = []
+    cursor = x
+    order = (range(len(labels) - 1, -1, -1) if anchor == 'right'
+             else range(len(labels)))
+    for index in order:
+        label = labels[index]
+        surf = font.render(label, True, FG)
+        width = surf.get_width() + 2 * pad_x
+        left = cursor - width if anchor == 'right' else cursor
+        chip = pygame.Rect(left, y, width, surf.get_height() + 2 * pad_y)
+        if index == active_index:
+            pygame.draw.rect(screen, HIGHLIGHT_BG, chip)
+            screen.blit(font.render(label, True, HIGHLIGHT_FG),
+                        (chip.x + pad_x, chip.y + pad_y))
+        else:
+            pygame.draw.rect(screen, DIVIDER, chip, 1)
+            screen.blit(font.render(label, True, DIM),
+                        (chip.x + pad_x, chip.y + pad_y))
+        hits.append((chip, index))
+        cursor = chip.left - gap if anchor == 'right' else chip.right + gap
+    return hits
+
+
 # --- Linescore ---
 
 _LINESCORE_TEAM_COL_W = 130

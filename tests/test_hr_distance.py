@@ -19,6 +19,8 @@ from strikefactor.gameplay.hit_animation import (
     FOUL_LINE_SCREEN_LEFT_RAD,
     FOUL_LINE_SCREEN_RIGHT_RAD,
     HOME,
+    HR_DISTANCE_FADE_MS,
+    HR_DISTANCE_REVEAL_DELAY_MS,
     HR_FOUL_MARGIN_RAD,
     HitAnimation,
     _px_per_ft_at,
@@ -149,3 +151,46 @@ def test_carry_in_feet_is_angle_independent():
                                   math.sin(angle) / 1.10)
 
         assert to_ft(landed_r) - to_ft(wall_r) == pytest.approx(carry_ft, abs=0.01)
+
+
+def _play_to(anim, elapsed_ms, step=16):
+    """Drive one animation out to `elapsed_ms`, yielding every frame."""
+    t = 0
+    while t < elapsed_ms:
+        t += step
+        anim.update(t)
+        yield t
+
+
+def test_the_distance_is_not_revealed_until_the_ball_is_down():
+    """The suspense is the point: the number used to fade in at 70% of the
+    flight, answering the only question the flight is asking while the ball
+    was still on its way to the wall."""
+    anim = _home_run(0.9)
+    for t in _play_to(anim, anim.duration_ms):
+        assert anim._hr_distance_alpha() == 0.0, f"readout showing at {t} ms, mid-flight"
+
+
+def test_the_distance_appears_after_the_landing_beat():
+    anim = _home_run(0.9)
+    reveal = anim.duration_ms + HR_DISTANCE_REVEAL_DELAY_MS
+    for _t in _play_to(anim, reveal - 20):
+        pass
+    assert anim._hr_distance_alpha() == 0.0, "revealed before the beat elapsed"
+
+    for _t in _play_to(anim, reveal + HR_DISTANCE_FADE_MS + 20):
+        pass
+    assert anim._hr_distance_alpha() == 1.0, "readout never reached full opacity"
+
+
+def test_the_ball_is_already_out_of_sight_when_the_number_lands():
+    """The two halves of the reveal agree: the ball drops behind the fence,
+    then the number appears into an empty outfield. If the delay were ever
+    shortened past the flight, the number would land on top of a ball still
+    in the air."""
+    for _ in range(10):
+        anim = _home_run(0.9)
+        for _t in _play_to(anim, anim.duration_ms + HR_DISTANCE_REVEAL_DELAY_MS + 16):
+            pass
+        assert anim._hr_distance_alpha() > 0.0
+        assert anim._ball_behind_wall(), "number revealed with the ball still visible"
