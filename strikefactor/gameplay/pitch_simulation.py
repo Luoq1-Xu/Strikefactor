@@ -5,6 +5,7 @@ import pandas as pd
 import pygame
 import pygame.gfxdraw
 
+from strikefactor.gameplay import bat_path
 from strikefactor.helpers import EnhancedPitchRecord
 from strikefactor.utils.physics import collision
 from strikefactor.utils.pitch_physics import DEFAULT_CAMERA, PitchTrajectory, UmpireCamera
@@ -149,6 +150,20 @@ class PitchSimulation:
         # Pitch-data fields populated through the pitch lifecycle and
         # consumed by PitchDatabaseService.record_pitch in cleanup().
         self.swing_timing_diff_ms = None  # set in _handle_swing_input
+        # Signed form of the same number: negative is early, positive is late.
+        # The abs() above is what the DB has always stored, so it stays as it
+        # is — widening it would change what every existing aggregate means.
+        self.swing_timing_signed_ms = None
+        # Swing reconstruction, consumed by SwingRecord in cleanup(). The bat
+        # is the mouse cursor, and until these existed it was polled live
+        # inside the contact frame and thrown away, so nothing after the fact
+        # could say where the bat had been. swing_starttime is seeded here for
+        # the same reason: it used to spring into existence only when a swing
+        # happened, so every read of it needed a getattr.
+        self.swing_starttime = None
+        self.aim_screen_at_swing = None    # cursor when the swing was committed
+        self.aim_screen_at_contact = None  # cursor when the bat arrived
+        self.ball_screen_at_contact = None
         self.contact_quality = None       # mirrored from HitOutcomeManager.last_quality
         self.vertical_offset_in = None    # mirrored from HitOutcomeManager.last_vertical_offset
         self.exit_velocity_mph = None     # modelled at contact; drives the contact SFX
@@ -232,6 +247,7 @@ class PitchSimulation:
 
         # Update pitch trajectory
         self._update_pitch_trajectory(current_time)
+        self._capture_bat_arrival(current_time)
 
         # Handle different phases of the pitch
         if current_time <= self.starttime + self.windup:
@@ -335,14 +351,14 @@ class PitchSimulation:
 
         mousepos = self.game.get_mouse_pos()
         self.swing_starttime = pygame.time.get_ticks()
-        self.contact_time = self.swing_starttime + 150
+        self.contact_time = self.swing_starttime + bat_path.SWING_DURATION_MS
+        self.aim_screen_at_swing = mousepos
 
         # Capture timing diff for analytics regardless of contact result.
         # Swing-and-miss pitches still need a timing-diff signal to study
         # player skill — without this the field is null on every miss.
-        self.swing_timing_diff_ms = abs(
-            (self.swing_starttime + 150) - (self.starttime + self.windup + self.traveltime)
-        )
+        self.swing_timing_signed_ms = self._signed_timing_ms()
+        self.swing_timing_diff_ms = abs(self.swing_timing_signed_ms)
 
         if event.key == pygame.K_w:
             # Contact swing
@@ -357,6 +373,48 @@ class PitchSimulation:
                 self.swing_starttime, self.starttime, self.traveltime, self.windup
             )
         self.game.swing_started = 1 if mousepos[1] > 500 else 2
+
+    def _signed_timing_ms(self):
+        """How far off the swing was, in ms. Negative early, positive late.
+
+        The one place this is computed. It used to be written out twice —
+        abs()'d at swing input for the DB, and recomputed with its sign in
+        `_compute_foul_contact_metrics` under a comment explaining why — so
+        the sign existed but only fouls ever saw it.
+        """
+        if self.swing_starttime is None:
+            return None
+        return ((self.swing_starttime + bat_path.SWING_DURATION_MS)
+                - (self.starttime + self.windup + self.traveltime))
+
+    def _timing_windows(self):
+        """This swing's (perfect_ms, foul_ms) thresholds, difficulty-scaled.
+
+        Mirrors `contact_timing_quality` / `power_timing_quality`, which own
+        the verdict. Read here so the foul severity and the replay's timing
+        scale describe the same window the swing was actually judged against.
+        """
+        multipliers = self.game.settings_manager.get_difficulty_multipliers()
+        if self.swing_type == 2:
+            window = multipliers["power_timing_window"]
+            return 20.0 * window, 35.0 * window
+        window = multipliers["contact_timing_window"]
+        return 30.0 * window, 60.0 * window
+
+    def _capture_bat_arrival(self, current_time):
+        """Record where the bat and ball were when the barrel got there.
+
+        Runs for *every* swing, which is the point. A mistimed swing
+        (`on_time == 0`) never reaches `_evaluate_contact` at all — the whiff
+        is decided by timing alone, with no geometry test — so the swings a
+        player most needs explained were the ones leaving no trace.
+        """
+        if self.swing_starttime is None or self.aim_screen_at_contact is not None:
+            return
+        if current_time < self.contact_time:
+            return
+        self.aim_screen_at_contact = self.game.get_mouse_pos()
+        self.ball_screen_at_contact = (self.game.ball[0], self.game.ball[1])
 
     def _is_contact_time(self, current_time):
         """Check if it's contact evaluation time."""
@@ -433,20 +491,11 @@ class PitchSimulation:
         mousepos = self.game.get_mouse_pos()
 
         # Signed timing error: negative = early swing (pull-side foul),
-        # positive = late (opposite field). The stored swing_timing_diff_ms
-        # is abs()'d, so recompute with the sign here.
-        signed_ms = (self.swing_starttime + 150) - (
-            self.starttime + self.windup + self.traveltime)
+        # positive = late (opposite field).
+        signed_ms = self._signed_timing_ms()
         # Severity: where |signed_ms| sits inside this swing's foul window
-        # (between the perfect and miss thresholds, difficulty-scaled —
-        # mirrors contact_timing_quality / power_timing_quality).
-        multipliers = self.game.settings_manager.get_difficulty_multipliers()
-        if self.swing_type == 1:
-            window = multipliers["contact_timing_window"]
-            lo, hi = 30.0 * window, 60.0 * window
-        else:
-            window = multipliers["power_timing_window"]
-            lo, hi = 20.0 * window, 35.0 * window
+        # (between the perfect and miss thresholds, difficulty-scaled).
+        lo, hi = self._timing_windows()
         severity = max(0.0, min(1.0, (abs(signed_ms) - lo) / max(1.0, hi - lo)))
 
         quality, vertical_offset = self.game.hit_outcome_manager.compute_foul_contact(
@@ -497,7 +546,7 @@ class PitchSimulation:
         batter_handedness = self.game.batter.get_handedness()
 
         # Calculate timing difference for more realistic outcomes
-        timing_diff = abs((self.swing_starttime + 150) - (self.starttime + self.windup + self.traveltime))
+        timing_diff = abs(self._signed_timing_ms())
 
         if self.swing_type == 1:
             hit_string = self.game.hit_outcome_manager.get_contact_hit_outcome(
@@ -1154,6 +1203,15 @@ class PitchSimulation:
         # Pull any ABS challenge verdict that fired during this pitch.
         self.abs_challenged = bool(getattr(self.game, '_last_pitch_abs_challenged', False))
         self.abs_overturned = bool(getattr(self.game, '_last_pitch_abs_overturned', False))
+
+        # Park the swing where the replay overlay can find it. Built here
+        # because _finalize_batted_ball has already mirrored the animation by
+        # now, so every field is settled. A taken pitch returns None and
+        # deliberately leaves the previous swing in place.
+        from strikefactor.gameplay import swing_record
+        record = swing_record.from_simulation(self)
+        if record is not None:
+            self.game.last_swing = record
 
         # Record pitch to SQLite database
         from strikefactor.data.pitch_database import PitchDatabaseService

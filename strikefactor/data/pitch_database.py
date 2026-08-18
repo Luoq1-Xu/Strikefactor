@@ -34,7 +34,7 @@ PITCHER_HANDEDNESS = {
 }
 
 
-SCHEMA_VERSION = 7  # Bumped when migrations are added; see PitchDB._migrate.
+SCHEMA_VERSION = 8  # Bumped when migrations are added; see PitchDB._migrate.
 
 # v5 renamed the pop-up outcome from "POP_UP" to "POP UP", so it reads like
 # every other recorded outcome ("HOME RUN", "LINEOUT"). Data written before v5
@@ -110,6 +110,7 @@ class PitchDB:
 
         -- Skill signals
         swing_timing_diff_ms REAL,
+        swing_timing_signed_ms REAL,
         contact_quality REAL,
         vertical_offset_in REAL,
         exit_velocity_mph REAL,
@@ -268,6 +269,21 @@ class PitchDB:
         ("play_margin_s", "REAL"),
     ]
 
+    # v8: the sign of the swing timing error. `swing_timing_diff_ms` has
+    # always been stored abs()'d, so the DB could say how far off a swing was
+    # but never whether it was early or late — which makes "does this hitter
+    # chase ahead of the ball or behind it", the single most useful coaching
+    # fact the game holds, structurally unanswerable. The value was already
+    # being computed with its sign; only the foul path ever saw it, into a
+    # field that was never persisted.
+    #
+    # The unsigned column stays exactly as it is. Widening it in place would
+    # silently change what every existing aggregate over it means, for no
+    # gain — abs() of this one recovers it.
+    V8_PITCHES_COLUMNS = [
+        ("swing_timing_signed_ms", "REAL"),
+    ]
+
     # Backup policy
     BACKUP_DIR_NAME = "backups"
     BACKUP_MIN_INTERVAL = timedelta(hours=1)  # don't backup more than once per hour
@@ -299,7 +315,7 @@ class PitchDB:
             existing_pitches = {row[1] for row in self.conn.execute("PRAGMA table_info(pitches)")}
             for col, decl in (self.V2_PITCHES_COLUMNS + self.V3_PITCHES_COLUMNS
                              + self.V4_PITCHES_COLUMNS + self.V6_PITCHES_COLUMNS
-                             + self.V7_PITCHES_COLUMNS):
+                             + self.V7_PITCHES_COLUMNS + self.V8_PITCHES_COLUMNS):
                 if col not in existing_pitches:
                     self.conn.execute(f"ALTER TABLE pitches ADD COLUMN {col} {decl}")
 
@@ -564,6 +580,7 @@ class PitchDataExtractor:
             "pitcher_fatigue": gd["pitcher_fatigue"],
             "mistake_pitch": int(bool(getattr(sim, "mistake_pitch", False))),
             "swing_timing_diff_ms": getattr(sim, "swing_timing_diff_ms", None),
+            "swing_timing_signed_ms": getattr(sim, "swing_timing_signed_ms", None),
             "contact_quality": getattr(sim, "contact_quality", None),
             "vertical_offset_in": getattr(sim, "vertical_offset_in", None),
             "exit_velocity_mph": getattr(sim, "exit_velocity_mph", None),

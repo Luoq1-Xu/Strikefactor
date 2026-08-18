@@ -1,6 +1,7 @@
 import math
 import random
 
+from strikefactor.gameplay import bat_path
 from strikefactor.utils.physics import collision_angled
 
 # Batted-ball type model. Classified at contact from (quality, vertical_offset);
@@ -284,7 +285,7 @@ class HitOutcomeManager:
         )
     
     def power_timing_quality(self, swing_starttime, starttime, traveltime, windup_time):
-        diff = abs((swing_starttime + 150) - (starttime + windup_time + traveltime))
+        diff = abs((swing_starttime + bat_path.SWING_DURATION_MS) - (starttime + windup_time + traveltime))
 
         # Get difficulty multipliers
         multipliers = self._get_difficulty_multipliers()
@@ -302,7 +303,7 @@ class HitOutcomeManager:
             return 0  # Miss
 
     def contact_timing_quality(self, swing_starttime, starttime, traveltime, windup_time):
-        diff = abs((swing_starttime + 150) - (starttime + windup_time + traveltime))
+        diff = abs((swing_starttime + bat_path.SWING_DURATION_MS) - (starttime + windup_time + traveltime))
 
         # Get difficulty multipliers
         multipliers = self._get_difficulty_multipliers()

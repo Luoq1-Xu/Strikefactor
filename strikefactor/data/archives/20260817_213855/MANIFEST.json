@@ -1,0 +1,28 @@
+{
+  "created_at": "2026-08-17T21:38:56",
+  "reason": "collision_angled sign fix: pre-fix pitches describe a mirrored bat",
+  "scope": "all modes, all tracking stores",
+  "database": "strikefactor.db",
+  "json_files": [
+    "gameday_history.json",
+    "gameday_sessions.json",
+    "lap_history.json",
+    "batting_stats.json"
+  ],
+  "counts": {
+    "pitch_trajectories": 451760,
+    "pitches": 22588,
+    "at_bats": 9473,
+    "games": 769,
+    "batter_profiles": 15,
+    "_by_mode": {
+      "arcade": 11945,
+      "gameday": 1090,
+      "sandbox": 9553
+    },
+    "gameday_history.json": 12,
+    "gameday_sessions.json": 0,
+    "lap_history.json": 10,
+    "batting_stats.json": 16
+  }
+}

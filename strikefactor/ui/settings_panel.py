@@ -355,6 +355,7 @@ class KeyBindingsPanel(_RowPanel):
         KeyAction.TOGGLE_TRACK,
         KeyAction.TOGGLE_HUD_MODE,
         KeyAction.CHALLENGE,
+        KeyAction.SWING_REPLAY,
         KeyAction.MAIN_MENU,
     ]
 

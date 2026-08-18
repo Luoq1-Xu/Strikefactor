@@ -34,6 +34,7 @@ from strikefactor.ui.broadcast_hud import BroadcastHUD
 from strikefactor.ui.components import create_pci_cursor
 from strikefactor.ui.minimal_hud import MinimalHUD
 from strikefactor.ui.scorebug import Scorebug
+from strikefactor.ui.swing_replay_overlay import SwingReplayOverlay
 from strikefactor.ui.ui_manager import UIManager
 from strikefactor.utils.pitch_physics import DEFAULT_CAMERA
 
@@ -361,6 +362,12 @@ class Game:
         # to populate pitches.abs_challenged / abs_overturned.
         self._last_pitch_abs_challenged = False
         self._last_pitch_abs_overturned = False
+
+        # Swing replay. `last_swing` is a SwingRecord parked by
+        # PitchSimulation.cleanup, and survives until the next *swing* — a
+        # taken pitch leaves it alone, so the review key still works after one.
+        self.last_swing = None
+        self.swing_replay_overlay = SwingReplayOverlay(self)
 
         # Settings management (initialize early so other components can use it)
         self.settings_manager = SettingsManager()
@@ -1243,6 +1250,7 @@ class Game:
         self.key_binding_manager.register_callback(KeyAction.TOGGLE_TRACK, self.toggle_track)
         self.key_binding_manager.register_callback(KeyAction.CHALLENGE, self.request_abs_challenge)
         self.key_binding_manager.register_callback(KeyAction.TOGGLE_HUD_MODE, self.toggle_hud_mode)
+        self.key_binding_manager.register_callback(KeyAction.SWING_REPLAY, self.request_swing_replay)
 
     def enter_key_bindings_menu(self):
         """Enter key bindings configuration menu."""
@@ -1678,6 +1686,53 @@ class Game:
                 elif (event.type == pygame.MOUSEBUTTONDOWN
                       and self.abs_overlay.is_waiting_for_dismiss()):
                     self.abs_overlay.dismiss()
+
+    # ------------------------------------------------------------------
+    # Swing replay
+    # ------------------------------------------------------------------
+
+    def request_swing_replay(self):
+        """Open the slow-motion replay of the last swing, if there was one."""
+        if self.last_swing is None:
+            self.ui_manager.show_banner("NO SWING TO REVIEW")
+            return
+        self.swing_replay_overlay.trigger(record=self.last_swing)
+        self._run_swing_replay_loop()
+
+    def _run_swing_replay_loop(self):
+        """Synchronous render loop for the replay overlay.
+
+        Mirrors `_run_abs_overlay_loop` — the nested loop is how this codebase
+        pauses, and stalling `Game.run` is the whole mechanism. Unlike the ABS
+        overlay this one is interactive throughout (scrub, view toggle), so
+        events go to the overlay first and only fall through to the window
+        handlers it does not claim.
+        """
+        clock = self.clock
+        screen = self.screen
+        while self.swing_replay_overlay.is_active():
+            time_delta = clock.tick_busy_loop(60) / 1000.0
+            screen.fill("black")
+            if self.state_manager.current_state is not None:
+                self.state_manager.current_state.render(screen)
+            self._draw_active_hud(screen)
+            self.swing_replay_overlay.update(int(time_delta * 1000))
+            self.swing_replay_overlay.render(screen)
+            self.ui_manager.draw()
+            self.flip_display()
+
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    # Close the overlay AND re-post the quit, or the window
+                    # cannot be closed while the replay is up.
+                    self.swing_replay_overlay.dismiss()
+                    pygame.event.post(event)
+                elif event.type in (pygame.VIDEORESIZE, pygame.WINDOWRESIZED):
+                    self._update_scaling()
+                elif event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
+                    self.toggle_fullscreen()
+                else:
+                    self.swing_replay_overlay.handle_event(event)
 
     def _reverse_last_call(self):
         """Reverse the umpire's call after a successful challenge.
