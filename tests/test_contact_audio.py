@@ -71,19 +71,29 @@ def test_none_quality_is_treated_as_worst_contact():
 def test_calibration_reproduces_mlb_exit_velocity_quantiles():
     """The whole point of the calibration table.
 
-    The game's contact_quality is heavily skewed high (median 0.886 over
-    the recorded contacts) because it is only computed for swings that
-    already timed the ball. Feeding the observed quality quantiles in must
-    yield roughly the MLB exit-velocity quantiles out — if this drifts,
-    routine contact starts sounding like a barrel again.
+    The game's contact_quality is heavily skewed high (median 0.81 over the
+    contact the `bat_contact` sweep actually puts in play) because it is only
+    computed for swings that squared the ball up. Feeding the observed quality
+    quantiles in must yield roughly the MLB exit-velocity quantiles out — if
+    this drifts, routine contact starts sounding like a barrel again, or the
+    whole distribution goes soft and every ball in play is a little weaker
+    than the swing that produced it.
+
+    The quantiles below were last re-derived when the ball got a *direction*
+    (`spray`), which changed which contacts are fair and so the distribution
+    this is fitted to. Both tails widened: the quality threshold came down to
+    0.52 because it no longer carries the whole foul verdict, admitting weak
+    contact that stays between the lines, while a well-struck ball can now be
+    hooked past a pole and leave the fair population altogether. Do not restate
+    them from a uniform sweep of quality: see the warning over EV_CALIBRATION.
     """
     # (observed quality quantile, expected MLB EV, tolerance)
     checks = [
-        (0.631, 74.0, 4.0),    # p10
-        (0.770, 82.0, 4.0),    # p25
-        (0.886, 91.0, 4.0),    # p50
-        (0.954, 101.0, 4.0),   # p75
-        (0.982, 106.0, 4.0),   # p90
+        (0.580, 74.0, 4.0),    # p10
+        (0.653, 82.0, 4.0),    # p25
+        (0.743, 91.0, 4.0),    # p50
+        (0.858, 101.0, 4.0),   # p75
+        (0.932, 106.0, 4.0),   # p90
     ]
     for quality, expected, tol in checks:
         mean_ev = sum(exit_velocity_mph(quality, "contact", rng=_fixed_rng(s))
@@ -95,10 +105,13 @@ def test_calibration_reproduces_mlb_exit_velocity_quantiles():
 def test_median_contact_does_not_sound_like_a_barrel():
     """Regression on the calibration bug found during implementation.
 
-    With a naive uniform mapping the median recorded contact (q=0.886)
-    modelled 111 mph and drew the crushed sample about half the time.
+    With a naive uniform mapping the median contact modelled 111 mph and drew
+    the crushed sample about half the time. The median moves whenever the
+    contact geometry does — 0.886 for the rectangle, 0.81 for the anisotropic
+    bat, 0.743 now — and this test has to move with it or it stops asking
+    about the median at all.
     """
-    picks = [contact_sound_for(0.886, "contact", ALL_SAMPLES, rng=_fixed_rng(s))[0]
+    picks = [contact_sound_for(0.743, "contact", ALL_SAMPLES, rng=_fixed_rng(s))[0]
              for s in range(400)]
     crushed_share = picks.count("contact_crushed") / len(picks)
     assert crushed_share < 0.02, f"median contact drew the crushed sample {crushed_share:.0%} of the time"

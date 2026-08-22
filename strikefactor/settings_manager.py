@@ -13,6 +13,65 @@ class DifficultyLevel(Enum):
     ALL_STAR = "all_star"
     HALL_OF_FAME = "hall_of_fame"
 
+# Define difficulty multipliers that affect game mechanics.
+#
+# `aim_assist` is the fraction of the player's aim error that the
+# in-swing adjustment removes before the bat is built — a hitter reads
+# the ball late and adjusts the barrel's plane on the way to it, so the
+# bat does not end up exactly where they set out to put it. Converted in
+# `bat_contact.aim_at_pitch`, which caps the correction at
+# `MAX_ASSIST_FT` so a genuinely bad guess still misses. Unlike the
+# window and zone multipliers it moves the *bat* rather than widening
+# its tolerance, so it lifts contact quality as well as hit-or-miss.
+DIFFICULTY_MULTIPLIERS = {
+    DifficultyLevel.ROOKIE: {
+        "aim_assist": 0.85,                # Reads the ball best
+        "contact_timing_window": 1.5,      # 50% larger timing window
+        "power_timing_window": 1.3,        # 30% larger timing window
+        "contact_zone_size": 1.4,          # 40% larger contact zone
+        "out_probability_modifier": 0.7,   # 30% fewer outs
+        "strike_zone_tolerance": 1.2,      # More forgiving strike zone
+        "foul_ball_chance": 1.3            # More foul balls (second chances)
+    },
+    DifficultyLevel.AMATEUR: {
+        "aim_assist": 0.65,                # Balanced in-swing adjustment
+        "contact_timing_window": 1.0,      # Normal timing window
+        "power_timing_window": 1.0,        # Normal timing window
+        "contact_zone_size": 1.0,          # Normal contact zone
+        "out_probability_modifier": 1.0,   # Normal out rates
+        "strike_zone_tolerance": 1.0,      # Normal strike zone
+        "foul_ball_chance": 1.0            # Normal foul ball rate
+    },
+    DifficultyLevel.PROFESSIONAL: {
+        "aim_assist": 0.50,                # Half the aim error survives
+        "contact_timing_window": 0.8,      # 20% smaller timing window
+        "power_timing_window": 0.7,        # 30% smaller timing window
+        "contact_zone_size": 0.9,          # 10% smaller contact zone
+        "out_probability_modifier": 1.2,   # 20% more outs
+        "strike_zone_tolerance": 0.9,      # Tighter strike zone
+        "foul_ball_chance": 0.8            # Fewer foul balls
+    },
+    DifficultyLevel.ALL_STAR: {
+        "aim_assist": 0.35,                # Little help reading the ball
+        "contact_timing_window": 0.6,      # 40% smaller timing window
+        "power_timing_window": 0.5,        # 50% smaller timing window
+        "contact_zone_size": 0.8,          # 20% smaller contact zone
+        "out_probability_modifier": 1.4,   # 40% more outs
+        "strike_zone_tolerance": 0.8,      # Much tighter strike zone
+        "foul_ball_chance": 0.7            # Fewer foul balls
+    },
+    DifficultyLevel.HALL_OF_FAME: {
+        "aim_assist": 0.20,                # Almost no adjustment
+        "contact_timing_window": 0.4,      # 60% smaller timing window
+        "power_timing_window": 0.3,        # 70% smaller timing window
+        "contact_zone_size": 0.7,          # 30% smaller contact zone
+        "out_probability_modifier": 1.6,   # 60% more outs
+        "strike_zone_tolerance": 0.7,      # Very tight strike zone
+        "foul_ball_chance": 0.6            # Much fewer foul balls
+    }
+}
+
+
 class SettingsManager:
     # FPS option constants
     DISPLAY_FPS_OPTIONS = [60, 120]
@@ -95,54 +154,19 @@ class SettingsManager:
                 print(f"Invalid difficulty level: {difficulty_level}")
 
     def get_difficulty_multipliers(self):
-        """Get difficulty-specific game multipliers."""
-        difficulty = self.get_difficulty()
+        """Get difficulty-specific game multipliers.
 
-        # Define difficulty multipliers that affect game mechanics
-        multipliers = {
-            DifficultyLevel.ROOKIE: {
-                "contact_timing_window": 1.5,      # 50% larger timing window
-                "power_timing_window": 1.3,        # 30% larger timing window
-                "contact_zone_size": 1.4,          # 40% larger contact zone
-                "out_probability_modifier": 0.7,   # 30% fewer outs
-                "strike_zone_tolerance": 1.2,      # More forgiving strike zone
-                "foul_ball_chance": 1.3            # More foul balls (second chances)
-            },
-            DifficultyLevel.AMATEUR: {
-                "contact_timing_window": 1.0,      # Normal timing window
-                "power_timing_window": 1.0,        # Normal timing window
-                "contact_zone_size": 1.0,          # Normal contact zone
-                "out_probability_modifier": 1.0,   # Normal out rates
-                "strike_zone_tolerance": 1.0,      # Normal strike zone
-                "foul_ball_chance": 1.0            # Normal foul ball rate
-            },
-            DifficultyLevel.PROFESSIONAL: {
-                "contact_timing_window": 0.8,      # 20% smaller timing window
-                "power_timing_window": 0.7,        # 30% smaller timing window
-                "contact_zone_size": 0.9,          # 10% smaller contact zone
-                "out_probability_modifier": 1.2,   # 20% more outs
-                "strike_zone_tolerance": 0.9,      # Tighter strike zone
-                "foul_ball_chance": 0.8            # Fewer foul balls
-            },
-            DifficultyLevel.ALL_STAR: {
-                "contact_timing_window": 0.6,      # 40% smaller timing window
-                "power_timing_window": 0.5,        # 50% smaller timing window
-                "contact_zone_size": 0.8,          # 20% smaller contact zone
-                "out_probability_modifier": 1.4,   # 40% more outs
-                "strike_zone_tolerance": 0.8,      # Much tighter strike zone
-                "foul_ball_chance": 0.7            # Fewer foul balls
-            },
-            DifficultyLevel.HALL_OF_FAME: {
-                "contact_timing_window": 0.4,      # 60% smaller timing window
-                "power_timing_window": 0.3,        # 70% smaller timing window
-                "contact_zone_size": 0.7,          # 30% smaller contact zone
-                "out_probability_modifier": 1.6,   # 60% more outs
-                "strike_zone_tolerance": 0.7,      # Very tight strike zone
-                "foul_ball_chance": 0.6            # Much fewer foul balls
-            }
-        }
-
-        return multipliers.get(difficulty, multipliers[DifficultyLevel.AMATEUR])
+        Reads `DIFFICULTY_MULTIPLIERS` rather than rebuilding it, so the table
+        has exactly one definition. A second hand-written copy of the AMATEUR
+        row lived in `HitOutcomeManager._get_difficulty_multipliers` as its
+        no-settings fallback, and it silently went stale the moment
+        `aim_assist` was added here — `resolve_aim` raised `KeyError` for any
+        caller constructed without a `SettingsManager`. Returns a fresh dict:
+        callers used to get one per call, and handing out the shared table
+        would let one of them mutate every later reader's copy.
+        """
+        return dict(DIFFICULTY_MULTIPLIERS.get(
+            self.get_difficulty(), DIFFICULTY_MULTIPLIERS[DifficultyLevel.AMATEUR]))
 
     def get_difficulty_description(self, difficulty_level=None):
         """Get human-readable description of difficulty level."""

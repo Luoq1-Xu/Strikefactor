@@ -1,6 +1,6 @@
 {
   "version": "2.0",
-  "last_updated": "2026-08-22T14:06:10.250154",
+  "last_updated": "2026-08-20T18:44:45.266450",
   "buckets": {
     "unknown|unknown": {
       "heatmap_data": [
@@ -37,107 +37,107 @@
       "total_hbp": 0,
       "total_sacrifice_flies": 0
     },
-    "arcade|rookie": {
+    "sandbox|amateur": {
       "heatmap_data": [
+        1,
+        1,
         0,
         0,
-        1,
         3,
-        5,
-        3,
-        4,
         1,
-        2
+        1,
+        0,
+        1
       ],
       "heatmap_attempts": [
-        4,
-        9,
-        6,
-        8,
-        20,
-        7,
+        15,
         13,
-        14,
-        7
+        12,
+        11,
+        24,
+        10,
+        9,
+        17,
+        9
       ],
-      "total_swings": 88,
-      "total_hits": 34,
-      "total_pitches": 208,
-      "total_at_bats": 87,
-      "total_singles": 18,
-      "total_doubles": 7,
-      "total_triples": 0,
-      "total_home_runs": 9,
-      "total_walks": 0,
-      "total_hbp": 0,
-      "total_sacrifice_flies": 0
-    },
-    "arcade|professional": {
-      "heatmap_data": [
-        0,
-        0,
-        0,
-        0,
-        1,
-        0,
-        0,
-        1,
-        4
-      ],
-      "heatmap_attempts": [
-        0,
-        5,
-        2,
-        4,
-        4,
-        0,
-        3,
-        6,
-        6
-      ],
-      "total_swings": 30,
-      "total_hits": 6,
-      "total_pitches": 110,
-      "total_at_bats": 31,
-      "total_singles": 3,
-      "total_doubles": 0,
+      "total_swings": 120,
+      "total_hits": 14,
+      "total_pitches": 270,
+      "total_at_bats": 89,
+      "total_singles": 8,
+      "total_doubles": 3,
       "total_triples": 0,
       "total_home_runs": 3,
       "total_walks": 0,
       "total_hbp": 0,
       "total_sacrifice_flies": 0
     },
-    "sandbox|professional": {
+    "arcade|amateur": {
       "heatmap_data": [
         0,
         0,
+        0,
+        0,
+        0,
         1,
         0,
         0,
-        0,
-        0,
-        0,
-        2
+        0
       ],
       "heatmap_attempts": [
-        2,
-        1,
-        1,
-        2,
-        3,
-        2,
         0,
+        0,
+        1,
         2,
-        7
+        7,
+        2,
+        1,
+        3,
+        4
       ],
       "total_swings": 20,
-      "total_hits": 4,
-      "total_pitches": 40,
-      "total_at_bats": 14,
+      "total_hits": 1,
+      "total_pitches": 72,
+      "total_at_bats": 25,
       "total_singles": 1,
       "total_doubles": 0,
       "total_triples": 0,
-      "total_home_runs": 3,
+      "total_home_runs": 0,
+      "total_walks": 0,
+      "total_hbp": 0,
+      "total_sacrifice_flies": 0
+    },
+    "arcade|rookie": {
+      "heatmap_data": [
+        0,
+        2,
+        1,
+        0,
+        3,
+        3,
+        1,
+        3,
+        3
+      ],
+      "heatmap_attempts": [
+        2,
+        4,
+        5,
+        3,
+        14,
+        6,
+        11,
+        16,
+        9
+      ],
+      "total_swings": 70,
+      "total_hits": 29,
+      "total_pitches": 185,
+      "total_at_bats": 87,
+      "total_singles": 18,
+      "total_doubles": 2,
+      "total_triples": 0,
+      "total_home_runs": 9,
       "total_walks": 0,
       "total_hbp": 0,
       "total_sacrifice_flies": 0

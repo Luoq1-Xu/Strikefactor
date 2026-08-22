@@ -161,6 +161,19 @@ class PitchSimulation:
         # the same reason: it used to spring into existence only when a swing
         # happened, so every read of it needed a getattr.
         self.swing_starttime = None
+        # The swing itself, and the sweep of it against this pitch. Both are
+        # decided once, at commit, and everything after reads them.
+        self.bat_swing = None
+        self.contact = None
+        # The cursor resolved against this pitch — see `bat_contact.aim_at_pitch`.
+        self.swing_aim_ft = None
+        # How much of the aim error the in-swing adjustment removed, recorded
+        # at commit rather than read back later: difficulty can change between
+        # the swing and the replay, and the replay must show the bat that was
+        # swung.
+        self.aim_assist = 0.0
+        self.zone_size_mult = 1.0
+        self.timing_window_mult = 1.0
         self.aim_screen_at_swing = None    # cursor when the swing was committed
         self.aim_screen_at_contact = None  # cursor when the bat arrived
         self.ball_screen_at_contact = None
@@ -175,12 +188,16 @@ class PitchSimulation:
         self.batted_ball_type = None
         self.fielder_role = None
         self.play_margin_s = None
+        # Which way the ball left the bat, pull-positive degrees. Set on every
+        # bat-on-ball event including fouls — a foul has a direction and it is
+        # often *why* it was a foul — and left None on a whiff, where there is
+        # no ball to have a direction. Same shape as `exit_velocity_mph`.
+        self.spray_angle_deg = None
         # Foul contact metrics, computed in _handle_foul_ball. Fouls never
         # run the hit pipeline, so last_quality is stale for them — these
         # are the foul's own numbers, shared by the sound and the animation.
         self._foul_quality = None
         self._foul_vertical_offset = None
-        self._foul_timing_norm = 0.0
         self.ai_umpire_strike = None      # set in _make_ball_strike_call (taken pitches only)
         self.truth_strike = None          # set in _make_ball_strike_call (taken pitches only)
         self.abs_challenged = False       # toggled by ABS challenge wiring (see _challenge bookkeeping)
@@ -351,8 +368,73 @@ class PitchSimulation:
 
         mousepos = self.game.get_mouse_pos()
         self.swing_starttime = pygame.time.get_ticks()
-        self.contact_time = self.swing_starttime + bat_path.SWING_DURATION_MS
         self.aim_screen_at_swing = mousepos
+        self.swing_type = 1 if event.key == pygame.K_w else 2
+
+        # The whole swing is decided here, at the moment it is committed.
+        #
+        # It used to be decided in two places at two times: a timing grade
+        # taken now, and a rectangle-versus-ball test taken 150 ms later
+        # against the cursor *as it was then* — which let a player re-aim
+        # during the swing. A real swing path cannot change once it has
+        # started, and now neither can this one: the bat is built from the
+        # cursor at commit and swept against the pitch's own trajectory.
+        #
+        # The cursor is resolved against the pitch before the bat is built.
+        # A cursor is a ray: `bat_path` puts the barrel on it at the depth the
+        # barrel reaches, a couple of feet in front of the plate, but the
+        # player is pointing at a ball drawn all the way *to* the plate. The
+        # ball is two to five inches higher where the bat will be, which is
+        # the entire 2.75 in of tolerance between a bat and a ball — so a
+        # perfectly aimed, perfectly timed swing fouled everything and missed
+        # a curveball outright. `bat_contact.aim_at_pitch` translates the
+        # cursor onto the barrel's depth, and `bat_path` still never sees the
+        # pitch.
+        #
+        # `resolve_aim` does one further thing, and it is a different kind of
+        # thing: it pulls the aim a difficulty-scaled fraction of the way toward
+        # the ball — the adjustment a hitter makes once they have read the pitch,
+        # capped at `bat_contact.MAX_ASSIST_FT` so a genuinely bad guess still
+        # misses. The depth correction above is a bias the player could not have
+        # seen; the assist shrinks an error they genuinely made. Don't let the
+        # two be read as one thing: the first is a bug fix and the second is
+        # game feel, and only the second belongs on a difficulty ladder.
+        self.aim_assist = self.game.settings_manager.get_difficulty_multipliers()[
+            "aim_assist"]
+        # Stamped at commit and carried on the record, so the replay can
+        # re-sweep this swing to measure the timing it actually had. Re-reading
+        # difficulty at replay time would show a window nobody swung in.
+        self.zone_size_mult, self.timing_window_mult = (
+            self.game.hit_outcome_manager.contact_multipliers(self.swing_type))
+        self.swing_aim_ft = self.game.hit_outcome_manager.resolve_aim(
+            DEFAULT_CAMERA.screen_to_world_at_plate(*mousepos),
+            self.trajectory,
+            self.game.batter.get_handedness(),
+        )
+        self.bat_swing = bat_path.swing(
+            aim_ft=self.swing_aim_ft,
+            handedness=self.game.batter.get_handedness(),
+        )
+        swing_start_s = (self.swing_starttime - self.starttime - self.windup) / 1000.0
+        self.contact = self.game.hit_outcome_manager.resolve_swing(
+            self.bat_swing, self.trajectory, swing_start_s, self.swing_type)
+        self.on_time = self.game.hit_outcome_manager.swing_verdict(
+            self.contact, self.swing_type)
+
+        # When the barrel and the ball actually met, or when the barrel
+        # reached its contact pose if they never did.
+        #
+        # Read off the *pitch* clock rather than by adding the swing's phase to
+        # the keypress. The engine may have slid the swing to bring it to the
+        # ball (`bat_contact.Contact.shift_s`) and the two clocks then differ
+        # by exactly that much; `pitch_t_s` is when the ball was where the
+        # contact says it was, which is the instant everything drawn has to
+        # agree with. Identical to the old arithmetic whenever the shift is 0.
+        if self.contact is not None:
+            self.contact_time = int(self.starttime + self.windup
+                                    + self.contact.pitch_t_s * 1000.0)
+        else:
+            self.contact_time = self.swing_starttime + bat_path.SWING_DURATION_MS
 
         # Capture timing diff for analytics regardless of contact result.
         # Swing-and-miss pitches still need a timing-diff signal to study
@@ -360,22 +442,17 @@ class PitchSimulation:
         self.swing_timing_signed_ms = self._signed_timing_ms()
         self.swing_timing_diff_ms = abs(self.swing_timing_signed_ms)
 
-        if event.key == pygame.K_w:
-            # Contact swing
-            self.swing_type = 1
-            self.on_time = self.game.hit_outcome_manager.contact_timing_quality(
-                self.swing_starttime, self.starttime, self.traveltime, self.windup
-            )
-        else:  # pygame.K_e
-            # Power swing
-            self.swing_type = 2
-            self.on_time = self.game.hit_outcome_manager.power_timing_quality(
-                self.swing_starttime, self.starttime, self.traveltime, self.windup
-            )
         self.game.swing_started = 1 if mousepos[1] > 500 else 2
 
     def _signed_timing_ms(self):
         """How far off the swing was, in ms. Negative early, positive late.
+
+        Measured against the ball reaching **the barrel's own contact depth**,
+        not the plate. The bat meets the ball a couple of feet out in front
+        (further on a pitch inside, which is more foreshortened and so pulled
+        earlier), and grading a swing against the plate therefore reported a
+        swing that met the ball perfectly as about 17 ms early. The datum is
+        now the thing the player is actually racing.
 
         The one place this is computed. It used to be written out twice —
         abs()'d at swing input for the DB, and recomputed with its sign in
@@ -384,22 +461,16 @@ class PitchSimulation:
         """
         if self.swing_starttime is None:
             return None
-        return ((self.swing_starttime + bat_path.SWING_DURATION_MS)
-                - (self.starttime + self.windup + self.traveltime))
+        due_ms = (self.starttime + self.windup
+                  + self.trajectory.time_at_depth(self.barrel_depth_ft) * 1000.0)
+        return (self.swing_starttime + bat_path.SWING_DURATION_MS) - due_ms
 
-    def _timing_windows(self):
-        """This swing's (perfect_ms, foul_ms) thresholds, difficulty-scaled.
-
-        Mirrors `contact_timing_quality` / `power_timing_quality`, which own
-        the verdict. Read here so the foul severity and the replay's timing
-        scale describe the same window the swing was actually judged against.
-        """
-        multipliers = self.game.settings_manager.get_difficulty_multipliers()
-        if self.swing_type == 2:
-            window = multipliers["power_timing_window"]
-            return 20.0 * window, 35.0 * window
-        window = multipliers["contact_timing_window"]
-        return 30.0 * window, 60.0 * window
+    @property
+    def barrel_depth_ft(self):
+        """Feet in front of the plate where this swing's barrel arrives."""
+        if self.bat_swing is None:
+            return 0.0
+        return self.bat_swing.contact_depth_ft
 
     def _capture_bat_arrival(self, current_time):
         """Record where the bat and ball were when the barrel got there.
@@ -457,27 +528,21 @@ class PitchSimulation:
                 self.soundplayed += 1
 
     def _evaluate_contact(self):
-        """Evaluate the contact outcome based on timing."""
-        mousepos = self.game.get_mouse_pos()
+        """Play out the contact resolved at swing commit.
 
-        if self.on_time == 1:  # Foul ball timing
-            outcome = self.game.hit_outcome_manager.get_ball_to_bat_contact_outcome(
-                mousepos, (self.game.ball[0], self.game.ball[1]), self.swing_type,
-                batter_handedness=self.game.batter.get_handedness()
-            )
-            if outcome == 'miss':
-                self.made_contact = "swung_and_miss"
-            else:
-                self._handle_foul_ball()
-        elif self.on_time == 2:  # Perfect timing
-            outcome = self.game.hit_outcome_manager.get_ball_to_bat_contact_outcome(
-                mousepos, (self.game.ball[0], self.game.ball[1]), self.swing_type,
-                batter_handedness=self.game.batter.get_handedness()
-            )
-            if outcome == 'miss':
-                self.made_contact = "swung_and_miss"
-            else:
-                self._handle_successful_hit()
+        Nothing is decided here any more — `resolve_swing` swept the bat
+        against the ball the moment the player committed, and this is the
+        frame where that result becomes visible.
+        """
+        if self.contact is not None:
+            self.spray_angle_deg = self.contact.spray_deg
+
+        if self.contact is None:
+            self.made_contact = "swung_and_miss"
+        elif self.on_time == 1:
+            self._handle_foul_ball()
+        elif self.on_time == 2:
+            self._handle_successful_hit()
 
     def _compute_foul_contact_metrics(self):
         """Measure the foul's contact quality, offset and signed timing.
@@ -487,23 +552,22 @@ class PitchSimulation:
         would leave players with that setting off hearing one flat sample
         for every foul — the exact behaviour this refactor removes.
         Results are cached on self for _start_foul_animation to reuse.
+
+        The foul's *direction* is no longer computed here. It used to be a
+        `_foul_timing_norm` in [-1, 1] — the sign of the swing's timing error
+        against a `_foul_spray_window` of hand-tuned milliseconds, which the
+        animation turned into "pull side" or "opposite field". Both are gone:
+        the ball has a real bearing now (`Contact.spray_deg`), the same one a
+        fair ball gets, and a foul is simply one whose bearing fell outside the
+        lines or whose contact was too glancing to matter. That comment's
+        standing offer — *if it ever stops being cosmetic, measure it* — is
+        what this is.
         """
-        mousepos = self.game.get_mouse_pos()
-
-        # Signed timing error: negative = early swing (pull-side foul),
-        # positive = late (opposite field).
-        signed_ms = self._signed_timing_ms()
-        # Severity: where |signed_ms| sits inside this swing's foul window
-        # (between the perfect and miss thresholds, difficulty-scaled).
-        lo, hi = self._timing_windows()
-        severity = max(0.0, min(1.0, (abs(signed_ms) - lo) / max(1.0, hi - lo)))
-
         quality, vertical_offset = self.game.hit_outcome_manager.compute_foul_contact(
-            mousepos[1], self.game.ball[1], abs(signed_ms))
+            self.contact)
 
         self._foul_quality = quality
         self._foul_vertical_offset = vertical_offset
-        self._foul_timing_norm = severity if signed_ms > 0 else -severity
 
     def _handle_foul_ball(self):
         """Handle foul ball outcome."""
@@ -538,26 +602,12 @@ class PitchSimulation:
         else:
             self.game.hit_outcome_manager.momentum_bonus = 0.0
 
-        # Get swing and ball positions for more realistic outcomes
-        mousepos = self.game.get_mouse_pos()
-        swing_y = mousepos[1]
-        ball_x = self.game.ball[0]
-        ball_y = self.game.ball[1]
-        batter_handedness = self.game.batter.get_handedness()
-
-        # Calculate timing difference for more realistic outcomes
-        timing_diff = abs(self._signed_timing_ms())
-
         if self.swing_type == 1:
             hit_string = self.game.hit_outcome_manager.get_contact_hit_outcome(
-                swing_location_y=swing_y, ball_location_y=ball_y, timing_diff=timing_diff,
-                ball_location_x=ball_x, batter_handedness=batter_handedness,
-            )
+                self.contact)
         elif self.swing_type == 2:
             hit_string = self.game.hit_outcome_manager.get_power_hit_outcome(
-                swing_location_y=swing_y, ball_location_y=ball_y, timing_diff=timing_diff,
-                ball_location_x=ball_x, batter_handedness=batter_handedness,
-            )
+                self.contact)
 
         # Snapshot contact metrics for the hit animation (shape + HR distance).
         contact_quality = self.game.hit_outcome_manager.last_quality
@@ -1010,7 +1060,7 @@ class PitchSimulation:
             vertical_offset=vertical_offset,
             quality=quality,
             batted_ball_type=self.game.hit_outcome_manager.last_batted_ball_type,
-            horizontal_inside=self.game.hit_outcome_manager.last_horizontal_inside,
+            spray_deg=self.game.hit_outcome_manager.last_spray_deg,
         )
 
     def _start_foul_animation(self):
@@ -1018,19 +1068,18 @@ class PitchSimulation:
         display until it ends.
 
         Deliberately does not go through _start_hit_animation: that path
-        reads stale last_batted_ball_type / last_horizontal_inside from the
-        previous hit (fouls never run the hit outcome pipeline) and writes
-        a blue "hit" trail marker where track mode expects the foul's red
-        strike entry.
+        reads stale last_batted_ball_type / last_spray_deg from the previous
+        hit (fouls never run the hit outcome pipeline) and writes a blue "hit"
+        trail marker where track mode expects the foul's red strike entry.
         """
         from strikefactor.gameplay.hit_animation import HitAnimation
-        handedness = self.game.batter.get_handedness()
 
         quality = self._foul_quality
         vertical_offset = self._foul_vertical_offset
-        foul_timing_norm = self._foul_timing_norm
-        horizontal_inside = self.game.hit_outcome_manager._compute_horizontal_inside(
-            self.game.ball[0], handedness)
+        # Off the contact itself rather than the manager's `last_*`, for the
+        # reason in the docstring above: this path never ran the hit pipeline,
+        # so those fields still describe the previous ball in play.
+        spray_deg = self.contact.spray_deg
 
         def on_complete():
             self.game._display_pitch_results("FOUL", self.pitchtype, self.speed_mph)
@@ -1053,8 +1102,7 @@ class PitchSimulation:
             vertical_offset=vertical_offset,
             quality=quality,
             batted_ball_type=None,
-            horizontal_inside=horizontal_inside,
-            foul_timing_norm=foul_timing_norm,
+            spray_deg=spray_deg,
         )
 
     def _handle_hit_animation_phase(self, current_time, time_delta):

@@ -46,7 +46,7 @@ def _make(shape, quality):
         vertical_offset=0.0,
         quality=quality,
         batted_ball_type=shape,
-        horizontal_inside=0.0,
+        spray_deg=0.0,
     )
 
 

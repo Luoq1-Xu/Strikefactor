@@ -34,7 +34,7 @@ PITCHER_HANDEDNESS = {
 }
 
 
-SCHEMA_VERSION = 8  # Bumped when migrations are added; see PitchDB._migrate.
+SCHEMA_VERSION = 9  # Bumped when migrations are added; see PitchDB._migrate.
 
 # v5 renamed the pop-up outcome from "POP_UP" to "POP UP", so it reads like
 # every other recorded outcome ("HOME RUN", "LINEOUT"). Data written before v5
@@ -119,6 +119,7 @@ class PitchDB:
         batted_ball_type TEXT,
         fielder_role TEXT,
         play_margin_s REAL,
+        spray_angle_deg REAL,
 
         -- Umpire / ABS
         ai_umpire_strike INTEGER,
@@ -284,6 +285,27 @@ class PitchDB:
         ("swing_timing_signed_ms", "REAL"),
     ]
 
+    # v9: which way the ball went. Degrees from centre field, **pull-positive
+    # for either batter** — handedness is folded in, the way
+    # `horizontal_inside` folded it in, so an aggregate over both hands means
+    # something without a join.
+    #
+    # It is the first direction the DB has ever held. Before it, spray was not
+    # merely unrecorded but *unmodelled*: a ball in play drew its bearing from
+    # `random.uniform`, so there was nothing to record. Now it is read off the
+    # bat's own face at contact (`spray`), which makes it an independent axis
+    # to slice on in the same sense `batted_ball_type` is — decided at contact,
+    # upstream of any fielding decision.
+    #
+    # NULL when the bat never met the ball. A swing that missed has no
+    # direction, and per the v7 precedent that must not be coalesced to 0.0:
+    # zero is dead centre field, a real and common value, so filling it in
+    # would put a spike in the middle of the one distribution this column
+    # exists to show the shape of.
+    V9_PITCHES_COLUMNS = [
+        ("spray_angle_deg", "REAL"),
+    ]
+
     # Backup policy
     BACKUP_DIR_NAME = "backups"
     BACKUP_MIN_INTERVAL = timedelta(hours=1)  # don't backup more than once per hour
@@ -315,7 +337,8 @@ class PitchDB:
             existing_pitches = {row[1] for row in self.conn.execute("PRAGMA table_info(pitches)")}
             for col, decl in (self.V2_PITCHES_COLUMNS + self.V3_PITCHES_COLUMNS
                              + self.V4_PITCHES_COLUMNS + self.V6_PITCHES_COLUMNS
-                             + self.V7_PITCHES_COLUMNS + self.V8_PITCHES_COLUMNS):
+                             + self.V7_PITCHES_COLUMNS + self.V8_PITCHES_COLUMNS
+                             + self.V9_PITCHES_COLUMNS):
                 if col not in existing_pitches:
                     self.conn.execute(f"ALTER TABLE pitches ADD COLUMN {col} {decl}")
 
@@ -587,6 +610,7 @@ class PitchDataExtractor:
             "batted_ball_type": getattr(sim, "batted_ball_type", None),
             "fielder_role": getattr(sim, "fielder_role", None),
             "play_margin_s": getattr(sim, "play_margin_s", None),
+            "spray_angle_deg": getattr(sim, "spray_angle_deg", None),
             "ai_umpire_strike": _nullable_int(getattr(sim, "ai_umpire_strike", None)),
             "truth_strike": _nullable_int(getattr(sim, "truth_strike", None)),
             "abs_challenged": int(bool(getattr(sim, "abs_challenged", False))),

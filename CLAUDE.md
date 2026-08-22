@@ -135,11 +135,13 @@ The pitch simulation is handled by [pitch_simulation.py](strikefactor/gameplay/p
 
 ### Hit Outcome System
 [hit_outcome_manager.py](strikefactor/gameplay/hit_outcome_manager.py) determines hit results:
-- Factors: swing timing, swing location (high/low relative to ball), contact quality
+- Factors: swing timing, swing location (high/low relative to ball), contact quality, and — since [spray.py](strikefactor/gameplay/spray.py) — which way the bat was pointing
 - Difficulty modifiers reach the batted ball as **seconds on the runner's clock**, not as a multiplier on the verdict — `out_probability_modifier` converts via `DIFFICULTY_SECONDS_PER_MODIFIER` (−0.15 s at ROOKIE to +0.30 s at HALL_OF_FAME). Far more intelligible, and it cannot overrule the physics on a routine play.
 - Separate logic for contact swings (W key) vs power swings (E key)
 - Outcomes: SINGLE, DOUBLE, TRIPLE, HOME RUN, FLYOUT, GROUNDOUT, LINEOUT, FOUL BALL
 - `_resolve_outcome` rolls **only the home run**; everything else is deferred to the animation as `IN_PLAY` and emerges from the fielding and timing models. **Known fault:** that HR roll is a quality-indexed probability computed *independently of* `ball_flight.carry_distance_ft`, so one batted ball is asked "did it clear the fence?" twice by two systems that can disagree — a ball can be denied a home run and then given a 440 ft carry, which lands it off the wall for an automatic double. This is the last surviving instance of the two-models-of-one-thing fault that the clock unification fixed elsewhere, and it is why HR run at ~25% of hits against MLB's ~14%. See §8 of [docs/infield-timing-refactor.md](docs/infield-timing-refactor.md).
+- `last_spray_deg` carries the ball's direction downstream. It replaced `last_horizontal_inside`, which was the *pitch's* inside/outside offset in screen pixels and was read by exactly one thing (the home-run angle). Pitch location does belong in the answer — it just belongs the way it reaches a real hitter, by moving where the bat points when it arrives, which `bat_path` already models. `_compute_horizontal_inside` and `contact_screen_x` are gone with it.
+- **`swing_verdict` asks two questions now**, and `Contact.is_foul` is where they meet: was the ball struck cleanly (`quality`), and did it leave between the lines (`spray`). See [Modifying Swing Mechanics](#modifying-swing-mechanics).
 - Once an outcome is resolved, `pitch_simulation._start_hit_animation()` hands off rendering to [HitAnimation](#hit-animation), which classifies the trajectory shape and plays it before the result banner appears.
 
 ### Contact Audio
@@ -147,7 +149,7 @@ The pitch simulation is handled by [pitch_simulation.py](strikefactor/gameplay/p
 - **Every** bat-on-ball event routes through `SoundManager.play_contact(quality, swing_type)`: fouls, in-play contact and home runs alike. The only thing separating them acoustically is the modelled exit velocity. Selection deliberately takes **no outcome** — the sound fires at impact, before the animation resolves what happened, and a home run that merely carried should not sound like a 112-mph barrel.
 - **Home runs are the one exception, and it is not an outcome cue.** `play_contact(..., hr_distance_ft=...)` takes EV from the distance the player is about to see and floors selection at `HOMERUN_MIN_SAMPLE` (`contact_solid`). The reason is that `hit_animation`'s carry model rolls its own random `bias` for distance, so quality and distance genuinely disagree: before this, ~52% of home runs played `contact_weak`/`contact_medium`, which is how a soft crack ended up under a 460 FT readout. The distance is a *better measurement* of how hard the ball was struck than quality is, and it is already fixed by the time the sound plays — `_evaluate_contact()` builds the `HitAnimation` earlier in the same frame. Wall-scrapers still sound merely solid; the floor is not "home runs are always loudest".
 - A foul that hooks past the pole (`is_foul_hr`) is **not** a home run and gets no floor and no distance — it takes the ordinary quality path.
-- **The EV curve is calibrated, not analytic.** `quality` is only computed for swings that already timed the ball, so its real distribution is skewed hard toward 1.0 (median 0.886 over the recorded contacts, p25 0.770). `EV_CALIBRATION` pins the observed quality quantiles to MLB EV quantiles. A naive linear/power mapping puts the *median* batted ball near the top of the scale — routine grounders then draw the max-crack sample, which is the bug this module exists to prevent. Re-derive the table if `_compute_contact_quality` changes.
+- **The EV curve is calibrated, not analytic.** `quality` is only computed for swings that squared the ball up enough to put it in play, so its real distribution is skewed hard toward 1.0 — p25 0.653 / p50 0.743 / p90 0.932 now that direction is part of the foul verdict, against 0.717 / 0.769 / 0.918 for the slide model before it, 0.70 / 0.81 / 0.98 for the anisotropic bat, and 0.770 / 0.886 / 0.982 for the rectangle. Both tails **widened** at the last change while the median barely moved, for two reasons pulling opposite ways that did not cancel: the quality threshold came down to 0.52 because it no longer carries the whole foul verdict, so weak contact that stays between the lines is in play; and a *well*-struck ball can now be hooked past a pole and leave the fair population. `EV_CALIBRATION` pins those observed quantiles to MLB EV quantiles. A naive linear/power mapping puts the *median* batted ball near the top of the scale — routine grounders then draw the max-crack sample, which is the bug this module exists to prevent. Re-derive the table whenever the contact geometry changes: left on the rectangle's anchors it read the whole distribution ~6 mph soft at the median, which is a thumb on the scale toward outs on every ball in play. `tests/test_infield_hit_verdict.py::_QUALITY_QUANTILES` is anchored to the same numbers and must move with it.
 - Two layers make a spectrum out of five samples: overlapping EV bands blended at the edges (selection), plus continuous gain within the band (`contact_gain`).
 - **Assets are grouped by sound source, one directory per source** — `contact/` (bat on ball), `mitt/` (catcher receiving), `umpire_sounds/` (ball/strike/strike_3 calls). `SoundManager.SOUND_FILES` is the key→path registry; umpire calls are directory-scanned instead, for random variant selection.
 - **Keys and filenames describe the sound, never an outcome**: `contact_weak` → `contact_medium` → `contact_solid` → `contact_hard` → `contact_crushed` (files `contact/weak.mp3` … `contact/crushed.mp3`). They were `FOULBALL/SINGLE/DOUBLE/TRIPLE/HOMERUN.mp3`, which became actively misleading once selection moved to EV — `contact_solid` plays on any ~95 mph ball, which may end up a double, a lineout or a foul.
@@ -170,6 +172,18 @@ Four pure modules on the [contact_audio.py](strikefactor/engine/contact_audio.py
 - **[extra_bases.py](strikefactor/gameplay/extra_bases.py)**: the same race one base over. `AGGRESSION_MARGIN_S` is load-bearing — a runner needs *daylight*, not a dead heat, and without it every gapper is a triple.
 - **The batter's contact quality is not uniformly distributed.** Its real median is 0.88 (p25 0.77, p90 0.98) because quality is only computed for swings that already timed the ball. Four separate constants in this codebase have been miscalibrated by assuming otherwise — see the note on `EV_CALIBRATION` under [Contact Audio](#contact-audio). **Never tune against a `range(0, 1)` quality sweep**; sample `(contact_quality, vertical_offset_in)` from `strikefactor.db`, or use the quantiles in `tests/test_infield_hit_verdict.py`. Prefer keying off exit velocity, which already has the real distribution baked in.
 
+### Spray direction (`spray.py`)
+[spray.py](strikefactor/gameplay/spray.py) answers one question — *which way did the ball go* — in real degrees, on the [contact_audio.py](strikefactor/engine/contact_audio.py) pattern. It exists because that question had **four** answers and the one that mattered most was noise: a ball in play drew `random.uniform(50°, 130°)`, a home run biased off the *pitch's* location, a ball that reached the wall picked its side with `random.choice((-1, 1))`, and only a foul consulted the swing at all (through the sign of a timing error). Four models, none of them the bat.
+- **The bat already knew, and the bearing was being discarded at a module boundary.** `bat_path._pose` carries a full ground bearing at every instant and `bat_contact` sweeps against it, but `Contact` kept `axis_point_ft` and `along` and dropped the axis. It now carries `attack_deg` and `pose_attack_deg`.
+- A cylinder's surface normal is radial to its own axis, so the ball leaves perpendicular to the bat. Three behaviours fall out and **none of them is stated anywhere**: the bat turns as the swing runs, so early pulls and late goes the other way; `_contact_pose` meets an inside pitch further out front, so inside is pulled; and a pitch away is met deeper, so it is not.
+- **Location and timing are calibrated separately and in opposite directions**, which is the whole shape of the module. The raw geometry gets both shapes right and both scales wrong: location **over**-responds (`_contact_pose` swings the bat 79° across a two-foot plate, because it is pinned to the engine's screen-space aiming pivot and a real hitter's hands come in on an inside pitch where these cannot), while timing **under**-responds by ~2.4× (0.63°/ms against a real bat's ~1.5, because the sweep finds closest *approach* rather than a fixed phase). A single gain over the raw angle cannot be fitted at all — at the scale that produces MLB foul rates a *flawless* swing on an inside or outside strike is an automatic foul and half the strike zone becomes unhittable. `LOCATION_GAIN` is bounded by that constraint rather than fitted: at 1.30 a flawless swing runs −41° to +35° across the zone, gap to gap, with four degrees of margin at the outside corner. `tests/test_spray.py::test_a_flawless_swing_can_be_fair_anywhere_in_the_zone` is the pin.
+- **The centre share is a BABIP dial as well as a realism target**, which is why `LOCATION_GAIN` sits at the top of its range rather than the bottom. `hit_animation.FIELDER_HOMES` is static and was implicitly calibrated against the uniform spray this replaced, so a centre-heavy distribution puts balls over second base, where middle infielders cannot reach. Measured on one fixed set of fair balls in play: uniform spray gives BABIP .328, this model at a 0.95 gain gives .390, and at 1.30 gives .343. Widening toward the league split and recovering BABIP are the same adjustment; **what is left of that gap belongs to the defensive alignment, not to `spray`.**
+- **Raising `TIMING_GAIN` is free in a way raising `LOCATION_GAIN` is not**, and that asymmetry is why they are two constants. A perfectly timed swing has a timing term of exactly zero, so no amount of timing gain can move it; the flawless-swing range is a function of `LOCATION_GAIN` alone.
+- **`spray` has no difficulty dial and must not grow one.** Difficulty reaches the ball's direction the way it reaches a real hitter — through `timing_assist_s`, which decides how much of the player's timing error is still on the bat when it arrives. Direction fouls 19% of contact at ROOKIE against 38% at HALL OF FAME with nothing tuned for it.
+- **One sign convention, applied in one place.** `spray_angle_deg` is pull-positive for both batters; `field_angle_deg` is the only conversion into the animation's frame. Three coordinate frames meet here and two disagree about the sign of x — world `+x` is the third-base side (note `pitch_physics`'s module docstring says the opposite; the code is what is right), the animation's `field_x = -world_x` with lines at 45°/135°, and screen polar flattens those to ~30.7°/149.3°. A sign error mirrors the batter, which is the defect `collision_angled` carried for the life of the project. Every directional claim in `tests/test_spray.py` is made for both hands.
+- Spray is **deterministic** given the swing — no jitter term. The spread comes from the player's own aim and timing scatter, and a ball that goes where it was hit is what the swing replay exists to teach.
+- **`bat_path._reach` had to change for this.** It used to answer an unreachable pitch with the bat lying flat in the plane of the plate, whose face normal points at *exactly* centre field — and it fires on 9.6% of swings, so the spray distribution grew a spike one value wide. The pose comes off the quadratic's **vertex** now, which is the analytic continuation of its root, so contact depth can dip below the hands and the barrel trails them. `test_the_attack_angle_is_continuous_across_the_reach_boundary` pins it.
+
 ### Hit Animation
 [hit_animation.py](strikefactor/gameplay/hit_animation.py) renders a top-down ball-flight animation between hit resolution and the outcome banner:
 - **One clock per play.** `PRESENTATION_TIME_SCALE` (1.25) is the *only* place pacing may diverge from physics. Everything physical is stated in real feet and seconds and crosses to the animated clock through exactly two methods, `_anim_ms` and `_travel_ms`; `_ft_dist` converts a screen displacement to feet first, because the projection is anisotropic and a scalar px/ms speed silently means two different real speeds (40 px/s was 21.6 ft/s laterally and 36.4 ft/s straight back). `tests/test_animation_clock.py` guards the boundary.
@@ -188,12 +202,18 @@ Four pure modules on the [contact_audio.py](strikefactor/engine/contact_audio.py
   - The arc helpers take **two parameters, path and phase** — position from `p(u)`, vertical shape from the flight *time*. Grounder hops are spaced over the phase, so a decelerating ball takes equal-duration hops covering less and less ground; spacing them over the path instead makes the last hop of a dying roller one long float through 58% of the flight.
   - `_path_intercept` inverts the ease (`_decel_time_fraction`) instead of using `t_proj · duration_ms`. A decelerating ball is *ahead* of the linear schedule everywhere in between, so the linear one told an infielder they had time on a ball already past them — line-drive outs ran 8 points high because of it. `tests/test_animation_clock.py` guards the handoff, the ease and this timing.
 - **A batted ball has exactly one exit velocity.** `contact_audio.exit_velocity_mph` jitters on purpose, so it must be drawn *once* — `HitAnimation.exit_velocity_mph`. Carry, hang time, wall candidacy and the infield verdict were each calling it separately, so one ball could get a 380 ft carry and the hang time of a 340 ft one.
+- **Every direction decision reads one number.** `spray_deg` (pull-positive degrees, from [spray.py](#spray-direction-sprayspy)) is resolved once in `__init__` into `spray_field_rad`, and the four sites that used to answer independently — the ball in play, the home run, the ball that reaches the wall, and the foul — all take it. `horizontal_inside`, `foul_timing_norm`, `IN_PLAY_ANGLE_MIN/MAX`, `HR_INSIDE_NORM_PX`, `HR_PULL_SHIFT_RAD`, `HR_BASE_PULL_RAD` and `FOUL_OFF_MIN_RAD` are **gone**. `_screen_angle_of` is the one crossing from real-field bearings to screen polar, which anything reaching the wall needs because the wall is a screen-space ellipse.
+  - The IN_PLAY landing keeps calling `_polar_point_ft(angle, dist_ft)` positionally — `tests/test_animation_clock.py` monkeypatches it by position and fails confusingly if the call shape moves.
+  - `_fair_field_angle` insets by half a degree rather than clamping. Fair balls are bounded inside the lines by `spray.FOUL_LINE_DEG` already, so the only ball it moves is one landing at exactly 45.0°; a real clamp here would stack contact onto the two boundary angles, which is the defect `_sample_hr_angle` exists to avoid.
+  - `HR_ANGLE_SIGMA_RAD` came down from 20° to 7°. It was noise around a mean carrying very little information (the old location bias could shift it 29° at most); the mean is a real measurement now.
+  - **The two ways to foul a ball draw as two different pictures**, and that is worth keeping: `_setup_foul` hugs the line when the ball was hooked just past the pole (struck cleanly, only just foul) and sprays sharply when the contact was glancing — severity measured off `quality`, where it used to come off a window of hand-tuned milliseconds.
 - **HitAnimation class**: Geometric primitives only (no sprite assets). Three motion layers:
   - **Trajectory shape**: `GROUNDER` / `LINER` / `FLY` / `POP_UP`, chosen by `_pick_shape()` from the outcome plus the swing's vertical offset (outs are deterministic; hits are weighted-random per outcome). These are *shape* names, a separate namespace from recorded outcomes — `FLY` is not `FLYOUT`, and the shape keeps the underscore in `POP_UP` where the outcome is `POP UP`. The two meet only where `classified_outcome` is assigned.
   - **Fielders**: All 9 defenders visible (`Fielder` class), with per-outcome primary/backup assignments moving toward the play; idle sway keeps them alive at rest. Defaults in `FIELDER_HOMES`. Out vs. hit *emerges* from whether anyone reaches the ball, so two corrections keep balls up the middle honest: the pitcher carries a follow-through reaction bias (`ROLE_REACTION_BIAS_S`, real seconds) plus a per-play clean-fielding roll (`PITCHER_CLEAN_FIELD_PROB`) that drops them from the intercept pool on hard contact. Infielders are **no longer range-capped** — the cap corrected the old dilated clock and the honest one reproduces it; what bounds them now is time. `_max_intercept_dist` / `_range_limited_point` survive for the genuinely positional limits (`ROLE_MAX_INTERCEPT_DIST_FT` for the pitcher and catcher, `FIRST_BASE_GROUNDER_RANGE_FT` for the 1B, who owes the bag) and are **stated in feet**, so a fielder's range is a circle on the field rather than on the screen.
   - **Whose ball it is**: among fielders who can make the play (`_path_intercept().can_make`), the primary is the one with the least ground to cover — *not* the earliest intercept. Ranking on the moment of intercept hands the ball to whoever stands nearest home plate, since the ball reaches their stretch of the path first: a grounder hit dead at the 2B was fielded by the 1B 100% of the time, and on FLY/POP_UP (where every fielder routes to the same landing point and therefore ties) the winner was decided by pool order. `can_make` excludes fielders *behind* the contact point but deliberately not those past the landing spot — a ball dying in front of a fielder is a fielder charging, the most ordinary play there is.
   - **First base is a strict priority list**, not an ETA race: `COVER_ROLE_PRIORITY = ["1B", "P", "2B"]`, first one who isn't fielding the ball and can beat the throw (`COVER_IN_TIME_BUDGET_S`, measured from **when the ball gets fielded** — `_fielded_at_ms` — not from contact, because the cover man has the whole flight to get there). The 2B covering first is a busted play and lands at ~1% of grounders. Two things make the pitcher's 3-1 work and are easy to undo: `Fielder.break_delay_s` (the follow-through bias in `ROLE_REACTION_BIAS_S` is recovery time before they can *field*, and charging it against a run to the bag vetoed them on every 3-1), and `_check_in_flight_intercept` skipping the cover man, whose route to first crosses the flight path of anything hit at the 1B. `tests/test_fielding_assignment.py` guards all of it.
   - **HR distance overlay**: Readout computed from the actual landing point once the ball clears the wall (home runs only — see [Hit Animation](#hit-animation) notes on fouls). It is revealed *after the landing*, not during the flight (`_hr_distance_alpha`, `HR_DISTANCE_REVEAL_DELAY_MS`): the number is the payoff, and fading it in at 70% of the flight answered the only question the flight was asking. The delay is deliberately short — the outcome banner and its continue prompt fire at landing, so a long one lets an impatient player key past the number entirely.
+  - **`IN_PLAY_LANDING_FT` bounds the landing, and the clamp that enforces it has to be written in the right order.** Built as `uniform(max(dist_min, mid - spread), min(dist_max, mid + spread))` the two bounds *cross over* as soon as `mid` sits more than `spread` outside the range, and `random.uniform(a, b)` does not care which way round its arguments are — it samples `[b, a]`. So the clamp inverted into its own opposite at exactly the point it was needed and put the ball outside the range on the far side. Over the real quality distribution that was 62% of `POP_UP`s past their 160 ft cap, out to 272 ft — a pop-up landing in the outfield — plus 8.9% of `FLY`s past 365 ft (to 416) and 4.3% of `LINER`s short of their 130 ft floor. `mid` is now clamped into the range *before* the window is built, which makes `a <= mid <= b` hold by construction. The EV recalibration widened the hole by pushing carry up; the defect is independent of it and predates it. The generic-foul branch uses the same window shape but derives `mid` from `q` alone, so it is inside the range by construction and cannot invert — the difference is worth keeping. `tests/test_animation_clock.py::test_the_landing_range_is_a_range_and_not_an_inverted_pair` sweeps quality edge to edge on every shape.
   - **HR landing** is calibrated to MLB distances (mean ~400 ft, p50 ~400, p90 ~430, ~5% past 440). Two things make that work and are easy to break: the landing angle is **rejection-sampled** over fair territory (`_sample_hr_angle`), never clamped — a clamp stacks every out-of-range draw onto the two boundary angles, putting a visible line of home runs on the foul poles; and carry is specified in **feet**, converted per-angle via `_px_per_ft_at`. Both were wrong before: the angle was clamped to 50°–130° of screen angle, well inside the foul lines at ~30.7°/149.3°, so the corners where the wall is nearest were unreachable, and carry in pixels bought 17% more feet at centre field than down the line. Together they produced 392–476 ft, mean 423 — every home run a no-doubter. `tests/test_hr_distance.py` guards the distribution and the spray.
   - **The park is deep down the lines.** `_wall_r_at` is an ellipse in *screen* space, so the wall measures ~360 ft at the foul line rather than the 330 ft the `WALL_FT_X = 330.0` comment implies (330 is the semi-axis at screen angle 0°, which is in foul territory). Sub-360 ft home runs are therefore geometrically impossible, and the short tail of the distribution is compressed against MLB's. Fixing that means reshaping the drawn wall, not retuning carry.
 - Field geometry uses anisotropic feet→pixel projection (`FT_TO_PX_X = 1.85`, `FT_TO_PX_Y = 1.10`) anchored to `HOME = (640, 670)` to mimic MLB Gameday's wide, y-foreshortened look.
@@ -201,21 +221,49 @@ Four pure modules on the [contact_audio.py](strikefactor/engine/contact_audio.py
 
 ### Swing Replay
 On-demand slow-motion replay of the last swing — bat path, contact point and timing analysis — opened with the `SWING_REPLAY` keybind (default `R`) from any hotkey state. Three pieces:
-- **[bat_path.py](strikefactor/gameplay/bat_path.py)**: pure module on the [ball_flight.py](strikefactor/gameplay/ball_flight.py) pattern (real feet and seconds, no pygame) that gives the bat the two axes the game's bat does not have: **time** and **depth**. `HitOutcomeManager.get_ball_to_bat_contact_outcome` already swings a real rotated rectangle, but only for one frame, in the plane of the screen.
-  - **`bat_axis` is the plain hands-to-aim ray, and a test pins that to the collision check rather than to this sentence.** It was not always: `collision_angled` rotated the *ball* by `+angle` and then tested an axis-aligned box, which tests a box at **`-angle`** — the mirror image, across the horizontal, of the ray the player was pointing — and `bat_axis` carried a matching z-flip so the replay drew the bat where the collision actually looked. See the note on the fix under [Swing Mechanics](#modifying-swing-mechanics). `tests/test_bat_path.py` walks the true long axis out of `collision_angled` empirically and checks `bat_axis` agrees, which is why it survived the fix unedited — a test written against the *expected* angle would have had to change in lockstep with the bug, and so would have proved nothing.
-  - **The swing is modelled hands-first: a small hand arc, and a bat swung about the hands.** The knob is *authored* — hands orbit the spine axis at `HAND_ORBIT_RADIUS_FT`, working down from `LOAD_HANDS_HEIGHT_FT` — and the sweet spot is derived as hands + bat attitude (bearing wrapped by the body's turn plus a decaying `LAG_DEG`, tilt easing off `LOAD_BAT_ANGLE_DEG`, 60° barrel-high). The first model did it backwards — sweet spot on a fixed-radius horizontal circle, knob derived from the barrel — and three visible faults followed: a near-vertical plunge at initiation (the height terms spend fastest exactly where the eased rotation covers the least ground), a sharp V where the barrel's depth reversed late on ordinary contacts (median |timing| ≈ 21 ms *is* ±2.7 ft of depth), and hands drawn where no body could put them, including 2.7 ft into the catcher's box. Modelled the way a swing works, the rounded side-view loop and the overhead spiral *emerge*. `ON_PLANE_EASE` is exactly **2**, not 3: any power ≥ 2 keeps every load term still at contact (which is what leaves the plane's tilt as the whole attack angle), but at 3 the tilt was dead by 40° out and the deep-contact turnaround still drew as a corner — the loop only rounds if something is still moving vertically there. `tests/test_bat_path.py` guards the cusp (a floor under the projected side-view speed through the turnaround), the hands staying attached to a body, and the absence of the circle-model constants.
-  - **The engine's rectangle pins the drawn bat only in the plane the engine has.** The collision rectangle lives in the screen plane, so it constrains the contact axis's (x, z) projection — still the plain `bat_axis` ray — and says nothing about depth. That third component is solved per swing (`_contact_lead`): the hands must land on their orbit, preferring their natural slightly-out-front depth, so a ball caught deep is drawn as an inside-out swing (barrel lagging, hands ahead of the ball) and a ball met out front as one released past square — which is what those mistimings are. Forcing it to zero is what used to draw the hands directly under the ball and the bat as a vertical stub in the SIDE view. Past `MAX_CONTACT_LEAD_DEG` the orbit stretches instead — a lunge — because a bat cannot fold around its own grip.
-  - **Bat speed is a calibration target, not a shape parameter** (`PEAK_BAT_SPEED_MPH = 72`), because the game has no bat-speed input at all. The angular profile's exponent is *solved* from it — per swing now (`BatSwing.ease_k`), since the rotation radius runs from the spine to wherever the ball was met — and rails at `EASE_K_MIN`/`EASE_K_MAX` keep the profile a swing, with the contact speed giving way only at the rails. A test asserts the barrel reaches a real MLB speed at contact, which is what separates kinematics from an easing curve; `_speed_at` differentiates the drawn chain numerically, so the number includes what the load terms actually do.
+- **[bat_path.py](strikefactor/gameplay/bat_path.py)**: pure module on the [ball_flight.py](strikefactor/gameplay/ball_flight.py) pattern (real feet and seconds, no pygame) that gives the bat the two axes the game's bat did not have: **time** and **depth**.
+  - **The swing is a function of the player's inputs and nothing else** — aim and handedness. Not of the pitch, not of the difficulty, not of which key was pressed. `swing()` used to take a `contact_depth_ft` read off the *pitch's* trajectory at bat arrival, and `hands_contact`, the bearing, the tilt, the rotation radius, the eased exponent and therefore the whole load pose were derived from it: the bat was modelled as a consequence of the ball, which is the two-models-of-one-thing fault in its purest form. It drew a swing 68 ms early with the hands 5.13 ft from a spine they orbit at 1.15 and the knob starting four feet behind the plate *on the wrong side of it*; 51 ms late, the knob started seven and a half feet toward third base. `test_the_swing_does_not_depend_on_the_pitch` and `test_the_load_pose_is_a_constant_of_the_stance` are the pins.
+  - **The engine's aiming pivot is the hands.** `HitOutcomeManager.rhpos` is (490, 453) px — (1.53, 2.93) ft, within a couple of inches of a right-hander's grip at contact. Read that way the contact pose is *solved*, not fitted: the old rectangle was a screen-space object centred on the cursor with its long axis pointing at the pivot, so the 3D bat whose projection is that rectangle is pinned by knob-onto-pivot-pixel and sweet-spot-onto-cursor-pixel, and perspective maps lines to lines. One unknown (the sweet spot's depth) against one equation (the bat's length) — a quadratic, in `_contact_pose`.
+  - **Contact depth is an output.** It is that quadratic's root, and it lands where real contact depth lands with nothing tuned: a pitch inside sits close to the hands on screen, so the bat is heavily foreshortened and the ball is met ~2.7 ft out in front (pulled); one away is met ~1.2 ft out (deeper); one low and away is further off than the bat is long, has no root, and the hitter extends after it (`_reach`) and meets it at arm's length, inside-out. **The no-root case comes off the quadratic's vertex**, which is the analytic continuation of the root, so contact depth can dip below the hands and the barrel trails them — see [spray](#spray-direction-sprayspy) for why the old flat answer had to go.
+  - **A cursor is a ray, not a point** (`_unproject`). The camera is a perspective projection from 30 ft back, so the same pixel is a different world position at every depth. The barrel meets the ball a couple of feet out front, where a tracked ball sits ~2.3 in higher on screen than it will at the plate — against a bat and ball that are 2.75 in of tolerance between them. Resolving the aim at the plate and the ball at contact spent 84% of the contact window on a bias no player can correct, and capped every swing's quality under 0.5.
+  - **The swing is modelled hands-first: a small hand arc, and a bat swung about the hands.** The hands ride a curve authored in the *rotating body frame* — a radius that tightens into the slot and extends through contact, a height working down off the back shoulder — so the load pose is a constant of the stance rather than the contact pose rotated backwards. The bat's attitude about the hands (bearing wrapped by the turn plus a decaying `LAG_DEG`, tilt easing off `LOAD_BAT_ANGLE_DEG`) carries the barrel down off the shoulder and around. The rounded side-view loop and the overhead spiral *emerge*.
+  - `ON_PLANE_EASE` is exactly **2**, and the hand-radius profile is stated as a polynomial in the *load* for the same reason: any power ≥ 2 leaves every load term still at contact, which is what makes the attack angle exactly `ATTACK_ANGLE_DEG`. At 3 the tilt was dead by 40° out and the barrel's turnaround drew as a corner.
+  - **The swing carries on past contact** (`EXTENSION_DURATION_MS`, `full_track`). Not a second authored arc: the bat keeps its contact angular speed and decelerates to a stop, so how far it wraps is a consequence. It earns its keep twice — `bat_contact` sweeps it, because a swing that arrived early is still moving when the ball gets there, and it is what lets the replay's ghost be a phase of the same swing.
+  - **Bat speed is a calibration target, not a shape parameter** (`PEAK_BAT_SPEED_MPH = 72`), because the game has no bat-speed input. The angular profile's exponent is *solved* from it per swing. It now sits at 1.8–2.2 across the plate and never rails, where the old model railed at its 1.05 floor on any mistimed swing — flattening the acceleration profile entirely. `_speed_at` differentiates the drawn chain numerically, so the number includes what the load terms actually do.
   - `SWING_DURATION_MS` is the `+ 150` that was hard-coded in six places across `pitch_simulation` and `hit_outcome_manager`.
+  - **`bat_axis` and `contact_zone_ft` are gone, and so is `utils.physics.collision_angled`.** They restated a 120×50 px rectangle the engine no longer swings; keeping a copy of it would be the second model of contact this refactor exists to remove. `PIVOT_PX` survives, because what it always was is where the hands are.
+- **[bat_contact.py](strikefactor/gameplay/bat_contact.py)**: pure module that sweeps the bat against the ball and reports the closest approach — **the module that makes contact emergent**, and what the engine now grades a swing with. It also owns `aim_at_pitch`, the seam where the player's cursor becomes an aim. See [Modifying Swing Mechanics](#modifying-swing-mechanics).
+  - **A cursor is a ray, and the *ball* has to be carried along it too.** `bat_path._unproject` puts the barrel on the ray at the barrel's depth, ~2.2 ft in front of the plate. Nothing did the same for the ball, and the player is pointing at a ball drawn all the way *to* the plate, inside a strike zone drawn at the plate — so their statement was resolved at one depth and tested at another. The ball is 2–5 in higher and an inch or two across where the bat is, against 2.75 in of total tolerance, and the sign is the same on every pitch. A swing aimed *exactly* on the ball's plate crossing and timed *exactly* met a middle-middle fastball 3.2 in under its centre (quality 0.23, a foul) and missed a 12-6 curveball outright; the best contact available to a correctly-aimed player sat at +8 to +39 ms, which is why recorded swings ran ~45 ms late as a habit — players were swinging late to let the ball fall into a bat placed too low. `aim_at_pitch` translates the cursor onto the barrel's depth, iterated to a fixed point because the barrel's depth is itself a function of the aim.
+  - **The depth resolution is a translation, not a correction.** Whatever the player was pointing at relative to the ball survives exactly; the only thing removed is a bias nothing on screen could have told them about. And it keeps `bat_path` free of the pitch — what depends on the pitch is *which point on the ray the cursor meant*, which is a question about the ball. `tests/test_bat_contact.py` pins a perfect swing at quality > 0.99 on every location, with no tolerance, on purpose.
+  - **The `assist` argument is the exception**, and one of exactly two in the module. It shrinks the error the player genuinely made, by the fraction difficulty allows, capped radially at `MAX_ASSIST_FT` — game feel rather than geometry, and the reason the two must stay legible as separate things. At `assist = 0` the function is the pure translation above, which is what every test of the translation runs at. Its sibling is the timing assist in `resolve_contact`, which does the same thing on the clock instead of on the plate. See [Modifying Swing Mechanics](#modifying-swing-mechanics).
+  - **The rectangle had no such bias**, because it compared a cursor at the plate against a ball frozen at the plate. The bias arrived with the depth axis, which is why it is worth naming: the next thing to grow a depth has the same trap waiting.
 - **[swing_record.py](strikefactor/gameplay/swing_record.py)**: the captured swing, built in `PitchSimulation.cleanup()` and parked on `Game.last_swing`. A taken pitch builds nothing and deliberately leaves the previous swing in place.
-  - **"Early or late" is measured, not modelled.** `contact_depth_ft` is `trajectory.position_at(bat_arrival_s).y` — the pitch's own trajectory evaluated at the instant the bat arrived. Positive is out front (early), negative is deep (late). Same physics the pitch was flown with, so there is no second model to disagree with the first. Median |timing| of ~21 ms lands ~2.7 ft, which is what makes the side view legible.
+  - **A swing names two instants and they are not the same one**, which is the single most load-bearing fact in this module now: `bat_arrival_s` (the barrel reached its contact pose) versus `contact_time_s` (the sweep found bat and ball at their closest). `contact_depth_ft` / `struck_depth_ft` are the same split stated as a place. The timing readouts belong to the first; anything drawn belongs to the second.
+  - **The cursor it stores is the one at commit**, and `swing_aim_ft()` re-runs `bat_contact.aim_at_pitch` on it rather than carrying a second copy — so the replayed bat is the swept bat by construction. It used to prefer the cursor at *bat arrival*, left over from the engine that tested a rectangle 150 ms after the keypress against wherever the mouse had drifted to: with the swing decided at commit, that names a bat nobody swung.
+  - **`aim_assist` is carried, not re-read**, and that is what keeps the recompute honest. It is a difficulty setting, so a player who changes difficulty between the swing and the replay would otherwise be shown a bat nobody swung — the same failure, one input over. `PitchSimulation` stamps it at commit.
+  - **"Early or late" is measured, not modelled.** `contact_depth_ft` is `trajectory.position_at(bat_arrival_s).y` — the pitch's own trajectory evaluated at the instant the bat arrived. Same physics the pitch was flown with, so there is no second model to disagree with the first.
+  - **It is the *ball's* depth; `barrel_depth_ft` is the bat's**, and `depth_gap_ft` is what separates them. Two different objects, allowed to be in different places — that separation *is* the timing error, in feet, and drawing it is the whole point of the side view. Median |timing| of ~21 ms is ~2.7 ft of gap.
+  - **The datum is the ball reaching the barrel's own depth, not the plate.** The bat meets the ball a couple of feet out in front (further on a pitch inside, which is more foreshortened and so pulled earlier), so grading against the plate reported a perfectly struck ball as ~17 ms early. `PitchTrajectory.time_at_depth` is the inverse both `_signed_timing_ms` and the replay run on.
+  - `bat_swing()` is **iterated to a fixed point**, because `_drawn_aim_ft`'s vertical placement feeds back: nudging the aim's height moves it along the cursor's ray, which moves the barrel's depth about half an inch, which moves where the ball is when it gets there. `barrel_depth_ft` deliberately does not follow the iteration — it reports the depth the engine's own bat reached, from the raw cursor.
   - It holds the `PitchTrajectory` **object**, not samples. The DB's 20-sample table is too coarse to slow down and the live screen trail carries no timestamps at all, so this is the only function-of-time the game has.
   - **Depth is deliberately unclamped.** The engine tests contact against a ball frozen at the plate (`_update_ball_position` clamps `t`, and `_handle_contact_phase` never re-runs it), so clamping here would show every late swing meeting the ball exactly at the plate — the one thing that cannot have happened.
-  - **`_drawn_aim_ft` is not `aim_ft`, and it has to be.** `aim_ft` is the cursor resolved at the *plate*; the ball is ~6.4 inches higher at a contact point 5.6 ft out front. Drawing the bat at its plate height put it half a foot *under* a ball the panel simultaneously reported it was 1.4 inches *over*. The bat is placed by the relationship the engine measured, carried out to the contact depth, so timing and alignment are both exactly what was judged and only the bat's absolute height (which nothing reports and no player can perceive) is given up.
+  - **`_drawn_aim_ft` is not `aim_ft`, and it has to be.** `aim_ft` is the cursor resolved at the *plate*; the ball is ~6.4 inches higher at a contact point 5.6 ft out front. Drawing the bat at its plate height put it half a foot *under* a ball the panel simultaneously reported it was 1.4 inches *over*. The bat is placed by the relationship the engine measured, carried out to the depth where the *barrel* is — the plane the ball passes through, and so the only place the two heights can honestly be compared. The offset must be applied *at* that depth and turned back into a plate-frame aim (`bat_path.to_plate_frame`), never applied to the plate-frame aim directly: a cursor is a ray, and 7% of a plate-frame offset is not the offset that was measured.
 - **[swing_replay_overlay.py](strikefactor/ui/swing_replay_overlay.py)**: phased overlay following `ABSChallengeOverlay`'s shape and `main.py`'s nested-loop pause (`request_swing_replay` → `_run_swing_replay_loop`), but drawn in `gameday_theme` — the ABS card's `SysFont("arial")` and pink palette are the UI's exception, not its pattern.
   - **SIDE** (down the x axis) puts feet-from-the-plate on the horizontal, so the timing error *is* the visible gap between barrel and ball; **OVERHEAD** (down z) shows the barrel sweeping across the plate. Both project from the same world-feet models. TAB toggles; SPACE replays; ←/→ scrub.
-  - **Both views are seen from a real place, and both were mirror images of it.** The world's `+x` is the third-base side (`pivot_ft("R")` is `+1.53`, and a right-hander stands at third), so `_project` negates the horizontal axis in each: a camera on the third-base line sees the pitcher on its *left*, and a bird's eye sees third base on the left. Drawn unnegated, SIDE was a first-base camera captioned `PITCHER ->` and OVERHEAD put `+x` on the right under a label reading `<- 3B` — a view from underneath the infield, with the batter standing in the wrong box. Nothing about a swing is symmetric, so a mirrored replay reverses which way the hitter is turning. `tests/test_swing_replay.py` pins both cameras and the batter's side.
-  - **The replay ends at bat arrival with no tail.** A tail looks free, but at 93 mph even 60 ms drags the ball eight feet past the contact marker, so the frame the player studies would show bat and ball in different places.
+  - **Both views are seen from a real place, and both were mirror images of it.** The world's `+x` is the third-base side (`pivot_ft("R")` is `+1.53`, and a right-hander stands at third), so `_project` orients the horizontal axis in each rather than taking `y` and `x` as they come: a camera on the third-base line sees the pitcher on its *left*, and a bird's eye sees third base on the left. Drawn straight through, SIDE was a first-base camera captioned `PITCHER ->` and OVERHEAD put `+x` on the right under a label reading `<- 3B` — a view from underneath the infield, with the batter standing in the wrong box. Nothing about a swing is symmetric, so a mirrored replay reverses which way the hitter is turning. `tests/test_swing_replay.py` pins both cameras and the batter's side.
+  - **The SIDE camera changes foul lines with the batter** (`_side_camera_x`): the first-base line for a right-hander, the third-base line for a left-hander — the hitter's **open** side in both cases, and `_axis_label` names which one it is standing on since a mirrored swing is still a swing. Fixed on the third-base line it filmed one hand from the front and the other from *behind*, and those are not two renderings of one swing: from back there the hands travel away from the camera, the barrel is hidden behind the body for most of the arc, and the ball arrives over the hitter's back, so every quantity the view exists to show — how far out front contact was, whether the barrel got on plane, the daylight between bat and ball — is a foreshortened guess. It is the same reason a broadcast's swing camera is on the open side. **OVERHEAD does not flip**: a bird's eye has no open side, and 3B-left/1B-right is shared with the hit animation, so the spray ray reads the same way in both.
+  - **The ghost is the same swing at another phase, not a second swing.** With the path independent of the pitch, "where the bat should have been" is `bat_state_at_ball_arrival()` — this swing sampled where the ball crossed the barrel's plane. A late swing was still on its way there; an early one is already into the follow-through. `perfect_swing()`, which built a whole second bat, is gone.
+  - **The replay ends at the instant the bat and the ball met, with no tail.** Not at bat arrival — and conflating the two is what made a HOME RUN draw with the bat eight feet from the ball. A swing names *two* instants: `bat_arrival_s`, when the barrel reached its contact pose (a fact about the swing alone, and the datum `signed_timing_ms` is measured against), and `SwingRecord.contact_time_s`, where `bat_contact`'s sweep found the two at their closest. The sweep is free to catch the ball anywhere in the arc, and on a mistimed swing it does — up to ~25 ms of pitch time away, which at 101 mph is six feet of ball. The clip used to run past a late contact and stop short of an early one while the crosshair marked the real one, so the frozen frame held a bat, a ball and a mark in three different places. Measured on a 48 ms late swing at ROOKIE: 6.0 ft of daylight at bat arrival against 0.84 ft at contact. **Anything meant to be looked at runs on `contact_time_s`; the timing readouts stay on `bat_arrival_s`.** `struck_depth_ft` is the ball's depth in the frame that gets held, which is what `BALL AT` reports. No tail, for the old reason: at 93 mph even 60 ms drags the ball eight feet past the contact marker.
+  - **The bat and the ball touch, and it took a model change to make that true.** `bat_contact` used to grant contact anisotropically — the bat was an ellipsoid stretched along the ball's flight line by `cushion_s` seconds of ball travel, 39 ms at ROOKIE and so 5.8 ft against a 101 mph fastball — so the model put the bat within an inch or two of the ball's *line* and a foot or more from the ball itself, and **no instant existed where they touched**. This view drew that honestly, which is how it was found: a FOUL banner over `REACH 2.6 FT` of daylight. Measured over recorded play, 63% of contacts had visible daylight, 31% over a foot and 16% over two feet. The forgiveness is now spent by sliding the swing in time, so the frozen frame shows a real intersection; what survives is `margin_ft`, an inch or two of bat tolerance, and `_draw_reach` still annotates it on the rare frame wide enough to see. Shrinking *that* is a difficulty decision (`BASE_MARGIN_FT`, `contact_zone_size`), not a drawing one. `tests/test_swing_replay.py::test_the_bat_and_the_ball_actually_touch` asserts the daylight against `margin_ft` rather than a constant, so a regression that reopens it from anywhere else fails there.
+  - **The timing bands are measured, not assumed.** `SwingRecord.timing_windows_ms` re-sweeps this swing against its own pitch and bisects the two boundaries: the outer band is where it would have touched the ball at all, the inner one where it would have been fair. They were `perfect_ms` / `foul_ms` — 30 and 60 ms scaled by difficulty, inherited from the timing *gate* the geometry replaced — and by the end they were fiction: at ROOKIE the panel drew `ON TIME` across ±45 ms while quality over that range ran from 1.00 to 0.12, which is how the screenshot came to read ON TIME over a foul. `timing_label` now asks the fair window, so that swing reads `LATE 40 MS`.
+    - **The measured windows are strongly asymmetric**, and that is the most useful thing on the bar: about −42…+83 ms at AMATEUR, because a late bat still catches the ball on the handle while an early one runs out of barrel. A symmetric pair of constants could not show it and the player has no other way to learn it. Fair windows run ±41 ms at ROOKIE down to ±17 at HALL OF FAME.
+    - **They are a property of *this swing*, not of the difficulty**, so a pitch the player was never on top of draws a narrower band — 2 in high at AMATEUR is a fair window of ±6 ms, 4 in high has none at any timing, and the inner band is simply not drawn. Saying "no timing would have squared this up" is more use than drawing a band the swing could never have reached.
+    - Bisected rather than swept: ~37 `resolve_contact` calls at 1.6 ms, **warmed in `trigger`** and cached. Left lazy it fires on the first frame `_draw_stats` runs, 420 ms in, which is a visible stutter partway through the replay. Both predicates are contiguous in the offset, which is what makes bisection sound, and a test pins that.
+    - The assist budget is drawn as **ticks, not a third band**, because it very nearly coincides with the fair window (±39 against −41…+42 at ROOKIE) and a band would imply a distinction that is not there.
+    - `PitchSimulation._foul_spray_window` is what is left of the old constants. It is cosmetic — it only steers how far foul the foul animation sprays the ball — and it is named so it cannot be mistaken for a verdict again.
+  - **The bat drawn is the bat that was swept, which means the *slid* swing.** `SwingRecord.swing_launch_s` carries `Contact.shift_s`; drawing the committed swing instead would put the picture back at odds with the verdict, the same failure as preferring the cursor at bat arrival. The timing readouts stay on what the player actually did (`signed_timing_ms`), and `_draw_assist` marks the difference on the timing bar as `ASSIST n MS` — the borrowed time is charged for in quality, so leaving it off the panel would report a number the player has no way to account for.
+  - **The OVERHEAD view draws where the ball went** (`_draw_spray`), which is what it was always for — the module docstring already called it the view "where pull-versus-oppo contact reads", and until the ball had a bearing there was nothing there to read. The ray is `Contact.spray_deg`, the same number the animation flies the ball along, so the picture and the outcome cannot disagree; it is projected through `_project` rather than stepped in pixels, because that function orients its horizontal axis (and now swings it with the batter) and anything building its own screen vector gets the mirror wrong. Frozen-frame only, like the contact marker and for the same reason: until the two have met there is no direction yet.
+  - The depth window is framed on **what the frozen frame draws** — the struck ball, the barrel's arrival, and the bat at contact. Framed on the ball at bat *arrival* it reserved several feet the clip no longer reaches, so half the view was empty air behind the catcher. It is computed once at `trigger` and cached: `_project` asks for it on every point it converts, and `barrel_depth_ft` rebuilds four swings each time it is read.
   - Depth is framed **per swing** (`_depth_range`), because contact runs from ~11 ft out front to ~11 ft deep and any fixed window wide enough for both squeezes the ordinary swing into a sixth of the view.
   - **The bat is drawn as a swept sphere of varying radius** (`_BAT_PROFILE_IN`, `_bat_silhouette`) — knob flare, thin handle, concave taper, near-parallel barrel, rounded tip — because drawn as a line a bat is a line. The profile is stated in real inches (2.61 in at the barrel, the MLB maximum, against under an inch at the handle) and the stations are placed to keep the taper **concave**; spread evenly, the same radii straighten into a cone. End caps are inset by their own radii so the silhouette spans exactly the projected bat length rather than growing by a cap at each end, and a bat near enough to end-on to have no length to taper along draws as its two caps — ordinary rather than exceptional, since SIDE looks down x and a bat at contact points largely along it.
   - **Thickness takes one isotropic scale (`_bat_scale`) where position and length take the honest projection**, and this is the one deliberate exception in the module. The views squash their axes against each other by up to 4:1 as a framing choice — OVERHEAD fits 14 ft of depth into a rect three times wider than it is tall — so a projected-honestly bat lying across that view collapses to a five-pixel needle and takes the taper with it; one scale also stops the bat swelling and thinning as it turns. The ball has always made the same call (a flat 5 px, not the ellipse its real 2.9 in would project to). What separates both from the `hit_animation._ft_dist` rule is that nobody measures a bat's diameter off this diagram — the thickness is recognition, not a reported quantity.
@@ -296,6 +344,7 @@ Free-practice mode where the player picks every pitch:
   - Tables: `pitches` (full 9-parameter kinematics, derived speed/movement, AB context, outcomes, ABS truth-vs-call), `pitch_trajectories` (20-sample 3D trajectory per pitch), `at_bats`, `games` (one row per Arcade encounter / GameDay / Sandbox session), `batter_profiles` (persisted [BatterProfile](#ai-system) aggregates keyed by mode+difficulty).
   - `exit_velocity_mph` (schema v6) is set on every bat-on-ball event **including fouls**, while `contact_quality` stays NULL on fouls — fouls never run the hit pipeline that populates it. Don't "fix" that asymmetry by widening `contact_quality`: it would silently change what every existing aggregate over that column means. EV is a model output derived from quality (see [Contact Audio](#contact-audio)), not an independent measurement.
   - `swing_timing_signed_ms` (schema v8) is the signed form of `swing_timing_diff_ms`, which has always been stored `abs()`'d — so before v8 the DB could say how far off a swing was but never whether it was **early or late**, making the most useful coaching fact the game holds structurally unanswerable. The value was already computed with its sign; only the foul path saw it, into a field that was never persisted. The unsigned column is left exactly as it is: `abs()` of the new one recovers it, and widening it in place would silently change every existing aggregate over it.
+  - `spray_angle_deg` (schema v9) is which way the ball went: degrees from centre field, **pull-positive for either batter** so an aggregate over both hands means something without a join. It is the first direction the DB has ever held, and before it spray was not merely unrecorded but *unmodelled* — a ball in play drew its bearing from `random.uniform`, so there was nothing to record. NULL when the bat never met the ball, and per the v7 precedent that must not be coalesced to `0.0`: zero is dead centre field, a real and common value, so filling it in puts a spike in the middle of the one distribution the column exists to show the shape of. `analysis`'s `spray_profile` / `spray_vs_timing` and the `spray` figure read it.
   - `batted_ball_type` / `fielder_role` / `play_margin_s` (schema v7) record what happened to a batted ball. **`batted_ball_type` is the useful one**: it is classified at *contact* by `HitOutcomeManager`, upstream of any fielding decision, so it is an independent axis to slice on — before v7 the DB could not tell a ground ball from a fly ball, and any check of the fielding model had to infer type from `outcome`, which is what the model produced. `play_margin_s` is the decisive race's margin, signed so positive favours the defense. Both `fielder_role` and `play_margin_s` are **NULL when no play happened** — a ball nobody fielded has no fielder, and a ball nobody raced for has no margin. Don't coalesce those to `0.0`: it would put a spike at dead-even in a distribution whose entire purpose is its shape. `tests/test_batted_ball_schema.py` guards it.
   - `PitchDatabaseService` is a singleton (`PitchDatabaseService.get_instance()`) with `start_game()` / `end_game()` / `record_pitch()` / `load_batter_profile()` / `save_batter_profile()`. Migrations are versioned by `SCHEMA_VERSION` and run in `PitchDB._migrate()`; an auto-backup runs into `data/backups/`.
 - **Analytics scripts** (repo root, run outside the game):
@@ -312,9 +361,10 @@ Free-practice mode where the player picks every pitch:
 - **[theme.py](analysis/theme.py)**: Palettes, pitch/pitcher labels, outcome groups, MLB benchmarks, strike-zone constants.
 - **[render_mpl.py](analysis/render_mpl.py)** / **[render_term.py](analysis/render_term.py)**: The two renderers. `render_term` uses `rich` when present and falls back to plain ASCII.
 - **[figures/](analysis/figures/)**: One module per section, registered in `figures.FIGURES`. Adding a figure means adding a row to that list.
+- The **spray** figure (`results.spray`, `metrics.spray_profile` / `spray_vs_timing`) is what makes the [spray](#spray-direction-sprayspy) calibration checkable instead of eyeballed: the fair-ball distribution against MLB's 40/35/25, how much contact direction fouls, and mean spray against signed swing timing. If that last curve comes back flat, the bearing has stopped reaching the ball somewhere between `bat_contact` and `hit_animation`.
 
 Key metric definitions worth knowing:
-- **Whiff** = `swing_type > 0 AND outcome IN ('strike','strikeout')`. Fouls carry `outcome = 'foul'` and contact carries an in-play outcome, so this is exact. `on_time` grades *timing* (0 mistimed / 1 foul-timing / 2 on time), **not** contact — a well-timed swing still misses on location.
+- **Whiff** = `swing_type > 0 AND outcome IN ('strike','strikeout')`. Fouls carry `outcome = 'foul'` and contact carries an in-play outcome, so this is exact. `on_time` is 0 whiff / 1 foul / 2 fair, and since the `bat_contact` rewrite it is the *geometry's* verdict rather than a timing grade — timing reaches it the way it reaches a real swing, by putting the ball off the end of the bat or on the handle. Rows from before that rewrite mean the older thing; they were archived at the cutover.
 - **`POP UP` is a terminal outcome** and belongs in every PA/BF/out denominator (`theme.TERMINAL_OUTCOMES`). It was recorded as `POP_UP` before schema v5; `PitchDB._migrate` rewrites the old rows, so never match on both spellings — the DB holds only the spaced form.
 - **Run value** comes from a count-value model solved by backward induction over the active slice, so run values sum to ~0 across it and are only meaningful *between* sub-groups. Any per-count aggregate is structurally zero.
 - **The pitching line computes every column over one slice**: GameDay rows with a non-null `game_id`, which is exactly the set whose runs can be attributed. `game_id IS NULL` and `runs_scored_on_pitch IS NULL` are perfectly correlated (both arrived in the v2 migration), so counting H/HR/BB/K over all rows while counting R over only the covered ones makes the pre-v2 era contribute innings and homers but structurally zero runs — which is how a line ends up reporting more HR than R. Excluded rows are surfaced via `df.attrs["dropped_pitches"]`, not silently dropped. Runs charged to these pitchers are `final_player_score`: the pitches table only holds pitches thrown *to* the player.
@@ -355,27 +405,239 @@ Key metric definitions worth knowing:
 Prefer `@broadcast_button` for anything on a menu screen — it is the black/1px-border style the GameDay and [settings](#settings-screens) screens share. And note that a **new setting is not a new button**: add a row to `SettingsPanel.SECTIONS` instead, or the screen grows a second source of layout truth.
 
 ### Modifying Swing Mechanics
-- **`collision_angled` had a sign error for the life of the project, fixed 2026-08.** It rotated the circle by `R(+angle)` and tested an axis-aligned box, which tests against a box at `-angle` — against its own docstring, which said it was rotating the point *back*. Its only caller is `get_ball_to_bat_contact_outcome`, which passes the bearing from the batter's hands to the aim point, so the bat the engine swung was tilted the opposite way from the bat the player was pointing: aim at a low pitch and the barrel came up.
-  - Not a wash, because the rectangle is long and thin: mirroring it changes the bat's effective reach as a *function of aim height*. Measured over the recorded plate locations and bat-ball offsets, contact ran **67% low / 93% middle / 88% high**; the fix flattens that to **80 / 86 / 86**. A bat now behaves the same wherever it is pointed, which was the whole argument for changing it.
-  - ~21% of geometry-tested verdicts flip, but net difficulty barely moves (+3% contact on real offsets, −6% on a uniform sweep), and the geometry test only runs on swings that already passed the timing gate. `contact_zone_size` was **deliberately not retuned** — the sign of the net effect depends on where players actually aim, which is measurable now and was not before. Retune only if whiff rate by difficulty drifts off its band.
-  - Recorded play from before the fix describes a different bat, so all of it was archived and cleared — see [reset_tracking.py](strikefactor/data/reset_tracking.py). Migrating was never an option: a heatmap bucket that already summed both geometries cannot be unmixed.
-- Swing detection logic is in [pitch_simulation.py](strikefactor/gameplay/pitch_simulation.py) (W/E key handlers)
-- Contact detection uses `collision()` or `collision_angled()` from [utils/physics.py](strikefactor/utils/physics.py)
+The bat is one object, swung by one model, in three dimensions. `bat_path`
+says where it is at every instant of a swing; `bat_contact` sweeps that against
+the ball and reports what happened. Everything downstream reads the result.
+
+- **Contact used to be two unrelated gates, and now it is one question.** The
+  first compared `swing_start + 150` against the ball reaching the *plate* and
+  graded it on a difficulty window; the second, only if that passed, tested a
+  120×50 px rectangle at the cursor against the ball's *screen* position for
+  one frame. Neither knew about the other and neither had a depth axis, so
+  contact depth could not be an output of the pair — which is why the replay
+  ended up modelling a bat backwards from the pitch to get one. `resolve_contact`
+  asks whether two solids intersect, and when / where on the bat / how square
+  all fall out together.
+- **The whole swing is decided at commit** (`_handle_swing_input`). The bat is
+  built from the cursor as it was when the key went down, and swept against the
+  pitch's own trajectory then and there. Previously the geometry test ran 150 ms
+  later against the cursor *as it was then*, which let a player re-aim during
+  the swing; a real swing path cannot change once it has started.
+- **The cursor is resolved against the pitch before the bat is built**
+  (`bat_contact.aim_at_pitch`). This is the seam, and skipping it is what made
+  the game near-unplayable after the rewrite: the barrel goes on the cursor's
+  ray at the barrel's depth, ~2.2 ft out front, but the player is aiming at a
+  ball drawn to the plate, where it is 2–5 in lower. A perfectly aimed,
+  perfectly timed swing fouled everything and whiffed on a curveball. Fixing it
+  roughly doubled fair contact at every difficulty (AMATEUR 23% → 39% of swings,
+  fouls 55% → 44%) without touching a single difficulty multiplier — the
+  multipliers were never the problem. Any future change that gives something a
+  depth axis has to ask the same question of the player's input.
+- **Timing shows up as spray and as where on the bat first, and only then as a
+  quality penalty.** Being 20 ms early with the bat square is not a worse
+  *strike*, it is a pulled ball — so what moves first is `along` (early meets it
+  off the end, late on the handle) and the bat's bearing. With the bat isotropic
+  this is what the geometry does on its own rather than an aspiration: sweeping
+  the **residual** error, `along` runs 1.00 at the very tip 14 ms early, through
+  the sweet spot at 0, to 0.62 on the handle 30 ms late, and misses entirely
+  past ~14 ms early because not even the tip is there yet. That is a hitter
+  getting jammed when late and reaching when early, out of two solids and a
+  clock. Quality then falls for two reasons: the ball coming off the barrel
+  entirely, and the borrowed time the assist had to cover (`timing_score`).
+  - A consequence worth knowing when reading tests: at the default difficulty
+    the assist covers ±26 ms, so a sweep of ±20 ms is slid to on-time and the
+    geometry sees a *perfectly timed* swing every time. Any test about how
+    timing reaches the bat has to work in the residual — `tests/test_bat_contact.py`
+    does it with a `TIGHT` difficulty whose budget is 5 ms. A test that swept
+    ±20 ms at AMATEUR and still saw the ball move would mean the assist had
+    stopped working.
+- **The timing forgiveness is an assist, not a tolerance — it moves the swing
+  in time rather than stretching the bat in space.** A real 2.9 in bat can catch
+  a 95 mph pitch over a few milliseconds; this game has always granted tens.
+  `resolve_contact` slides the whole swing by up to `timing_assist_s`
+  (`TIMING_ASSIST_BASE_S` 0.026 s, scaled by `contact_timing_window`) toward the
+  ball, then asks the plain isotropic question — do these two solids intersect.
+  Contact is therefore a real intersection and `Contact.surface_gap_ft` is
+  bounded by `margin_ft`.
+  - **It used to be spent in space, and that was the bug.** The bat was an
+    ellipsoid stretched along the ball's flight line by `cushion × ball speed`
+    — 5.7 ft at ROOKIE against a 99 mph fastball, a tube four bat-lengths long
+    — so "contact" routinely meant the bat was on the ball's *line* and feet
+    away from the ball. 63% of recorded contacts had visible daylight, 16% over
+    two feet. Worse, the residual was **charged back as an aim error**: a pitch
+    descends, so 2.6 ft of reach is five inches of vertical, well past the
+    2.75 in the geometry can reach and graded by a sigma picked for half that
+    range. Timing error arrived disguised as "the bat was over the ball" and
+    was the largest single term in quality.
+  - **The borrowed time is charged explicitly** (`TIMING_CHARGE_SIGMA_S`
+    0.020 s). The geometry is shown the slid swing and cannot see the slide, so
+    without this a swing anywhere inside the budget scores exactly 1.00 — a flat
+    plateau of max-quality contact 52 ms wide at ROOKIE. It is **calibrated,
+    not chosen**: it holds the whiff/foul/fair split and the fair-quality
+    quantiles at what the anisotropic model produced over the same player model.
+  - **The charge joins the geometric mean rather than multiplying it.** Quality
+    is now the geometric mean of *three* independent ways to be off — along the
+    bat, across it, and how much of the clock the swing was given. Multiplied on
+    the outside it flattened the top of the distribution (best available 0.89
+    against 0.96), which is the end of the scale EV is anchored on.
+  - The slide deliberately does not let the *ball* be sampled at a time of the
+    model's choosing. An earlier draft swept the ball as a capsule and took the
+    closest approach, which let a mistimed swing pick the instant that flattered
+    it: quality came out non-monotone in timing error, dipping at dead-on and
+    peaking at ±20 ms. The swing is slid by a stated amount off a datum the
+    player is actually racing; the ball is left where it is.
+  - Symmetric on purpose. Recorded swings run **systematically +19 ms late**
+    (median foul +30) — human reaction time against a 150 ms `SWING_DURATION_MS`,
+    not noise — and helping the late side more would paper over the one habit a
+    player can be taught. It stays legible in `swing_timing_signed_ms`, in the
+    replay's bands, and now in the `ASSIST n MS` marker.
+- **Difficulty is carried on the swing, never re-read at replay time.**
+  `aim_assist`, `zone_size_mult` and `timing_window_mult` are all stamped at
+  commit and carried on `SwingRecord`, because the replay both rebuilds the bat
+  and re-sweeps the swing to measure its timing windows. A player who changed
+  difficulty between the swing and the replay would otherwise be shown a bat
+  nobody swung and a window nobody swung in. `HitOutcomeManager.contact_multipliers`
+  is the seam, so the gameplay layer still never reads the multiplier dict.
+- **A ball can be foul in two independent ways, and only one of them is about
+  how well it was struck.** `Contact.is_foul` asks both: `quality < threshold`
+  (tipped, topped, caught on the handle or off the end) **or**
+  `spray.is_foul(spray_deg)` (hooked or sliced past a pole). Not two models of
+  one thing — the first is about how square the contact was and the second
+  about which way it left, and a ball can fail either alone. With the verdict
+  resting on quality alone a barrelled ball could never be hooked foul and a
+  mishit that stayed between the lines could never be the dribbler in play that
+  it is; both are ordinary baseball and neither could happen.
+  - **Direction cannot carry the verdict alone**, and this was measured before
+    it was written: it caps near 25% of contact against a real ~50%, because
+    the term that would have to carry the rest is *location*, and pushing that
+    far makes a flawless swing on a strike an automatic foul. Quality cannot
+    carry it alone either — it cannot see which way the ball went.
+  - `FOUL_QUALITY_THRESHOLD` came down from 0.67 to 0.52 and the span from 0.30
+    to 0.22 because of it. Direction supplies ~24% of contact at AMATEUR, so
+    the two together hold the total at ~48% where quality alone sat at 57%.
+- **Difficulty has to reach both touching the ball and squaring it up.**
+  `contact_zone_size` → `margin_ft` (the bat's isotropic tolerance),
+  `contact_timing_window` → `timing_assist_s` (how much of the clock is given)
+  **and** `foul_threshold`. Without that last one a harder setting would only convert
+  fair contact into fouls at the edges and leave squaring-it-up exactly as easy,
+  which is not what the setting has ever meant — it scaled the perfect and foul
+  windows together. `POWER_MARGIN_FT` keeps a power swing harder than a contact
+  swing even at the difficulty where the two windows agree; that difference used
+  to be the rectangle's 50 px versus 25 px.
+  - It now reaches fair/foul by a **third** route as well, and that one is
+    emergent: a smaller `timing_assist_s` leaves more residual timing on the
+    bat, and the bat is what points the ball. Nothing in `spray` is tuned for
+    difficulty and nothing there should be.
+- **`margin_ft` scales `BASE_MARGIN_FT`; it does not offset it.** Written as
+  `(contact_zone_size - 1.0) * K` the bat's tolerance was exactly **0.0 at
+  AMATEUR** and negative at every setting above it — a bat thinner than a bat —
+  so the default difficulty asked the player to place a mouse cursor inside the
+  real 2.75 in a bat and a ball are between them, which is 22 px on a moving
+  target. It read as a cliff: dead-on scored 1.00, three inches high fouled,
+  four inches high missed outright. Recorded play at AMATEUR whiffed **79% of
+  222 swings** against MLB's 24%. "Contact zone size" has never meant "how much
+  is added relative to Amateur". `test_amateur_has_real_vertical_tolerance` and
+  `test_the_zone_multiplier_scales_the_margin_rather_than_offsetting_it` pin it.
+- **The aim assist moves the bat; the tolerances only widen it, and the
+  difference is the point.** `aim_assist` (0.85 at ROOKIE down to 0.20 at HALL
+  OF FAME) is the fraction of the player's *own* aim error that
+  `bat_contact.aim_at_pitch` removes before the swing is built — the adjustment
+  a hitter makes once they have read the pitch, so the bat does not end up
+  exactly where they set out to put it. Because it moves the bat rather than
+  fattening it, it lifts contact **quality**, which is what lets it reach
+  getting hits rather than only making contact; `margin_ft` cannot do that by
+  construction. The **timing assist is its sibling** — it moves the bat in time
+  where this one moves it in space — which is why it also lifts quality and why
+  it has to be charged for. There are two assists and one tolerance now, and
+  keeping the three legible as separate things is the rule.
+  - It is the one thing in that function that is **game feel rather than
+    geometry**. Everything else there corrects a projection bias the player
+    could not have seen; the assist shrinks an error they genuinely made. Keep
+    the two legible as separate things — at `assist = 0` the function is the
+    pure translation it has always been, and every test of the translation runs
+    at that default.
+  - **`MAX_ASSIST_FT` (1.0) is what keeps it a compensation and not a magnet**,
+    and it has to be that generous to do anything: recorded play scatters the
+    aim by about a foot, so a 4 in cap saturates on most real swings and the
+    strength dial stops mattering (47% whiffs against 30% at a foot, with
+    nothing in between). The clamp is **radial**, so the assist can change the
+    size of the player's error but never its direction.
+  - **Difficulty reaches it through `HitOutcomeManager.resolve_aim`**, beside
+    `resolve_swing` and `_foul_threshold`, so the gameplay layer never reads
+    the multiplier dict. The strength used is stamped on the simulation at
+    commit and carried on `SwingRecord.aim_assist` — *not* re-read at replay
+    time, or a player who changed difficulty afterwards is shown a bat nobody
+    swung, the same failure as preferring the cursor at bat arrival.
+  - **`bat_path` still never sees the pitch.** What the assist changes is which
+    point on the cursor's ray the player is taken to have meant, which was
+    already this seam's job.
+- **`on_time` keeps its name and its three values but is no longer a timing
+  grade** — it is `swing_verdict(contact)`, i.e. what the geometry produced.
+  The analysis package's definition of it needs reading in that light.
+- **`vertical_offset` is measured in real feet now** (`Contact.vertical_offset_ft`)
+  and converted once, in `HitOutcomeManager.contact_metrics`, into the screen
+  pixels the batted-ball type anchors and `hit_animation._pick_shape` have
+  always spoken. Don't restate those constants in inches — the two scales happen
+  to be close (the reachable offset is ±2.75 in ≈ ±20.6 px against anchors that
+  run to 22), and converting at the seam keeps one set of tuned numbers.
+- **The sweep runs on an input frame, so it has a budget.** Walking 33 stations
+  along the bat at every one of 221 time samples cost 12 ms a swing — most of a
+  frame, spent at the exact moment the game is reading the player. `_closest_along`
+  solves the closest point instead of walking to it, and it is *also* more
+  accurate: the walk landed the sweet-spot fraction 0.19 out on average, and
+  that fraction is most of what quality is made of. A test guards the order of
+  magnitude.
+- **`collision_angled` is gone, with the rectangle it tested.** It had a sign
+  error for the life of the project (fixed 2026-08): it rotated the circle by
+  `R(+angle)` and tested an axis-aligned box, which is a test against a box at
+  `-angle` — the mirror image, so aiming at a low pitch tilted the barrel *up*.
+  Because the rectangle was long and thin that changed the bat's effective
+  reach as a function of aim height, and contact ran 67% low / 93% middle / 88%
+  high. The solved pose cannot reproduce it: the knob goes on the pivot pixel
+  and the sweet spot on the cursor pixel, and there is no sign to get wrong.
+  `test_aiming_low_points_the_barrel_low` is the successor pin.
+- **Recorded play from before a contact-geometry change describes a different
+  bat**, and this has now happened four times: the `collision_angled` sign fix,
+  the rectangle→`bat_contact` rewrite, the cushion→slide change, and the arrival
+  of [spray](#spray-direction-sprayspy). At the last one the *foul verdict*
+  changed shape — direction became an independent way to be foul and the quality
+  threshold came down from 0.67 to 0.52 to make room — so which contacts are
+  fair is a different set, `contact_quality` has a different distribution over
+  them, and `on_time` means a slightly different thing again. Rows either side
+  are not comparable. Archive and clear with
+  [reset_tracking.py](strikefactor/data/reset_tracking.py), then re-derive
+  `contact_audio.EV_CALIBRATION` from the new quantiles — see the warning under
+  [Contact Audio](#contact-audio) about never tuning against a uniform quality
+  sweep.
+  - **Three constants are anchored to those same quantiles and must move
+    together**: `contact_audio.EV_CALIBRATION`,
+    `tests/test_infield_hit_verdict.py::_QUALITY_QUANTILES`, and
+    `tests/test_contact_audio.py`'s quantile checks. Move one without the others
+    and the exit-velocity model and the fielding model start describing
+    different batters. A Monte Carlo over a plausible player model puts quality
+    at p25/p50/p90 = **0.653/0.743/0.932** now that direction is part of the
+    foul verdict, against 0.717/0.769/0.918 for the slide model before it,
+    0.70/0.81/0.98 for the anisotropic bat and 0.77/0.89/0.98 for the
+    rectangle. Both tails widened at the last change and the median barely
+    moved: the quality threshold came down to 0.52 (admitting weak contact that
+    stays between the lines) while a well-struck ball can now be hooked foul
+    and leave the fair population.
+  - **Spray is not uniform either, and that is the same trap one axis over.**
+    A `HitAnimation` built without a `spray_deg` sends the ball to *exactly*
+    dead centre, so a sweep that forgets it puts every grounder over second
+    base — the one place middle infielders cannot reach — and reports a 17%
+    infield-hit rate against a real 6-8%. Before `spray` the animation drew its
+    own angle, so tests got a spread for free. `_realistic_spray` in
+    `tests/test_infield_hit_verdict.py` is the sampler: mean +4.4°, sd 20.0°.
+  - **Calibrate against the model you are replacing, not against the recorded
+    rates**, unless the recording is all post-change: `strikefactor.db` holds
+    rows from several vintages at once, and only the most recent describe the
+    bat currently in the game.
+- Swing detection is in [pitch_simulation.py](strikefactor/gameplay/pitch_simulation.py) (W/E key handlers)
 - Hit outcome calculation is in [hit_outcome_manager.py](strikefactor/gameplay/hit_outcome_manager.py)
 - Hit animation handoff is in `PitchSimulation._start_hit_animation()`; trajectory shape is picked in `hit_animation._pick_shape()`
-- Timing windows and bat radius defined in [config.py](strikefactor/config.py)
-
-### Adding a Field to the Pitch Database
-1. Add the column to the `CREATE TABLE` string in `PitchDB.SCHEMA` in [pitch_database.py](strikefactor/data/pitch_database.py)
-2. Bump `SCHEMA_VERSION` and add an `ALTER TABLE` branch in `PitchDB._migrate()` (an auto-backup runs before any migration)
-3. Populate the field in `PitchDataExtractor.extract_pitch_record()` from `PitchSimulation` state
-4. Add the column to the `INSERT` statement in `PitchDB.insert_pitch()`
-
-### Adding a HUD Mode
-1. Create a new HUD class in [strikefactor/ui/](strikefactor/ui/) following the `Scorebug` / `BroadcastHUD` / `MinimalHUD` pattern (palette, screen size constants, `draw(screen)` method)
-2. Instantiate it on `Game` in `Game.__init__` ([main.py](strikefactor/main.py))
-3. Add the mode string to `SettingsManager.cycle_hud_mode()` and the dispatch in `Game._draw_active_hud()`
-4. The `TOGGLE_HUD_MODE` keybind will pick it up automatically once it's in the cycle list
+- Difficulty multipliers are defined in [settings_manager.py](strikefactor/settings_manager.py) and converted in [bat_contact.py](strikefactor/gameplay/bat_contact.py)
+- Batted-ball direction is [spray.py](strikefactor/gameplay/spray.py); every consumer reads `Contact.spray_deg`
 
 ## File Organization
 ```
@@ -419,6 +681,8 @@ Prefer `@broadcast_button` for anything on a menu screen — it is the black/1px
     │   ├── hit_animation.py     # Top-down ball-flight playback after contact
     │   ├── ball_flight.py       # Pure: batted-ball hang time + carry (ft, s)
     │   ├── bat_path.py          # Pure: where the bat is over a swing (ft, s)
+    │   ├── bat_contact.py       # Pure: does the bat hit the ball, and where on it
+    │   ├── spray.py             # Pure: which way the ball went (deg, pull-positive)
     │   ├── swing_record.py      # Captured swing, replayable (Game.last_swing)
     │   ├── ground_roll.py       # Pure: landing speed, bounce, roll (ft, s)
     │   ├── infield_timing.py    # Pure: does the throw to first beat the runner

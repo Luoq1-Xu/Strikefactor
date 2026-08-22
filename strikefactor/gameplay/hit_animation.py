@@ -38,6 +38,7 @@ from strikefactor.gameplay import (
     extra_bases,
     ground_roll,
     infield_timing,
+    spray,
 )
 
 HOME = (640, 670)
@@ -243,19 +244,22 @@ IN_PLAY_LANDING_FT = {
     "FLY":      (165, 365),
     "POP_UP":   (80, 160),
 }
-# Lateral angle bounds (radians, math convention with 90° straight to CF).
-# 50°–130° matches the fair-territory cone — same clamp _pick_hit_landing's
-# legacy gap branch already used. Uniform distribution: real BABIP varies
-# by spray angle, but the relevant inequities (pull-side pull, opposite-
-# field power) belong to the swing model, not the landing pick.
-IN_PLAY_ANGLE_MIN = math.radians(50)
-IN_PLAY_ANGLE_MAX = math.radians(130)
+# `IN_PLAY_ANGLE_MIN` / `IN_PLAY_ANGLE_MAX` are **gone**. They were a 50°–130°
+# cone that a ball in play was drawn *uniformly* across, and its own comment
+# admitted the problem: the pull/oppo inequities "belong to the swing model,
+# not the landing pick" — and then it drew `random.uniform`. The swing model
+# supplies the angle now (`spray`), so there is no distribution left here to
+# bound.
+#
+# The cone was also a conservative subset of fair territory, 5° inside each
+# real foul line, which is exactly where a ball down the line lands and where
+# doubles come from. Fair balls are bounded by `spray.FOUL_LINE_DEG` already,
+# so all that is needed is a hair of inset to keep a ball landing at exactly
+# 45.0° from being drawn on the line itself.
+FAIR_DRAW_MARGIN_RAD = math.radians(0.5)
 
 # Foul-ball animation (cosmetic — the outcome is already a settled foul).
-# Direction comes from the *signed* swing timing: early swings hook the ball
-# past the batter's pull-side line, late swings glance it off past the
-# opposite-field line. Off-line angle grows with timing severity so a
-# barely-foul swing hugs the line and a badly mistimed one sprays sharply.
+# Direction is the ball's own bearing (`spray`), the same one a fair ball gets.
 #
 # CRITICAL: these are the *actual* foul lines, per coordinate space — NOT
 # the 50°/130° IN_PLAY fair cone, which is a conservative fair subset. In
@@ -268,7 +272,9 @@ FOUL_LINE_FIELD_LEFT_RAD   = math.radians(135)   # 3B/LF line, real-field feet
 FOUL_LINE_FIELD_RIGHT_RAD  = math.radians(45)    # 1B/RF line, real-field feet
 FOUL_LINE_SCREEN_RIGHT_RAD = math.atan2(FT_TO_PX_Y, FT_TO_PX_X)   # ≈ 30.7°
 FOUL_LINE_SCREEN_LEFT_RAD  = math.pi - FOUL_LINE_SCREEN_RIGHT_RAD  # ≈ 149.3°
-FOUL_OFF_MIN_RAD = math.radians(6)
+# `FOUL_OFF_MIN_RAD` is gone: it was the floor of a severity ramp that started
+# at "barely mistimed", and a ball hooked a degree past the pole has to be able
+# to draw a degree past the pole.
 FOUL_OFF_MAX_RAD = math.radians(45)
 FOUL_LANDING_FT = {
     "GROUNDER": (25, 110),
@@ -1078,15 +1084,36 @@ def _polar_point_ft(angle, dist_ft):
     return _to_screen(dist_ft * math.cos(angle), dist_ft * math.sin(angle))
 
 
-# HR direction tuning. Pulled HRs are the dominant pattern in real MLB
-# (~55–60% of HRs are pulled, ~10% oppo, the rest straightaway). The
-# pull/oppo bias from pitch location is overlaid on top of a small
-# default pull bias so even a centered pitch tends slightly toward the
-# batter's pull side, matching reality.
-HR_INSIDE_NORM_PX     = 65.0                  # half-width of strike zone (ABS_ZONE width / 2)
-HR_PULL_SHIFT_RAD     = math.radians(22)      # max angle shift from inside/outside contact
-HR_BASE_PULL_RAD      = math.radians(7)       # default pull bias on a centered pitch
-HR_ANGLE_SIGMA_RAD    = math.radians(20)      # gaussian spread around the biased mean
+def _screen_angle_of(field_rad):
+    """A real-field bearing as the equivalent *screen-polar* angle.
+
+    The two spaces are the standing trap in this module: the real foul lines
+    are at 45°/135° in field feet and at ~30.7°/149.3° on screen, because the
+    projection is anisotropic. Anything that reaches the wall — home runs, wall
+    caroms, foul home runs — is written in screen polar, because the wall is;
+    everything else is written in feet. `spray` speaks feet, so this is the one
+    place a spray angle crosses over.
+    """
+    return math.atan2(math.sin(field_rad) * FT_TO_PX_Y,
+                      math.cos(field_rad) * FT_TO_PX_X)
+
+
+# HR direction. Pulled home runs are the dominant pattern in real MLB (~55-60%
+# pulled, ~10% opposite field, the rest straightaway), and that now *emerges*:
+# a ball has to be met out in front to be driven, being met out in front means
+# the bat is further round, and `spray` reads the bat.
+#
+# `HR_INSIDE_NORM_PX`, `HR_PULL_SHIFT_RAD` and `HR_BASE_PULL_RAD` are **gone**
+# with the model that needed them — a pull bias derived from the *pitch's*
+# inside/outside location, which was this file's own second answer to the
+# question `spray` now answers once.
+#
+# The sigma came down from 20° with them. It was noise around a mean that
+# carried very little information (the location bias could shift it 29° at
+# most, against 20° of scatter); the mean is a real measurement now, so the
+# scatter around it can be what it is — the several degrees of variation two
+# identically-struck balls really do show.
+HR_ANGLE_SIGMA_RAD    = math.radians(7)       # gaussian spread around the mean
 HR_FOUL_MARGIN_RAD    = math.radians(2)       # keep HRs clearly inside the poles
 HR_ANGLE_MAX_TRIES    = 40                    # rejection-sampling attempts
 
@@ -1131,23 +1158,46 @@ def _px_per_ft_at(angle):
     return 1.0 / ft_per_px
 
 
-def _pick_hit_landing(outcome, shape, quality=1.0, horizontal_inside=0.0,
-                      batter_handedness='R', ev_mph=None):
+def _fair_field_angle(spray_field_rad, allow_foul=False):
+    """A spray bearing as a real-field angle fit to draw.
+
+    `spray` bounds a fair ball inside the real foul lines already, so this is
+    an inset of half a degree and not a clamp — the only ball it moves is one
+    landing at exactly 45.0°, which would otherwise draw *on* the line. A real
+    clamp here would pile every out-of-range ball onto the two boundary angles,
+    which is the defect `_sample_hr_angle` exists to avoid.
+
+    `allow_foul` is for the home run, whose angle is then rejection-sampled
+    against the poles anyway, and for the foul, which is outside the lines by
+    definition. `None` means a caller that has no swing behind it (a legacy
+    outcome string); dead centre is the honest answer there.
+    """
+    if spray_field_rad is None:
+        return math.radians(90.0)
+    if allow_foul:
+        return spray_field_rad
+    return max(FOUL_LINE_FIELD_RIGHT_RAD + FAIR_DRAW_MARGIN_RAD,
+               min(FOUL_LINE_FIELD_LEFT_RAD - FAIR_DRAW_MARGIN_RAD,
+                   spray_field_rad))
+
+
+def _pick_hit_landing(outcome, shape, quality=1.0, spray_field_rad=None,
+                      ev_mph=None):
     """Pick a landing point for the contact.
 
-    For IN_PLAY (the unified ball-in-play outcome) the landing is sampled
-    naturally — uniform lateral angle across fair territory, depth scaled
-    by contact quality within the per-shape IN_PLAY_LANDING_FT range.
-    Hit vs. out emerges later from whether a fielder reaches the ball;
-    the landing distribution is intentionally unbiased so a ball aimed
-    "right at" an IF really does end up in their range, and a ball aimed
-    through a gap really does get past them.
+    **The direction is an input now**, not a draw. `spray_field_rad` is the
+    ball's real-field bearing, read off the bat's own face at the moment it met
+    the ball (`spray`), and it is the same number for a ball in play, a home
+    run and a foul. What is still sampled here is *depth* — how far the ball
+    carried — which comes from the exit velocity through the same projectile
+    identity that gives it its hang time.
 
-    HOME RUN landings bias by pitch location and batter handedness:
-    inside pitches get pulled (RHB → LF, LHB → RF); outside pitches go
-    opposite field. `horizontal_inside` is positive when the pitch was
-    inside the batter (handedness already folded in upstream), so the
-    pull direction in field-angle space depends only on handedness.
+    Before this the lateral angle was `random.uniform(50°, 130°)` for a ball in
+    play, a pitch-location bias for a home run, and a `random.choice((-1, 1))`
+    for a ball that reached the wall: three answers, none of them the swing.
+    Hit vs. out still emerges from whether a fielder reaches the ball, and the
+    landing is still unbiased *with respect to the fielders* — nothing here
+    steers toward a gap or a glove.
     """
     if outcome == "IN_PLAY":
         dist_min, dist_max = IN_PLAY_LANDING_FT.get(shape, IN_PLAY_LANDING_FT["LINER"])
@@ -1166,29 +1216,45 @@ def _pick_hit_landing(outcome, shape, quality=1.0, horizontal_inside=0.0,
             mid = ball_flight.carry_distance_ft(shape, ev)
         # A small uniform spread so each contact looks distinct even at
         # a fixed exit velocity.
+        #
+        # `mid` is clamped into the range *before* the window is built, and
+        # that ordering is the whole point. Written as
+        # `uniform(max(dist_min, mid - spread), min(dist_max, mid + spread))`
+        # the bounds cross over as soon as `mid` sits more than `spread`
+        # outside the range — and `random.uniform(a, b)` does not care which
+        # way round its arguments are, it samples `[b, a]`. So the clamp
+        # inverted into its own opposite exactly where it was needed, and the
+        # ball landed *outside* the range on the far side.
+        #
+        # It was not a corner. Over the real quality distribution: 62% of
+        # POP_UPs cleared their 160 ft cap, out to 272 ft — a pop-up landing
+        # in the outfield — plus 8.9% of FLYs past 365 ft (to 416) and 4.3%
+        # of LINERs short of their 130 ft floor (to 100). The EV
+        # recalibration widened it by pushing carry up, but the defect is
+        # independent of calibration and predates it.
         spread = (dist_max - dist_min) * 0.18
+        mid = min(max(mid, dist_min), dist_max)
         dist_ft = random.uniform(max(dist_min, mid - spread),
                                  min(dist_max, mid + spread))
-        # Lateral angle uniform across fair territory. No artificial pull
-        # toward gaps or lines — the spray pattern is the input to the
-        # fielder simulation, not a hint about the desired outcome.
-        angle = random.uniform(IN_PLAY_ANGLE_MIN, IN_PLAY_ANGLE_MAX)
+        # The bat's bearing, unchanged. Still no artificial pull toward gaps
+        # or lines — the spray pattern is the input to the fielder simulation,
+        # not a hint about the desired outcome. It simply comes from the swing
+        # now instead of from `random.uniform`.
+        angle = _fair_field_angle(spray_field_rad)
         return _clamp_inside_wall(_polar_point_ft(angle, dist_ft),
                                   LANDING_WALL_MARGIN_PX)
 
     if outcome == "HOME RUN":
-        # Pull/oppo bias from pitch location. `horizontal_inside` is
-        # positive when the pitch was inside the batter (i.e. pull
-        # territory), negative when outside. Field-angle convention:
-        # angle 130° = LF, angle 50° = RF. For RHB pull is +angle (LF);
-        # for LHB pull is -angle (RF). The pull sign converts inside-
-        # offset into the correct field direction; a small base pull bias
-        # is added so even a centered pitch leans slightly toward the
-        # batter's pull side (matches real MLB HR spray).
-        pull_sign = 1.0 if batter_handedness != 'L' else -1.0
-        norm_inside = max(-1.0, min(1.0, horizontal_inside / HR_INSIDE_NORM_PX))
-        bias_rad = pull_sign * (HR_BASE_PULL_RAD + norm_inside * HR_PULL_SHIFT_RAD)
-        mean_angle = math.radians(90) + bias_rad
+        # The bat's bearing again, crossed into screen polar because the wall
+        # is a screen-space ellipse. It replaced a pull bias read off the
+        # *pitch's* inside/outside location (`HR_INSIDE_NORM_PX`,
+        # `HR_PULL_SHIFT_RAD`, `HR_BASE_PULL_RAD`, all gone): pitch location
+        # does belong in the answer, but it belongs the way it reaches a real
+        # hitter — by moving where the bat points when it arrives — and
+        # `bat_path` already models that. Reading it off the pitch as well was
+        # the second model of one thing.
+        mean_angle = _screen_angle_of(_fair_field_angle(spray_field_rad,
+                                                        allow_foul=True))
         angle = _sample_hr_angle(mean_angle)
         wall_r = _wall_r_at(angle)
         q = max(0.0, min(1.0, quality))
@@ -1209,9 +1275,9 @@ def _pick_hit_landing(outcome, shape, quality=1.0, horizontal_inside=0.0,
     q = max(0.0, min(1.0, quality))
     dist_min, dist_max = HIT_LANDING_FT.get(shape, HIT_LANDING_FT["LINER"])
     dist_ft = random.uniform(dist_min, dist_min + (dist_max - dist_min) * (0.4 + 0.4 * q))
-    angle = random.uniform(math.radians(50), math.radians(130))
-    return _clamp_inside_wall(_polar_point_ft(angle, dist_ft),
-                              LANDING_WALL_MARGIN_PX)
+    return _clamp_inside_wall(
+        _polar_point_ft(_fair_field_angle(spray_field_rad), dist_ft),
+        LANDING_WALL_MARGIN_PX)
 
 
 def _pick_shape(outcome, vertical_offset, batted_ball_type=None):
@@ -1382,24 +1448,33 @@ class HitAnimation:
     idle sway when at rest.
     """
 
+    def _batter_handedness(self):
+        batter = getattr(self.game, 'batter', None)
+        if batter is not None and hasattr(batter, 'get_handedness'):
+            return batter.get_handedness()
+        return 'R'
+
     def __init__(self, game, outcome, on_complete, vertical_offset=0.0, quality=0.0,
-                 batted_ball_type=None, horizontal_inside=0.0, foul_timing_norm=0.0):
+                 batted_ball_type=None, spray_deg=0.0):
         self.game = game
         self.outcome = outcome
         self.on_complete = on_complete
         self.vertical_offset = vertical_offset
         self.quality = quality
         self.batted_ball_type = batted_ball_type
-        # Signed timing severity for FOUL outcomes, in [-1, 1]: negative =
-        # early swing (pull-side foul), positive = late (opposite field).
-        # Magnitude is the position within the foul timing window.
-        self.foul_timing_norm = foul_timing_norm
-        # Signed inside/outside contact offset from hit_outcome_manager.
-        # Positive = ball was inside the batter (drives pull-side HRs);
-        # negative = outside (drives opposite-field HRs). Already sign-
-        # adjusted for handedness upstream, so a single sign convention
-        # captures both RHB and LHB.
-        self.horizontal_inside = horizontal_inside
+        # Which way the ball left the bat: degrees from centre field,
+        # pull-positive for either batter (`spray`). One number, used by every
+        # direction decision in this class — the ball in play, the home run,
+        # the ball that reaches the wall and the foul. It replaced
+        # `horizontal_inside` (a pitch-location bias the home run read) and
+        # `foul_timing_norm` (a signed timing severity the foul read), which
+        # were two different answers to this question and left the ordinary
+        # ball in play with none.
+        self.spray_deg = spray_deg
+        self.spin = spray.spin_for(self._batter_handedness())
+        # Resolved once, here, rather than at each of the four sites: the
+        # handedness flip has exactly one home.
+        self.spray_field_rad = spray.field_angle_rad(spray_deg, self.spin)
 
         self.start_time = None
         self.banner_fired = False
@@ -1656,20 +1731,13 @@ class HitAnimation:
             # quality HITs, since those are the angles where real wall
             # caroms originate). Distance is wall_r + carry, with squared
             # bias so most carries are small (impact low on the face).
-            q = max(0.0, min(1.0, self.quality))
-            line_prob = 0.20 + 0.30 * q
-            gap_prob  = 0.40 + 0.30 * q
-            roll = random.random()
-            if roll < line_prob:
-                side = random.choice((-1, 1))
-                base = math.radians(53) if side > 0 else math.radians(127)
-                angle = base + random.uniform(-0.05, 0.05)
-            elif roll < line_prob + gap_prob:
-                side = random.choice((-1, 1))
-                gap = math.radians(79) if side > 0 else math.radians(101)
-                angle = gap + random.uniform(-0.10, 0.10)
-            else:
-                angle = random.uniform(math.radians(50), math.radians(130))
+            # The bat's bearing, crossed into screen polar because the wall
+            # is. This branch used to run its own line-versus-gap lottery and
+            # then pick the *side* with `random.choice((-1, 1))` — so which
+            # way a ball off the wall went, which is the difference between a
+            # double down the line and one in the gap, was a coin flip taken
+            # after the swing was over.
+            angle = _screen_angle_of(_fair_field_angle(self.spray_field_rad))
             bias = random.random() ** WALL_HIT_CARRY_BIAS_EXP
             carry_ft = WALL_HIT_CARRY_FT_MIN + bias * (
                 WALL_HIT_CARRY_FT_MAX - WALL_HIT_CARRY_FT_MIN
@@ -1689,14 +1757,9 @@ class HitAnimation:
                 HOME[1] - dist_px * math.sin(angle),
             )
         else:
-            handedness = 'R'
-            batter = getattr(self.game, 'batter', None)
-            if batter is not None and hasattr(batter, 'get_handedness'):
-                handedness = batter.get_handedness()
             self._hit_end = _pick_hit_landing(
                 outcome, self.shape, self.quality,
-                horizontal_inside=self.horizontal_inside,
-                batter_handedness=handedness,
+                spray_field_rad=self.spray_field_rad,
                 ev_mph=self.exit_velocity_mph,
             )
 
@@ -1796,22 +1859,37 @@ class HitAnimation:
         self._assign_in_play_targets()
 
     def _setup_foul(self):
-        """Scripted foul-ball flight. Direction is driven by the signed
-        timing severity (early → pull side, late → opposite field), shape
-        by vertical contact offset (already bucketed into self.shape), and
-        depth/foul-HR by quality. No interception or securing — the ball
-        lands untouched and the animation finishes on duration_ms.
+        """Scripted foul-ball flight. Direction is the ball's own bearing,
+        shape is the vertical contact offset (already bucketed into
+        self.shape), and depth/foul-HR come from quality. No interception or
+        securing — the ball lands untouched and the animation finishes on
+        duration_ms.
+
+        Direction used to be the *sign of the swing's timing error* against a
+        window of hand-tuned milliseconds: early meant pull side, late meant
+        opposite field, and how far foul was how badly mistimed. That was the
+        only place in the game where the swing reached the ball's direction at
+        all, and it was a different model from the one the home run used and
+        from the nothing a ball in play used. It reads the same `spray_deg` as
+        everything else now, and being early still hooks the ball toward the
+        pull-side pole — because that is what turning the bat further round
+        does, not because a branch says so.
         """
-        handedness = 'R'
-        batter = getattr(self.game, 'batter', None)
-        if batter is not None and hasattr(batter, 'get_handedness'):
-            handedness = batter.get_handedness()
-        # Field-angle pull side: +1 = 3B/LF line for a RHB, -1 = RF for LHB.
-        pull_sign = 1.0 if handedness != 'L' else -1.0
-        early = self.foul_timing_norm < 0
-        foul_side = pull_sign if early else -pull_sign
-        severity = min(1.0, abs(self.foul_timing_norm))
+        # Which side of the field: straight off the bearing, so handedness is
+        # already folded in.
+        foul_side = 1.0 if self.spray_field_rad > math.radians(90.0) else -1.0
         q = max(0.0, min(1.0, self.quality))
+        # How far past the line. **The two ways to foul a ball land here as
+        # two different pictures**, which is worth keeping: a ball hooked past
+        # the pole was struck cleanly and is only just foul, so it hugs the
+        # line; a ball that left between the lines is here because the contact
+        # was glancing — tipped, topped, caught off the end — and those spray
+        # sharply foul however they were pointed. `severity` is the second one
+        # measured off quality, where it used to be measured off a timing
+        # window that had stopped meaning anything.
+        past_rad = max(0.0, math.radians(abs(self.spray_deg) - spray.FOUL_LINE_DEG))
+        severity = min(1.0, max(past_rad, (1.0 - q) * FOUL_OFF_MAX_RAD)
+                       / FOUL_OFF_MAX_RAD)
         # Two line constants because the two landing pickers work in
         # different spaces: generic fouls go through _polar_point_ft
         # (real-field feet, lines at 45°/135°), the foul-HR through
@@ -1856,9 +1934,7 @@ class HitAnimation:
             # barely-foul swing hugs the line while a badly mistimed one
             # sprays sharply foul. Depth is quality-centered inside the
             # per-shape range (same style as _pick_hit_landing).
-            off = (FOUL_OFF_MIN_RAD
-                   + severity * (FOUL_OFF_MAX_RAD - FOUL_OFF_MIN_RAD)
-                   + random.gauss(0.0, math.radians(4)))
+            off = severity * FOUL_OFF_MAX_RAD + random.gauss(0.0, math.radians(4))
             if self.shape == "GROUNDER":
                 # Choppers need to clearly leave fair ground.
                 off = max(off, math.radians(10))

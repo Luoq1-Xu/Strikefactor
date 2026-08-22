@@ -1,8 +1,21 @@
 import math
 import random
 
-from strikefactor.gameplay import bat_path
-from strikefactor.utils.physics import collision_angled
+from strikefactor.gameplay import bat_contact
+from strikefactor.settings_manager import (
+    DIFFICULTY_MULTIPLIERS,
+    DifficultyLevel,
+)
+from strikefactor.utils.pitch_physics import DEFAULT_CAMERA
+
+# The vertical offset the batted-ball model below is tuned against is stated
+# in screen pixels, because it always has been — the DB column, the type
+# anchors and `hit_animation._pick_shape` all speak it. `bat_contact` measures
+# the real thing in feet, so it is converted once, here, rather than restating
+# every constant downstream in inches. The two scales happen to be close: the
+# reachable offset is +/- 2.75 in, which is +/- 20.6 px, against anchors that
+# run to 22.
+FT_PER_PX_Z = DEFAULT_CAMERA.cam_dist / DEFAULT_CAMERA.scale_y
 
 # Batted-ball type model. Classified at contact from (quality, vertical_offset);
 # drives the trajectory shape passed to the animation. The hit/out split is
@@ -90,13 +103,18 @@ class HitOutcomeManager:
         # Last contact metrics — read by HitAnimation for trajectory + HR distance.
         self.last_quality = 0.0
         self.last_vertical_offset = 0.0
-        # Signed horizontal offset of the ball at contact, in screen pixels,
-        # relative to the *batter's* inside/outside. Positive = inside the
-        # batter (drives pull-direction HRs); negative = outside (drives
-        # opposite-field HRs). Computed from ball_x vs the strike zone
-        # center, sign-flipped by handedness so a single sign convention
-        # works for both RHB and LHB downstream.
-        self.last_horizontal_inside = 0.0
+        # Which way the ball went: degrees from centre field, pull-positive
+        # for either batter. Read off the bat's own bearing at contact — see
+        # `spray`.
+        #
+        # It replaced `last_horizontal_inside`, which was the *pitch's*
+        # inside/outside offset in screen pixels and was consulted by exactly
+        # one thing (the home-run angle). Pitch location does belong in the
+        # answer, but it belongs in it the way it reaches a real hitter — by
+        # moving where the bat is pointing when it arrives — and `bat_path`
+        # already models that. Reading it off the pitch instead was the second
+        # model of one thing.
+        self.last_spray_deg = 0.0
         # Last batted-ball type — drives the animation shape and is the
         # canonical record of what kind of contact was made.
         self.last_batted_ball_type = None
@@ -108,53 +126,21 @@ class HitOutcomeManager:
         self.rhpos = (490, 453)
         self.lhpos = (770, 453)
 
-    def _compute_contact_quality(self, swing_location_y, ball_location_y, timing_diff):
-        """Compute a continuous contact quality score from 0.0 (terrible) to 1.0 (perfect).
-
-        Components:
-          - timing_score: how close timing is to perfect (gaussian falloff)
-          - alignment_score: how close bat-ball vertical alignment is (gaussian falloff)
-          - combined via geometric mean so both matter
-        """
-        # --- Timing score (0.0 to 1.0) ---
-        if timing_diff is None:
-            timing_score = 0.7  # default decent
-        else:
-            # Gaussian falloff: perfect at 0ms, sigma ~35ms
-            timing_score = math.exp(-0.5 * (timing_diff / 35.0) ** 2)
-
-        # --- Vertical alignment score (0.0 to 1.0) ---
-        if swing_location_y is None or ball_location_y is None:
-            alignment_score = 0.7
-            vertical_offset = 0.0
-        else:
-            vertical_offset = swing_location_y - ball_location_y  # positive = bat below ball
-            # Gaussian falloff: perfect at 0px, sigma ~25px
-            alignment_score = math.exp(-0.5 * (vertical_offset / 25.0) ** 2)
-
-        # Combined quality via geometric mean
-        quality = math.sqrt(timing_score * alignment_score)
-
-        return quality, vertical_offset
-
-    def compute_foul_contact(self, swing_location_y, ball_location_y, timing_diff_ms):
-        """Cosmetic contact metrics for the foul-ball animation.
+    def compute_foul_contact(self, contact):
+        """Contact metrics for a foul, for the sound and the animation.
 
         Pure: does not touch last_quality / last_vertical_offset /
         last_batted_ball_type, which belong to the in-play path (DB record,
-        next hit's animation). Timing sigma is relaxed to 70ms — foul-graded
-        swings are 20-60ms off by definition, so the standard 35ms sigma
-        would cap quality ~0.68 and make "foul home runs" unreachable.
-        Returns (quality, vertical_offset).
+        next hit's animation).
+
+        It used to relax the timing sigma from 35 ms to 70, because a
+        foul-graded swing was 20-60 ms off *by definition* and the standard
+        sigma would have capped its quality around 0.68. Quality is geometric
+        now — a foul is contact that genuinely was not squared up — so there
+        is nothing left to compensate for, and the special case goes. Fouls
+        will read weaker than they did, which is what a foul is.
         """
-        if swing_location_y is None or ball_location_y is None:
-            vertical_offset = 0.0
-            alignment_score = 0.7
-        else:
-            vertical_offset = swing_location_y - ball_location_y  # positive = bat below ball
-            alignment_score = math.exp(-0.5 * (vertical_offset / 25.0) ** 2)
-        timing_score = math.exp(-0.5 * ((timing_diff_ms or 0.0) / 70.0) ** 2)
-        return math.sqrt(timing_score * alignment_score), vertical_offset
+        return self.contact_metrics(contact)
 
     def _classify_batted_ball_type(self, quality, vertical_offset):
         """Pick a batted-ball type from contact metrics.
@@ -216,25 +202,7 @@ class HitOutcomeManager:
             return "HOME RUN"
         return "IN_PLAY"
 
-    def _compute_horizontal_inside(self, ball_location_x, batter_handedness):
-        """Signed inside/outside offset (px) relative to the batter's body.
-
-        Positive = pitch was inside (close to the batter); negative = outside.
-        Strike zone is centered at x=630 (ABS_ZONE). RHB stands at low x,
-        so inside is ball_x < 630; LHB stands at high x, so inside is
-        ball_x > 630. The sign flip here lets downstream consumers use a
-        single convention (positive = pull, negative = oppo) regardless of
-        handedness.
-        """
-        if ball_location_x is None:
-            return 0.0
-        zone_center_x = 630.0
-        if batter_handedness == 'L':
-            return ball_location_x - zone_center_x
-        return zone_center_x - ball_location_x
-
-    def get_contact_hit_outcome(self, swing_location_y=None, ball_location_y=None, timing_diff=None,
-                                ball_location_x=None, batter_handedness='R'):
+    def get_contact_hit_outcome(self, contact):
         """Coarse outcome at contact. Returns one of:
             "HOME RUN" — predetermined; runners advance now.
             "IN_PLAY"  — ball is live. The HitAnimation classifies the
@@ -250,28 +218,19 @@ class HitOutcomeManager:
         """
         self.hit_type = 0
         self.ishomerun = ''
-        quality, vertical_offset = self._compute_contact_quality(
-            swing_location_y, ball_location_y, timing_diff
-        )
+        quality, vertical_offset = self.contact_metrics(contact)
         self.last_quality = quality
         self.last_vertical_offset = vertical_offset
-        self.last_horizontal_inside = self._compute_horizontal_inside(
-            ball_location_x, batter_handedness
-        )
+        self.last_spray_deg = contact.spray_deg
         return self._resolve_outcome(quality, vertical_offset, swing_type="contact")
 
-    def get_power_hit_outcome(self, swing_location_y=None, ball_location_y=None, timing_diff=None,
-                              ball_location_x=None, batter_handedness='R'):
+    def get_power_hit_outcome(self, contact):
         self.hit_type = 0
         self.ishomerun = ''
-        quality, vertical_offset = self._compute_contact_quality(
-            swing_location_y, ball_location_y, timing_diff
-        )
+        quality, vertical_offset = self.contact_metrics(contact)
         self.last_quality = quality
         self.last_vertical_offset = vertical_offset
-        self.last_horizontal_inside = self._compute_horizontal_inside(
-            ball_location_x, batter_handedness
-        )
+        self.last_spray_deg = contact.spray_deg
         return self._resolve_outcome(quality, vertical_offset, swing_type="power")
 
     def apply_classified_outcome(self, outcome_str, suppress_out_advancement=False):
@@ -284,63 +243,94 @@ class HitOutcomeManager:
             suppress_out_advancement=suppress_out_advancement,
         )
     
-    def power_timing_quality(self, swing_starttime, starttime, traveltime, windup_time):
-        diff = abs((swing_starttime + bat_path.SWING_DURATION_MS) - (starttime + windup_time + traveltime))
+    def resolve_swing(self, swing, trajectory, swing_start_s, swing_type=1):
+        """Sweep the bat against the ball. Returns a `bat_contact.Contact` or None.
 
-        # Get difficulty multipliers
+        This replaced two unrelated gates. The first compared
+        `swing_start + 150` against the ball reaching the *plate* and graded
+        the result on a difficulty window; the second, only if that passed,
+        tested a 120 x 50 px rectangle at the cursor against the ball's screen
+        position for one frame. Neither knew about the other and neither had a
+        depth axis, which is why contact depth could not be an output of the
+        pair and the replay had to model a bat backwards from the pitch to get
+        one. There is one question now, asked of two solids in three
+        dimensions, and when / where / how square all fall out of it together.
+        """
         multipliers = self._get_difficulty_multipliers()
-        power_window = multipliers["power_timing_window"]
+        return bat_contact.resolve_contact(
+            swing, trajectory, swing_start_s,
+            zone_size_mult=multipliers["contact_zone_size"],
+            timing_window_mult=multipliers[
+                "power_timing_window" if swing_type == 2 else "contact_timing_window"],
+            power=(swing_type == 2),
+        )
 
-        # Adjust timing windows based on difficulty
-        perfect_window = 20 * power_window
-        foul_window = 35 * power_window
+    def contact_multipliers(self, swing_type=1):
+        """`(zone_size_mult, timing_window_mult)` for this swing type.
 
-        if perfect_window < diff < foul_window:
-            return 1  # Foul timing
-        elif diff <= perfect_window:
-            return 2  # Perfect timing
-        else:
-            return 0  # Miss
+        Here for the same reason `resolve_swing`, `resolve_aim` and
+        `_foul_threshold` are: this class is the one place a difficulty
+        multiplier becomes a real quantity, so the gameplay layer never reads
+        the multiplier dict itself.
 
-    def contact_timing_quality(self, swing_starttime, starttime, traveltime, windup_time):
-        diff = abs((swing_starttime + bat_path.SWING_DURATION_MS) - (starttime + windup_time + traveltime))
-
-        # Get difficulty multipliers
+        Exposed so `PitchSimulation` can *stamp* them on the swing, which
+        `SwingRecord` then carries. The replay re-sweeps the swing to measure
+        the timing it actually had, and re-reading difficulty at replay time
+        would show a player who changed the setting a window nobody swung in —
+        the same failure `aim_assist` is carried to avoid.
+        """
         multipliers = self._get_difficulty_multipliers()
-        contact_window = multipliers["contact_timing_window"]
+        return (multipliers["contact_zone_size"],
+                multipliers["power_timing_window" if swing_type == 2
+                            else "contact_timing_window"])
 
-        # Adjust timing windows based on difficulty
-        perfect_window = 30 * contact_window
-        foul_window = 60 * contact_window
+    def resolve_aim(self, cursor_ft, trajectory, handedness):
+        """The aim the player's cursor names against this pitch, assisted.
 
-        if perfect_window < diff < foul_window:
-            return 1  # Foul timing
-        elif diff <= perfect_window:
-            return 2  # Contact timing
-        else:
-            return 0  # Miss
-    
-    # Check for contact based on mouse cursor position when self.ball impacts bat
-    def get_ball_to_bat_contact_outcome(self, batpos, ballpos, swing_type, ballsize=11, batter_handedness='R'):
-        x = 1 if batter_handedness == "R" else -1
-        pivot = self.rhpos if batter_handedness == "R" else self.lhpos
-        angle = math.atan2(batpos[1] - pivot[1], batpos[0] - pivot[0])
+        Two things at once, and `bat_contact.aim_at_pitch` documents both: the
+        cursor is carried onto the barrel's own depth, which is a bias fix, and
+        it is then pulled a difficulty-scaled fraction of the way toward the
+        ball, which is the in-swing adjustment a hitter makes once they have
+        read the pitch. The second is game feel; the first is not.
 
-        # Get difficulty multipliers
+        Here for the same reason `resolve_swing` and `_foul_threshold` are:
+        this class is the one place a difficulty multiplier becomes a real
+        quantity, so the gameplay layer never reads the multiplier dict itself.
+        """
+        return bat_contact.aim_at_pitch(
+            cursor_ft, trajectory, handedness,
+            assist=self._get_difficulty_multipliers()["aim_assist"])
+
+    def swing_verdict(self, contact, swing_type=1):
+        """0 whiff / 1 foul / 2 fair, from the resolved contact.
+
+        `on_time` keeps its name and its three values so every consumer of the
+        column still reads, but it is no longer a *timing* grade — it is what
+        the geometry produced. Timing reaches it the way it reaches a real
+        swing: early meets the ball off the end of the bat, late on the handle,
+        and both score badly enough to go foul — and, since `spray`, early also
+        turns the bat further round and hooks the ball toward the pole.
+        """
+        if contact is None:
+            return 0
+        return 1 if contact.is_foul(self._foul_threshold(swing_type)) else 2
+
+    def _foul_threshold(self, swing_type):
         multipliers = self._get_difficulty_multipliers()
-        contact_zone_modifier = multipliers["contact_zone_size"]
+        window = multipliers["power_timing_window" if swing_type == 2
+                             else "contact_timing_window"]
+        return bat_contact.foul_threshold(window)
 
-        # Adjust contact zone based on difficulty
-        base_contact_zone_height = 50 if swing_type == 1 else 25
-        contact_zone_height = base_contact_zone_height * contact_zone_modifier
-        base_contact_zone_width = 120
-        contact_zone_width = base_contact_zone_width * contact_zone_modifier
+    @staticmethod
+    def contact_metrics(contact):
+        """`(quality, vertical_offset_px)` for a resolved contact.
 
-        if collision_angled(ballpos[0], ballpos[1], ballsize, (batpos[0] - (30 * x)), batpos[1], contact_zone_width, contact_zone_height, angle):
-            outcome = "hit"
-        else:
-            outcome = "miss"
-        return outcome
+        The offset is bat-below-ball positive, in pygame's y-down screen
+        convention — the same sign and scale `_compute_contact_quality`
+        produced, so the batted-ball type model and `hit_animation._pick_shape`
+        read it unchanged.
+        """
+        return contact.quality, contact.vertical_offset_ft / FT_PER_PX_Z
 
     def update_runners_and_score(self):
         self.ishomerun = ''
@@ -379,16 +369,17 @@ class HitOutcomeManager:
         return self.ishomerun
 
     def _get_difficulty_multipliers(self):
-        """Get difficulty multipliers from settings manager, or default values."""
+        """Difficulty multipliers from the settings manager, or the defaults.
+
+        The fallback is the **AMATEUR row of the real table**, not a copy of
+        it. It used to be a dict literal restating that row, and a restatement
+        drifts: `aim_assist` was added to `settings_manager` and not here, so
+        every `HitOutcomeManager` built without a `SettingsManager` — the
+        default in the constructor signature, and what the tests use — raised
+        `KeyError: 'aim_assist'` the first time `resolve_aim` was called.
+        Reading the table means a key can never again exist for a player and
+        be missing for the fallback.
+        """
         if self.settings_manager:
             return self.settings_manager.get_difficulty_multipliers()
-        else:
-            # Default multipliers (Amateur difficulty)
-            return {
-                "contact_timing_window": 1.0,
-                "power_timing_window": 1.0,
-                "contact_zone_size": 1.0,
-                "out_probability_modifier": 1.0,
-                "strike_zone_tolerance": 1.0,
-                "foul_ball_chance": 1.0
-            }
+        return dict(DIFFICULTY_MULTIPLIERS[DifficultyLevel.AMATEUR])

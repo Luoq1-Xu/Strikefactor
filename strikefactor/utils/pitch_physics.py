@@ -75,6 +75,32 @@ class PitchTrajectory:
 
         return self._travel_time
 
+    def time_at_depth(self, y_ft):
+        """When the ball was `y_ft` in front of the plate, in seconds.
+
+        `travel_time` is this at `y_ft = 0`; the general form is needed
+        because the bat meets the ball a couple of feet out in front, so
+        "when should the barrel have been there" is a question about a depth
+        the pitch reaches before the plate. Unclamped on purpose — past the
+        plate the model still describes a real ball heading for the mitt, and
+        that extrapolation is exactly what a late swing is.
+
+        Of the two roots the near one is on the way in; the far one is the
+        ball being decelerated back out again by the drag term, which is not
+        a thing that happens to a pitch.
+        """
+        a = 0.5 * self.ay
+        b = self.vy0
+        c = self.y0 - y_ft
+        if abs(a) < 1e-10:
+            return self.travel_time if abs(b) < 1e-10 else -c / b
+        disc = b * b - 4 * a * c
+        if disc < 0:
+            return -b / (2 * a)
+        root = math.sqrt(disc)
+        return min(((-b + root) / (2 * a), (-b - root) / (2 * a)),
+                   key=lambda t: abs(t - self.travel_time))
+
     @property
     def travel_time_ms(self):
         """Travel time in milliseconds."""

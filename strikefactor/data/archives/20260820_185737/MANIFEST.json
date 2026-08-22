@@ -1,0 +1,27 @@
+{
+  "created_at": "2026-08-20T18:57:37",
+  "reason": "",
+  "scope": "all modes, all tracking stores",
+  "database": "strikefactor.db",
+  "json_files": [
+    "gameday_history.json",
+    "gameday_sessions.json",
+    "lap_history.json",
+    "batting_stats.json"
+  ],
+  "counts": {
+    "pitch_trajectories": 10560,
+    "pitches": 528,
+    "at_bats": 202,
+    "games": 37,
+    "batter_profiles": 3,
+    "_by_mode": {
+      "arcade": 258,
+      "sandbox": 270
+    },
+    "gameday_history.json": 0,
+    "gameday_sessions.json": 0,
+    "lap_history.json": 0,
+    "batting_stats.json": 4
+  }
+}

@@ -43,12 +43,12 @@ class _StubGame:
         self.settings_manager = _StubSettings(modifier)
 
 
-def _play(seed, quality, hand="R", modifier=1.0):
+def _play(seed, quality, hand="R", modifier=1.0, spray_deg=0.0):
     """Run one grounder to completion; returns the finished animation."""
     random.seed(seed)
     anim = ha.HitAnimation(_StubGame(hand, modifier), outcome="IN_PLAY",
                            on_complete=lambda: None, quality=quality,
-                           batted_ball_type="GROUNDER")
+                           batted_ball_type="GROUNDER", spray_deg=spray_deg)
     t = 0
     while not anim.finished and t < 12000:
         t += 16
@@ -59,22 +59,52 @@ def _play(seed, quality, hand="R", modifier=1.0):
 # Contact quality is NOT uniform, and assuming it is has now caused the
 # same class of miscalibration three times in this codebase (see
 # contact_audio.EV_CALIBRATION and ball_flight.carry_distance_ft). Quality
-# is only computed for swings that already timed the ball, so its real
-# distribution over recorded contacts is p25 0.77 / p50 0.88 / p90 0.98 —
-# crowded against 1.0, nothing like the `(i % 50) / 50.0` sweep these tests
-# used to run. That sweep reported a 7.6% infield-hit rate where the real
-# distribution gave 3.8%, which is how the model came to be calibrated
-# against a batter who does not exist.
+# is only computed for swings that squared the ball up enough to put it in
+# play, so its real distribution is crowded against 1.0 — nothing like the
+# `(i % 50) / 50.0` sweep these tests used to run. That sweep reported a
+# 7.6% infield-hit rate where the real distribution gave 3.8%, which is how
+# the model came to be calibrated against a batter who does not exist.
+#
+# Re-derived most recently when the ball got a *direction* (`spray`), which
+# changed which contacts are fair: p10 0.580 / p25 0.653 / p50 0.743 / p75
+# 0.858 / p90 0.932, against 0.690 / 0.717 / 0.769 / 0.851 / 0.918 for the
+# slide model before it. Both tails widened — the quality threshold came down
+# to 0.52 because it no longer carries the whole foul verdict, and a
+# well-struck ball can now be hooked foul and leave the fair population.
+# These must stay in step with EV_CALIBRATION, which is anchored to the same
+# quantiles — move one without the other and this file silently starts
+# describing a different batter from the one the exit-velocity model does.
 #
 # Approximated here by its quantiles rather than read from the DB: a test
 # that needs strikefactor.db is a test that breaks on a fresh checkout.
 _QUALITY_QUANTILES = (
-    (0.10, 0.62), (0.25, 0.77), (0.50, 0.88), (0.75, 0.95), (0.90, 0.98),
+    (0.10, 0.580), (0.25, 0.653), (0.50, 0.743), (0.75, 0.858), (0.90, 0.932),
 )
+
+# **And spray is not uniform either.** This is the same trap one axis over, and
+# it bites harder: a `HitAnimation` built without a `spray_deg` sends the ball
+# to *exactly* dead centre, so a sweep that forgets it hits every grounder over
+# second base — the one place middle infielders cannot reach — and reports an
+# infield-hit rate of 17% against a real 6-8%. Before `spray` the landing angle
+# was drawn from `random.uniform(50°, 130°)` inside the animation, so tests got
+# a spread for free; now the swing supplies it and the harness has to.
+#
+# Measured over the fair balls a plausible player produces at AMATEUR: mean
+# +4.4°, sd 20.0°. Pull-positive, so a right-handed batter's positive is
+# toward third.
+_SPRAY_MEAN_DEG, _SPRAY_SD_DEG = 4.4, 20.0
+
+
+def _realistic_spray(rng):
+    """Draw a spray angle from the distribution players produce."""
+    while True:
+        deg = rng.gauss(_SPRAY_MEAN_DEG, _SPRAY_SD_DEG)
+        if abs(deg) <= 45.0:
+            return deg
 
 
 def _realistic_quality(rng):
-    """Draw a contact quality from the recorded distribution."""
+    """Draw a contact quality from the distribution players produce."""
     u = rng.random()
     pts = _QUALITY_QUANTILES
     if u <= pts[0][0]:
@@ -91,7 +121,8 @@ def _sample(n=600, hand="R", modifier=1.0):
     rng = random.Random(n * 7919 + len(hand) + int(modifier * 100))
     fielded = []
     for i in range(n):
-        anim = _play(i, _realistic_quality(rng), hand, modifier)
+        anim = _play(i, _realistic_quality(rng), hand, modifier,
+                     spray_deg=_realistic_spray(rng))
         if anim.play_timing is not None:
             fielded.append(anim)
     return fielded

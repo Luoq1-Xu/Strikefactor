@@ -229,7 +229,18 @@ def test_the_ball_lands_at_the_speed_it_was_flying(shape, monkeypatch):
     """
     monkeypatch.setattr(ha, "_pick_hit_landing",
                         lambda *a, **k: (ha.HOME[0] + 150, ha.HOME[1] - 220))
+    # Stubbing the landing is not on its own enough to pin this ball down.
+    # A FLY whose carry reaches `WALL_REACH_FT` becomes a wall candidate, and
+    # that branch never calls `_pick_hit_landing` — it aims its own landing
+    # past the fence, and the in-flight detector then kills the arc at the
+    # wall. Both samples below would sit past the end of a flight that
+    # already ended, `flight_end` came out 0.0, and the test died dividing by
+    # it on 7% of RNG seeds — the same shape of ordering-dependence as the
+    # one `exit_velocity_mph` had. Put the fence out of reach: this test is
+    # about the ordinary flight-to-roll handoff, not about the wall.
+    monkeypatch.setattr(ha, "WALL_REACH_FT", 1e9)
     anim = _make(shape, quality=0.85)
+    assert not anim._is_wall_candidate
     flight_end = _flight_end_px_ms(anim, monkeypatch)
     anim._init_ball_on_ground()
     roll_start = math.hypot(*anim._ball_v)
@@ -336,22 +347,82 @@ def test_flight_time_agrees_with_the_pure_model():
         assert anim.flight_time_s == pytest.approx(expected, rel=1e-9)
 
 
-def test_a_batted_ball_has_exactly_one_exit_velocity():
+def test_a_batted_ball_has_exactly_one_exit_velocity(monkeypatch):
     """`contact_audio.exit_velocity_mph` jitters on purpose, so identical
     swings don't sound identical. That makes it something a play must draw
     *once*: carry, hang time, wall candidacy and the infield verdict were
     each calling it separately, so one ball could be given a 380 ft carry
     and the hang time of a 340 ft one. Same "two models of one thing"
     mistake as the two clocks, one scale down.
+
+    Counted at the source rather than inferred from the landing. Inferring it
+    meant asserting that the landing matches the EV-derived carry, and the
+    landing passes through two clamps on the way out — the shape's
+    `IN_PLAY_LANDING_FT` range and `_clamp_inside_wall` — so the comparison was
+    really testing the clamps and happened to depend on the global RNG's state,
+    and therefore on test ordering. Both clamps bite hardest at the top of the
+    quality range, where a ball carries past a range that stops at 365 ft
+    because whether it cleared the fence was already settled by an independent
+    HR roll (the fault in §8 of docs/infield-timing-refactor.md). None of that
+    is what this test is about.
     """
+    draws = []
+    real = ha.contact_audio.exit_velocity_mph
+
+    def counted(*a, **kw):
+        draws.append(1)
+        return real(*a, **kw)
+
+    monkeypatch.setattr(ha.contact_audio, "exit_velocity_mph", counted)
     anim = _make("FLY", quality=0.9)
+    assert len(draws) == 1, f"exit velocity drawn {len(draws)} times, not once"
+
+    # And everything downstream is that one number: the hang time belongs to
+    # where the ball actually landed, at the speed it was actually struck.
     landing_ft = ha._ft_dist(anim._hit_end[0] - ha.HOME[0],
                              anim._hit_end[1] - ha.HOME[1])
-    carry = ball_flight.carry_distance_ft("FLY", anim.exit_velocity_mph)
-    # The landing is that carry plus the small per-contact spread, and the
-    # hang time is the one that belongs to where it actually landed.
-    spread = (ha.IN_PLAY_LANDING_FT["FLY"][1] - ha.IN_PLAY_LANDING_FT["FLY"][0]) * 0.18
-    assert abs(landing_ft - carry) <= spread + 1.0
     assert anim.flight_time_s == pytest.approx(
         ball_flight.flight_time_s("FLY", anim.exit_velocity_mph, landing_ft),
         rel=1e-9)
+
+@pytest.mark.parametrize("shape", sorted(ha.IN_PLAY_LANDING_FT))
+def test_the_landing_range_is_a_range_and_not_an_inverted_pair(shape):
+    """`IN_PLAY_LANDING_FT` has to actually bound the landing.
+
+    The window was built as
+    `uniform(max(dist_min, mid - spread), min(dist_max, mid + spread))`, and
+    the two bounds cross over as soon as `mid` sits more than `spread`
+    outside the range. `random.uniform(a, b)` does not care which way round
+    its arguments are — it samples `[b, a]` — so at exactly the point the
+    clamp was needed it inverted into its own opposite and put the ball
+    outside the range on the far side.
+
+    Measured over the real quality distribution before the fix: 62% of
+    POP_UPs cleared their 160 ft cap and landed as far as 272 ft — a pop-up
+    in the outfield — with 8.9% of FLYs past 365 ft (out to 416) and 4.3% of
+    LINERs short of their 130 ft floor. Sweeping quality edge to edge here
+    rather than sampling it, because this is a statement about the bound
+    holding everywhere, not about how often it is reached.
+    """
+    dist_min, dist_max = ha.IN_PLAY_LANDING_FT[shape]
+    seen = []
+    real = ha._polar_point_ft
+
+    def record(angle, dist_ft):
+        seen.append(dist_ft)
+        return real(angle, dist_ft)
+
+    ha._polar_point_ft = record
+    try:
+        for i in range(201):
+            q = i / 200.0
+            for ev in (40.0, 70.0, 95.0, 110.0, 125.0):
+                ha._pick_hit_landing("IN_PLAY", shape, quality=q, ev_mph=ev)
+    finally:
+        ha._polar_point_ft = real
+
+    assert seen
+    assert min(seen) >= dist_min - 1e-6, (
+        f"{shape} landed {min(seen):.0f} ft, short of its {dist_min} ft floor")
+    assert max(seen) <= dist_max + 1e-6, (
+        f"{shape} landed {max(seen):.0f} ft, past its {dist_max} ft cap")

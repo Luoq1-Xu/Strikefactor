@@ -24,11 +24,26 @@ from the same world-feet models, so they cannot tell different stories.
 it.** The world's `+x` is the third-base side (`pivot_ft("R")` is at `+1.53`,
 and a right-hander stands at third). A camera on that line sees the pitcher on
 its *left* and the catcher on its right, and a camera above the field sees
-third base on the left — which is why `_project` negates. Drawn the other way
-the SIDE view was a first-base camera captioned as a third-base one, and the
-OVERHEAD view put `+x` on the right under a label reading `<- 3B`, i.e. a bird's
-eye from underneath the infield. Nothing about a swing is symmetric, so a
-mirrored replay quietly reverses which way the batter is turning.
+third base on the left — which is why `_project` orients its horizontal axis
+rather than taking `y` and `x` as they come. Drawn the other way the SIDE view
+was a first-base camera captioned as a third-base one, and the OVERHEAD view
+put `+x` on the right under a label reading `<- 3B`, i.e. a bird's eye from
+underneath the infield. Nothing about a swing is symmetric, so a mirrored
+replay quietly reverses which way the batter is turning.
+
+**The SIDE camera changes sides with the batter** (`_side_camera_x`): it stands
+down the first-base line for a right-hander and the third-base line for a
+left-hander, which in both cases is the hitter's **open** side. Fixed on one
+line — as it was — it was the open side for one hand and the *closed* side for
+the other, and those are not two renderings of the same swing. From behind the
+hitter the hands travel away from the camera, the barrel spends the swing
+hidden behind the body, and the ball comes in over the batter's back, so every
+quantity this view exists to show (how far out front contact was, whether the
+barrel got on plane, the daylight between bat and ball) is a foreshortened
+guess. It is the same reason a broadcast's swing camera and a hitting coach's
+phone are both on the open side. OVERHEAD does *not* flip: a bird's eye has no
+open side, and keeping 3B left / 1B right shared with the hit animation means
+the spray ray reads the same way in both.
 
 **The projections are deliberately separate from the game's camera.** The
 `UmpireCamera` is a perspective projection from behind the plate; a bat path
@@ -36,6 +51,35 @@ seen from there sweeps almost entirely toward the viewer, which is exactly the
 axis the analysis is about. These are plain orthographic feet-to-pixel maps
 with their own scales, and the conversion happens in one place per view
 (`_project`) so no drawing code ever handles a raw pixel scale.
+
+**The clip ends when the bat and the ball met, not when the barrel arrived.**
+Those are two different instants on any swing that was not squared up:
+`bat_arrival_s` is a fact about the swing alone, while `bat_contact`'s sweep is
+free to find the two at their closest anywhere in the arc, and on a mistimed
+swing it does — up to ~25 ms of pitch time away, which at 101 mph is six feet
+of ball. Running to the first while marking the second put a bat, a ball and a
+crosshair in three different places on the one frame the player actually
+studies, which is what made a HOME RUN look like a whiff. See
+`SwingRecord.contact_time_s`.
+
+**The bat and the ball touch, and it took a model change to make that true.**
+`bat_contact` used to grant contact anisotropically — the bat was an ellipsoid
+stretched along the ball's flight line by the cushion times the ball's speed,
+5.8 ft at ROOKIE against a 101 mph fastball — so the model put the bat within
+an inch or two of the ball's *line* and a foot or more from the ball itself. No
+instant existed where they touched, because the forgiveness was in time rather
+than in space, and this view drew that honestly: a foul ball with two and a
+half feet of daylight under it. The forgiveness is now spent by sliding the
+swing in time, so the frozen frame shows a real intersection. What survives is
+`margin_ft`, an inch or two of bat tolerance, and `_draw_reach` still annotates
+it on the rare frame where it is wide enough to see — shrinking that is a
+difficulty decision, not a drawing one.
+
+**The bat drawn is the bat that was swept**, which after the model change means
+the *slid* swing: `SwingRecord.swing_launch_s` carries the shift. The timing
+readouts stay on what the player actually did (`signed_timing_ms`), so the
+panel reports the real error while the picture shows the swing the engine
+graded. Those are two different true things and this view needs both.
 
 **The ball is drawn unclamped.** The engine tests contact against a ball frozen
 at the plate (see `swing_record`), but the pitch model keeps describing a real
@@ -49,7 +93,7 @@ import math
 
 import pygame
 
-from strikefactor.gameplay import bat_path
+from strikefactor.gameplay import bat_path, spray
 from strikefactor.ui import gameday_theme as gdt
 
 # --- Phases, cumulative ms ---------------------------------------------------
@@ -60,17 +104,23 @@ _DISMISS_FADE_MS = 260
 
 _DIM_ALPHA = 225
 
-# How much of the pitch to replay. The whole flight is ~0.4 s and the bat is
-# only present for the last 0.15, so starting at release would spend most of
-# the replay on an empty screen. Never shorter than the swing itself, or the
-# bat would pop into existence already mid-arc.
-_REPLAY_LEAD_S = bat_path.SWING_DURATION_S + 0.03
-# The replay ends *at* bat arrival, with no tail. A tail looks like it should
-# be free — let the ball carry on past the barrel for a moment — but the
-# freeze is the whole payoff, and at 93 mph even 60 ms of tail drags the ball
-# eight feet past the contact marker, so the frame the player studies shows
-# the bat and the ball in different places.
+# How much of the pitch to replay before the bat starts moving. The whole
+# flight is ~0.4 s and the bat is only present for the last 0.15, so starting at
+# release would spend most of the replay on an empty screen. Anchored to the
+# swing's *launch* rather than measured back from the end, so the bat can never
+# pop into existence already mid-arc however the swing was timed.
+_PRE_SWING_S = 0.03
+# The replay ends *at contact*, with no tail. A tail looks like it should be
+# free — let the ball carry on past the barrel for a moment — but the freeze is
+# the whole payoff, and at 93 mph even 60 ms of tail drags the ball eight feet
+# past the contact marker, so the frame the player studies would show the bat
+# and the ball in different places.
 _REPLAY_TAIL_S = 0.0
+
+# Below this much daylight the reach is not worth annotating: a squared-up
+# swing has none, and a line drawn between two things already touching reads as
+# clutter. Two inches, about two thirds of a ball.
+_REACH_VISIBLE_FT = 0.17
 
 _VIEW_SIDE = 0
 _VIEW_OVERHEAD = 1
@@ -83,6 +133,11 @@ _VIEW_LABELS = ["SIDE", "OVERHEAD"]
 # into the middle sixth of the view.
 _SIDE_Z_RANGE = (0.0, 7.5)   # the loaded barrel tip sits at ~7 ft
 _OVER_X_RANGE = (-5.5, 5.5)
+# How far the spray ray is drawn, in feet. Long enough to leave the framed box
+# from anywhere inside it, so the ray reads as a direction rather than as a
+# segment with a meaningful end; the view's own clip trims it.
+_SPRAY_RAY_FT = 14.0
+_DEGREE = "\u00b0"
 _DEPTH_MARGIN_FT = 4.0
 _MIN_DEPTH_RANGE = (-5.0, 9.0)
 
@@ -96,35 +151,20 @@ _BAT_TRACK_LEN = 18
 # Drawn as a line, a bat is a line. It is drawn instead as a *swept sphere of
 # varying radius*, which is what a bat is — and which gives the rounded end cap
 # and the knob flare for free rather than as two special cases — sampled from
-# this profile: fraction of the way from the knob to the tip, against the real
-# radius there in inches. An MLB bat is 2.61 in across the barrel and under an
-# inch through the handle, and that taper is essentially the whole of why a bat
-# is recognisable in silhouette.
+# `bat_path.BAT_PROFILE_IN`: fraction of the way from the knob to the tip,
+# against the real radius there in inches.
+#
+# The profile lives in `bat_path` rather than here because `bat_contact` sweeps
+# the same radii against the ball. One profile, or the bat the player is graded
+# by is a different object from the bat they are shown.
 #
 # Radii are stated in **inches and scaled**, never set as a pixel width: each
 # view frames a different number of feet and reframes depth per swing, so one
 # pixel width is a different real bat in each view. See `_bat_scale` for why
 # thickness takes a single scale where position and length take the honest
 # anisotropic projection.
-#
-# The stations are placed to keep the taper **concave**, which is the shape's
-# whole signature: a thin handle held most of the way, a quick flare, and a
-# barrel that is then very nearly parallel-sided. Spread the same radii evenly
-# and the flare straightens into a cone, which is what a traffic bollard looks
-# like.
-_BAT_PROFILE_IN = (
-    (0.00, 1.05),   # knob, ~2.1 in across
-    (0.02, 1.05),
-    (0.05, 0.48),   # handle, a shade under 1 in and held to a third of the way
-    (0.36, 0.50),
-    (0.45, 0.58),   # into the taper
-    (0.52, 0.72),
-    (0.60, 0.94),
-    (0.67, 1.13),
-    (0.73, 1.24),
-    (0.80, 1.29),   # barrel, 2.6 in across — the MLB maximum
-    (1.00, 1.30),
-)
+_BAT_PROFILE_IN = bat_path.BAT_PROFILE_IN
+
 # Below this the bat has no drawable length to taper along and is rendered as
 # its two end caps. Ordinary rather than exceptional: the SIDE view looks down
 # the x axis and a bat at contact points largely along it.
@@ -137,6 +177,23 @@ def _ease_out(t):
 
 def _lerp(a, b, t):
     return a + (b - a) * t
+
+
+def _draw_dashed_line(surface, color, a, b, dash=6, gap=5):
+    """A dashed segment. Dashed so it reads as an annotation, not as an object
+    in the scene — a solid line between the bat and the ball would look like
+    part of one or the other."""
+    span = math.dist(a, b)
+    if span < 1.0:
+        return
+    ux, uy = (b[0] - a[0]) / span, (b[1] - a[1]) / span
+    pos = 0.0
+    while pos < span:
+        end = min(span, pos + dash)
+        pygame.draw.line(surface, color,
+                         (a[0] + ux * pos, a[1] + uy * pos),
+                         (a[0] + ux * end, a[1] + uy * end), 1)
+        pos = end + gap
 
 
 class SwingReplayOverlay:
@@ -159,7 +216,8 @@ class SwingReplayOverlay:
 
         self._record = None
         self._swing = None
-        self._ghost = None
+        self._ghost = None   # a BatState, not a second swing — see _draw_ghost
+        self._depth_span = None
         self._view = _VIEW_SIDE
         self._paused = False
         self._chip_hits = []
@@ -177,10 +235,21 @@ class SwingReplayOverlay:
         return self._active
 
     def trigger(self, *, record):
-        """Open the replay on `record`. Builds both bats once, up front."""
+        """Open the replay on `record`. Builds both bats once, up front.
+
+        The timing windows are measured here too, for the same reason the
+        depth range is: `timing_windows_ms` re-sweeps the swing about 37 times
+        and costs ~54 ms once. Left to compute lazily it would fire on the
+        first frame `_draw_stats` runs, which is 420 ms into the replay — a
+        visible stutter partway through the swing. Paid on the keypress that
+        opens the overlay, it lands on a frame that was changing anyway.
+        """
         self._record = record
         self._swing = record.bat_swing()
-        self._ghost = record.perfect_swing()
+        self._ghost = record.bat_state_at_ball_arrival()
+        self._depth_span = None
+        self._depth_span = self._compute_depth_range()
+        record.timing_windows_ms
         self._elapsed_ms = 0
         self._dismiss_started = False
         self._dismiss_elapsed = 0
@@ -257,9 +326,25 @@ class SwingReplayOverlay:
         return min(1.0, (self._elapsed_ms - _PHASE_INTRO_END) / span)
 
     def _window_s(self):
-        """(start, end) of the replayed slice of the pitch, in seconds."""
-        arrival = self._record.bat_arrival_s
-        return arrival - _REPLAY_LEAD_S, arrival + _REPLAY_TAIL_S
+        """(start, end) of the replayed slice of the pitch, in seconds.
+
+        **It ends when the bat and the ball met, not when the barrel reached
+        its contact pose.** Those are two different instants on any swing that
+        was not squared up, and running to the second one is what made the
+        frozen frame — the one the player actually studies — show the bat and
+        the ball feet apart under a HOME RUN banner. The clip used to run
+        ~25 ms of pitch time past a late contact, which at 101 mph is six feet
+        of ball, and stop ~3 ms short of an early one; the crosshair marked the
+        real contact point, so the freeze had a bat, a ball and a mark in three
+        different places. See `SwingRecord.contact_time_s`.
+
+        The start is anchored to the swing's launch rather than measured back
+        from the end, so moving the end cannot pull the bat into the frame
+        already mid-arc.
+        """
+        rec = self._record
+        return (rec.swing_launch_s - _PRE_SWING_S,
+                rec.contact_time_s + _REPLAY_TAIL_S)
 
     def _now_s(self):
         """Where the replay clock currently sits, in pitch seconds."""
@@ -267,9 +352,14 @@ class SwingReplayOverlay:
         return _lerp(start, end, self._replay_progress())
 
     def _swing_t(self, now_s):
-        """Where the barrel is, in swing seconds. Clamped at both ends."""
-        launch = self._record.bat_arrival_s - bat_path.SWING_DURATION_S
-        return max(0.0, min(bat_path.SWING_DURATION_S, now_s - launch))
+        """Where the barrel is, in swing seconds. Clamped at both ends.
+
+        The upper clamp is the *end of the follow-through*, not contact: the
+        bat keeps moving after the ball is met, and on an early swing it is
+        still moving when the ball arrives.
+        """
+        launch = self._record.swing_launch_s
+        return max(0.0, min(bat_path.TOTAL_DURATION_S, now_s - launch))
 
     # -- projection -------------------------------------------------------
 
@@ -280,30 +370,81 @@ class SwingReplayOverlay:
     def _depth_range(self):
         """The framed slice of depth, in feet, for this swing.
 
-        Always contains the plate and the contact point with room to spare,
-        whichever side of the plate contact happened on.
+        Cached at `trigger`, because `_project` asks for it on every point it
+        converts and `barrel_depth_ft` rebuilds four swings each time it is
+        read — a few hundred `bat_path.swing` constructions a frame, for a
+        number that cannot change while a record is open.
         """
-        depth = self._record.contact_depth_ft
-        return (min(_MIN_DEPTH_RANGE[0], depth - _DEPTH_MARGIN_FT),
-                max(_MIN_DEPTH_RANGE[1], depth + _DEPTH_MARGIN_FT))
+        if self._depth_span is None:
+            self._depth_span = self._compute_depth_range()
+        return self._depth_span
+
+    def _compute_depth_range(self):
+        """Everything the frozen frame has to hold, plus a margin.
+
+        Framed per swing rather than fixed because contact runs from about
+        11 ft out front on a badly early swing to 11 ft deep on a late one, and
+        any single window wide enough for both squeezes the ordinary swing into
+        the middle sixth of the view.
+
+        What it has to hold is what gets *drawn*: the plate, the ball and the
+        bat at the freeze, and the barrel's nominal arrival, which the stats
+        name and the ghost sits near. It used to be framed on the ball at bat
+        arrival — which on a late swing is several feet past anything the clip
+        now reaches, so half the view was empty air behind the catcher.
+        """
+        rec = self._record
+        marks = [rec.struck_depth_ft, rec.barrel_depth_ft]
+        state = self._swing.state_at(self._swing_t(rec.contact_time_s))
+        marks += [state.knob_ft[1], state.barrel_ft[1]]
+        return (min([_MIN_DEPTH_RANGE[0]] + [d - _DEPTH_MARGIN_FT for d in marks]),
+                max([_MIN_DEPTH_RANGE[1]] + [d + _DEPTH_MARGIN_FT for d in marks]))
+
+    def _side_camera_x(self):
+        """Which foul line the SIDE camera stands on, as the sign of world x.
+
+        The batter's **open** side, so it depends on which box they are in: a
+        right-hander stands on the third-base side (`+x`), and the camera that
+        sees the front of that swing is the one down the *first*-base line.
+        A left-hander is the mirror of it and gets the third-base camera.
+
+        Fixed on one line it was the open side for one hand and the closed
+        side for the other, and those are not two renderings of one swing —
+        from behind, the hands travel away from the camera, the barrel spends
+        the swing hidden behind the body, and the ball arrives from behind the
+        hitter's back. Everything this view is read for (how far in front
+        contact was, whether the barrel got on plane, the daylight between bat
+        and ball) is a foreshortened guess from there. It is also why a
+        broadcast and a hitting coach both film from the open side.
+
+        Stated as the negative of `spray.spin_for`, which is already the sign
+        of the batter's own box, rather than as a second reading of `"L"`:
+        the camera is *opposite* the hitter by definition, so there is one
+        handedness convention here and not two that could drift apart.
+        """
+        return -spray.spin_for(self._record.handedness)
 
     def _project(self, point_ft):
         """World feet to screen pixels for the active view.
 
-        The single crossing from feet to pixels. Both views are orthographic,
-        both flip their vertical axis since screen y grows downward while every
-        world quantity here grows up or out, and both negate their horizontal
-        one so the camera stands where its label says it does — see the note on
-        mirroring at the top of the module.
+        The single crossing from feet to pixels. Both views are orthographic
+        and both flip their vertical axis, since screen y grows downward while
+        every world quantity here grows up or out. Their horizontal axes are
+        oriented so that each camera stands where its label says it does — see
+        the note on mirroring at the top of the module.
         """
         rect = self._view_rect()
         x_ft, y_ft, z_ft = point_ft
         if self._view == _VIEW_SIDE:
-            # From the third-base line: the pitcher (+y) is to the left.
+            # Facing the batter from `_side_camera_x`: from the third-base
+            # line the pitcher (+y) is to the left, from first base to the
+            # right. One sign, applied to the point and to the window
+            # together, so the two can never disagree about which way is which.
             lo, hi = self._depth_range()
-            h_lo, h_hi = -hi, -lo
+            sign = -self._side_camera_x()
+            h_lo, h_hi = sorted((sign * lo, sign * hi))
             v_lo, v_hi = _SIDE_Z_RANGE
-            h, v = -y_ft, z_ft
+            h, v = sign * y_ft, z_ft
         else:
             # From above: third base (+x) is to the left, the pitcher is up.
             h_lo, h_hi = -_OVER_X_RANGE[1], -_OVER_X_RANGE[0]
@@ -448,6 +589,7 @@ class SwingReplayOverlay:
         self._draw_bat(surface, now_s)
         self._draw_ball(surface, now_s)
         self._draw_contact_marker(surface)
+        self._draw_spray(surface)
 
         surface.set_clip(prev_clip)
         pygame.draw.rect(surface, gdt.DIVIDER, rect, 1)
@@ -470,8 +612,14 @@ class SwingReplayOverlay:
             plate_x = self._project((0.0, 0.0, 0.0))[0]
             pygame.draw.line(surface, gdt.DIM_SOFT,
                              (plate_x, rect.y), (plate_x, ground), 1)
+            # Labelled on the catcher's side of the line, which changes screen
+            # side with the camera. Pinned to +4 px it sat out in front of the
+            # plate for a first-base camera, i.e. across the contact point,
+            # the bat and the ball — the busiest few inches of the view.
+            behind = 1 if self._project((0.0, -1.0, 0.0))[0] > plate_x else -1
             gdt.blit_text(surface, "PLATE", self._f()['micro'],
-                          (plate_x + 4, ground - 16), gdt.DIM_SOFT)
+                          (plate_x + 4 * behind, ground - 16), gdt.DIM_SOFT,
+                          align='left' if behind > 0 else 'right')
             top = self._project((0.0, 0.0, _STRIKE_ZONE_Z[1]))[1]
             bottom = self._project((0.0, 0.0, _STRIKE_ZONE_Z[0]))[1]
             pygame.draw.rect(surface, gdt.DIM_SOFT,
@@ -496,14 +644,25 @@ class SwingReplayOverlay:
                 pygame.draw.line(surface, (24, 24, 24),
                                  (rect.x, y), (rect.right, y), 1)
 
+    def _axis_label(self):
+        """The caption under the view, naming what each screen axis is.
+
+        A method rather than a literal because the SIDE camera swaps foul
+        lines with the batter, and which line it is standing on is the one
+        thing the player cannot read off the picture — a mirrored swing is
+        still a swing. Kept together with the projection so a test can hold
+        the two to the same story; a caption that outlives the geometry it
+        describes is exactly the fault this view was drawn wrong by before.
+        """
+        if self._view != _VIEW_SIDE:
+            return "OVERHEAD  <- 3B   1B ->"
+        if self._side_camera_x() > 0:
+            return "FROM 3B SIDE  <- PITCHER   CATCHER ->"
+        return "FROM 1B SIDE  <- CATCHER   PITCHER ->"
+
     def _draw_axis_labels(self, surface):
         rect = self._view_rect()
-        font = self._f()['micro']
-        if self._view == _VIEW_SIDE:
-            label = "FEET FROM PLATE  <- PITCHER   CATCHER ->"
-        else:
-            label = "OVERHEAD  <- 3B   1B ->"
-        gdt.blit_text(surface, label, font,
+        gdt.blit_text(surface, self._axis_label(), self._f()['micro'],
                       (rect.x + 6, rect.bottom - 18), gdt.DIM_SOFT)
 
     # -- moving parts -----------------------------------------------------
@@ -555,7 +714,15 @@ class SwingReplayOverlay:
             pygame.draw.polygon(surface, color, polygon)
 
     def _draw_ghost(self, surface):
-        """The same swing timed perfectly, once the replay reaches the freeze.
+        """Where the bat was when the ball reached the barrel's plane.
+
+        The reference the player reads the error off, and it costs nothing:
+        with the path independent of the pitch, "the swing timed properly" is
+        *this* swing at a different phase, so the ghost is one more sample of
+        the same motion rather than a second bat built from a second model.
+        A late swing was still on its way; an early one is already into the
+        follow-through, which is one of the things `bat_path` is defined past
+        contact for.
 
         Drawn only at the end: during the swing it would be a second bat
         moving in step with the first, which reads as a rendering fault rather
@@ -568,17 +735,110 @@ class SwingReplayOverlay:
         shade = int(_lerp(0, 90, fade))
         if shade <= 2:
             return
-        state = self._ghost.state_at(bat_path.SWING_DURATION_S)
-        self._draw_bat(surface, 0.0, state=state, color=(shade, shade, shade))
+        self._draw_bat(surface, 0.0, state=self._ghost,
+                       color=(shade, shade, shade))
 
     def _draw_contact_marker(self, surface):
-        """Where the barrel actually met the ball."""
+        """Where the bat and the ball actually met.
+
+        Falls back to where the barrel arrived when they never met at all — a
+        whiff, where the gap between this mark and the ball is exactly what
+        the view is for. The clip now freezes *at* this instant, so on contact
+        the mark sits on the drawn ball rather than somewhere neither the bat
+        nor the ball ever reached.
+        """
         if self._replay_progress() < 1.0:
             return
-        px, py = self._project(self._swing.contact_ft)
+        contact = self._record.contact
+        point = contact.ball_ft if contact is not None else self._swing.contact_ft
+        px, py = self._project(point)
         pygame.draw.circle(surface, gdt.FG, (int(px), int(py)), 9, 1)
         pygame.draw.line(surface, gdt.FG, (px - 12, py), (px + 12, py), 1)
         pygame.draw.line(surface, gdt.FG, (px, py - 12), (px, py + 12), 1)
+        self._draw_reach(surface, contact)
+
+    def _draw_spray(self, surface):
+        """Where the ball went, drawn from where it was struck.
+
+        OVERHEAD only, and this is what that view was always for — the module
+        docstring calls it the view "where pull-versus-oppo contact reads", and
+        until the ball had a bearing there was nothing there to read. The ray
+        is the ball's actual departure direction (`spray`), the same number the
+        animation flies it along, so the picture and the outcome cannot
+        disagree: a bat caught out in front with its face toward third draws a
+        ray toward third, and the ball then goes to left.
+
+        Frozen-frame only, like the contact marker and for the same reason —
+        until the two have met there is no direction yet.
+        """
+        if self._view != _VIEW_OVERHEAD or self._replay_progress() < 1.0:
+            return
+        contact = self._record.contact
+        if contact is None:
+            return
+
+        spin = spray.spin_for(self._record.handedness)
+        deg = contact.spray_deg
+        rad = math.radians(deg)
+        # The departure direction in world feet. Pull is +x for a right-hander
+        # and -x for a left-hander, which is exactly what `spin` is.
+        direction = (spin * math.sin(rad), math.cos(rad), 0.0)
+        start = contact.ball_ft
+        end = tuple(start[i] + _SPRAY_RAY_FT * direction[i] for i in range(3))
+        # Projected rather than stepped in pixels: `_project` is the one
+        # crossing from feet to pixels and it orients the horizontal axis, so
+        # anything drawing its own screen vector here gets the mirror wrong.
+        a, b = self._project(start), self._project(end)
+
+        foul = spray.is_foul(deg)
+        color = gdt.DIM if foul else gdt.FG
+        _draw_dashed_line(surface, color, a, b, dash=7, gap=6)
+
+        side = "PULL" if deg > 0 else "OPPO"
+        text = "%s %.0f%s" % (side, abs(deg), _DEGREE)
+        if foul:
+            text = "FOUL  " + text
+        gdt.blit_text(surface, text, self._f()['micro'],
+                      (b[0] + 8, b[1] - 6), color)
+
+    def _draw_reach(self, surface, contact):
+        """The daylight `margin_ft` covered, drawn as a line.
+
+        Rare now, and small when it appears: the median contact has the bat and
+        the ball genuinely overlapping, and the tolerance that is left is
+        bounded by `bat_contact.margin_ft` — 2.4 in at AMATEUR, 3.4 at ROOKIE.
+        Roughly the top decile of contacts clear `_REACH_VISIBLE_FT` and get a
+        line.
+
+        **It used to be the thing this view could not make disappear**, because
+        the timing forgiveness was spent as a reach along the ball's flight
+        line: 5.8 ft of it at ROOKIE, so a mistimed swing was granted contact
+        with the bat a foot or more from the ball and the frozen frame showed
+        no contact at all. Keeping the annotation is what makes the remaining
+        inch or two legible instead of leaving it to read as a rendering fault
+        — and `tests/test_swing_replay.py` pins that it can never grow back
+        past the margin.
+        """
+        if contact is None:
+            return
+        reach = contact.surface_gap_ft
+        if reach < _REACH_VISIBLE_FT:
+            return
+        a = self._project(contact.axis_point_ft)
+        b = self._project(contact.ball_ft)
+        span = math.dist(a, b)
+        if span < 1.0:
+            return
+        _draw_dashed_line(surface, gdt.DIM, a, b)
+        # Labelled past the *ball*, on the far side from the bat, rather than
+        # over the midpoint: the bat is a long object lying along this line and
+        # the midpoint is usually on top of it, or on the ghost.
+        rect = self._view_rect()
+        ux = (b[0] - a[0]) / span
+        x = min(rect.right - 6, max(rect.x + 6, b[0] + ux * 10))
+        gdt.blit_text(surface, "REACH %.1f FT" % reach, self._f()['micro'],
+                      (x, b[1] - 20), gdt.DIM,
+                      align='right' if ux < 0 else 'left')
 
     # -- numbers ----------------------------------------------------------
 
@@ -595,15 +855,19 @@ class SwingReplayOverlay:
 
         cells = [
             ("TIMING", self._timing_text()),
-            ("CONTACT PT", "%+.1f FT" % rec.contact_depth_ft),
-            ("PITCH", "%s %.0f MPH" % (rec.pitch_type or "-", rec.speed_mph or 0)),
+            # The ball's depth *in the frame on screen*, which on contact is
+            # where it was struck and on a whiff is where it had got to when
+            # the barrel arrived. It read `contact_depth_ft` unconditionally,
+            # so a late swing showed the ball 6 ft behind the one it drew.
+            ("BALL AT", "%+.1f FT" % rec.struck_depth_ft),
+            ("BARREL AT", "%+.1f FT" % rec.barrel_depth_ft),
             ("RESULT", self._result_text()),
+            ("PITCH", "%s %.0f MPH" % (rec.pitch_type or "-", rec.speed_mph or 0)),
             ("QUALITY", "-" if rec.contact_quality is None
                         else "%.2f" % rec.contact_quality),
             ("BAT / BALL", self._offset_text()),
             ("EXIT VELO", "-" if rec.exit_velocity_mph is None
                           else "%.0f MPH" % rec.exit_velocity_mph),
-            ("BAT SPEED", "%.0f MPH" % self._swing.bat_speed_mph),
         ]
         col_w = (panel.width - 48) // 4
         for i, (label, value) in enumerate(cells):
@@ -613,27 +877,45 @@ class SwingReplayOverlay:
             gdt.blit_text(surface, value, fonts['med'], (cx, cy + 15), gdt.FG)
 
     def _draw_timing_scale(self, surface, x, y, width):
-        """Where this swing landed inside its own difficulty-scaled window.
+        """The timing this swing had, and where in it the swing landed.
 
-        The windows move under the player between difficulties and are shown
-        nowhere else in the game, so the bands are drawn rather than assumed.
+        **The bands are measured, not assumed** — `SwingRecord.timing_windows_ms`
+        re-sweeps this swing against its own pitch, so the outer band is where
+        it would have touched the ball at all and the inner one where it would
+        have been fair. They used to be `perfect_ms` / `foul_ms`, 30 and 60 ms
+        scaled by difficulty, inherited from the timing *gate* the geometry
+        replaced; by the end they were fiction, drawing an ON TIME band across
+        a range over which quality ran from 1.00 to 0.12.
+
+        The measured bands are **strongly asymmetric** — roughly -42..+81 ms at
+        AMATEUR — and that asymmetry is the most useful thing on the bar: a
+        late bat still catches the ball on the handle, an early one runs out of
+        barrel. A symmetric pair of constants could not show it, and the player
+        has no other way to learn it.
         """
         rec = self._record
         fonts = self._f()
-        span = max(rec.foul_ms * 1.6, abs(rec.signed_timing_ms) * 1.15, 40.0)
+        windows = rec.timing_windows_ms
+        reach = max(abs(v) for v in (windows.contact or (0.0, 0.0)))
+        span = max(reach * 1.2, abs(rec.signed_timing_ms) * 1.15, 40.0)
         centre = x + width / 2
 
         def at(ms):
-            return centre + (ms / span) * (width / 2)
+            return centre + (max(-span, min(span, ms)) / span) * (width / 2)
+
+        def band(pair, color):
+            if pair is None:
+                return
+            lo, hi = at(pair[0]), at(pair[1])
+            pygame.draw.rect(surface, color,
+                             pygame.Rect(lo, bar_y - 7, max(1.0, hi - lo), 14))
 
         bar_y = y + 22
         pygame.draw.line(surface, gdt.DIVIDER, (x, bar_y), (x + width, bar_y), 1)
-        # Foul band, then the perfect band inside it.
-        pygame.draw.rect(surface, (38, 38, 38), pygame.Rect(
-            at(-rec.foul_ms), bar_y - 7, at(rec.foul_ms) - at(-rec.foul_ms), 14))
-        pygame.draw.rect(surface, (78, 78, 78), pygame.Rect(
-            at(-rec.perfect_ms), bar_y - 7,
-            at(rec.perfect_ms) - at(-rec.perfect_ms), 14))
+        # Any contact, then the fair band inside it.
+        band(windows.contact, (38, 38, 38))
+        band(windows.fair, (78, 78, 78))
+        self._draw_budget_ticks(surface, at, bar_y)
 
         gdt.blit_text(surface, "EARLY", fonts['micro'], (x, y), gdt.DIM_SOFT)
         gdt.blit_text(surface, "LATE", fonts['micro'],
@@ -642,6 +924,54 @@ class SwingReplayOverlay:
         marker = at(max(-span, min(span, rec.signed_timing_ms)))
         pygame.draw.line(surface, gdt.FG,
                          (marker, bar_y - 12), (marker, bar_y + 12), 2)
+        self._draw_assist(surface, at, bar_y, y)
+
+    def _draw_budget_ticks(self, surface, at, bar_y):
+        """How much of the clock the difficulty covers for free.
+
+        Ticks rather than a third band, because the assist budget and the fair
+        window very nearly coincide — measured on a well-aimed swing, +/-39 ms
+        of budget against a fair window of -41..+42 at ROOKIE, and +/-26
+        against -32..+33 at AMATEUR. A band would imply a distinction that is
+        not there and would be drawn all but on the edge of the one beneath it.
+        As ticks it reads as what it is: inside here the slide covers the error
+        outright, which at every difficulty is very nearly the same line as
+        squaring the ball up.
+        """
+        budget = self._record.timing_assist_ms
+        if budget <= 0.0:
+            return
+        for ms in (-budget, budget):
+            px = at(ms)
+            pygame.draw.line(surface, gdt.DIM_SOFT,
+                             (px, bar_y - 7), (px, bar_y - 2), 1)
+            pygame.draw.line(surface, gdt.DIM_SOFT,
+                             (px, bar_y + 2), (px, bar_y + 7), 1)
+
+    def _draw_assist(self, surface, at, bar_y, y):
+        """Where the engine put the swing, against where the player put it.
+
+        `bat_contact` slides a swing by up to `timing_assist_s` before sweeping
+        it, so a swing that reads 40 ms late can still meet the ball squarely —
+        and the quality it scores is charged for exactly that borrowed time.
+        Leaving it off the panel would put this screen back to reporting a
+        number the player has no way to account for, which is the fault the
+        model change removed: the old cushion charged for its reach too, as
+        five inches of "bat over ball" that no aim error explained.
+
+        Drawn dim and thin against the player's own solid marker: the bright
+        one is what they did, which is the thing worth learning.
+        """
+        rec = self._record
+        shift_ms = rec.shift_s * 1000.0
+        if abs(shift_ms) < 1.0:
+            return
+        slid = at(rec.signed_timing_ms + shift_ms)
+        pygame.draw.line(surface, gdt.DIM,
+                         (slid, bar_y - 12), (slid, bar_y + 12), 1)
+        gdt.blit_text(surface, "ASSIST %.0f MS" % abs(shift_ms),
+                      self._f()['micro'], (slid, y + 34), gdt.DIM,
+                      align='center')
 
     def _timing_text(self):
         rec = self._record

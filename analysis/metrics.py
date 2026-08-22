@@ -767,6 +767,83 @@ def outcome_breakdown(ctx):
     return tab[list(theme.OUTCOME_ORDER)]
 
 
+# Spray thirds. Pull / centre / opposite, split at +/-15 degrees off centre
+# field — the conventional cut, and the one MLB's own 40/35/25 league split is
+# quoted against.
+SPRAY_THIRD_DEG = 15.0
+SPRAY_MLB_SPLIT = {"Pull": 40.0, "Centre": 35.0, "Oppo": 25.0}
+
+
+def spray_profile(ctx):
+    """Where batted balls went, by batted-ball type.
+
+    `spray_angle_deg` is stored pull-positive for either batter (see the v9
+    note in `pitch_database`), so this needs no handedness join and a
+    right-handed and a left-handed pull look like the same thing — which is
+    what makes the aggregate mean anything.
+
+    Sliced by `batted_ball_type` because that is classified at contact,
+    upstream of any fielding decision, so the two axes are independent. A
+    ground ball being pulled harder than a fly ball is a real and checkable
+    property of a swing model; reading spray against `outcome` instead would
+    be reading it against something the spray helped produce.
+    """
+    if ctx.empty:
+        return pd.DataFrame()
+    df = ctx.pitches
+    if "spray_angle_deg" not in df.columns:
+        return pd.DataFrame()
+    hit = df[df["spray_angle_deg"].notna() & df["is_in_play"]]
+    if hit.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for label, grp in list(hit.groupby("batted_ball_type")) + [("All", hit)]:
+        deg = grp["spray_angle_deg"]
+        n = len(deg)
+        rows.append({
+            "Type": label,
+            "N": n,
+            "Mean": deg.mean(),
+            "SD": deg.std(),
+            "Pull%": 100.0 * (deg > SPRAY_THIRD_DEG).sum() / n,
+            "Centre%": 100.0 * deg.between(-SPRAY_THIRD_DEG,
+                                           SPRAY_THIRD_DEG).sum() / n,
+            "Oppo%": 100.0 * (deg < -SPRAY_THIRD_DEG).sum() / n,
+        })
+    out = pd.DataFrame(rows).set_index("Type")
+    # "All" last, the rest alphabetical, so the summary row reads as one.
+    order = [i for i in out.index if i != "All"] + ["All"]
+    return out.loc[order]
+
+
+def spray_vs_timing(ctx, bin_ms=10.0, min_n=5):
+    """Mean spray angle against signed swing timing.
+
+    The single most useful thing this column can be asked, and the one the
+    spray model exists to make true: a swing that got there early meets the
+    ball with the bat further round and pulls it. If this comes back flat, the
+    bearing has stopped reaching the ball somewhere between `bat_contact` and
+    `hit_animation`.
+    """
+    if ctx.empty:
+        return pd.DataFrame()
+    df = ctx.pitches
+    for col in ("spray_angle_deg", "swing_timing_signed_ms"):
+        if col not in df.columns:
+            return pd.DataFrame()
+    hit = df[df["spray_angle_deg"].notna()
+             & df["swing_timing_signed_ms"].notna()]
+    if hit.empty:
+        return pd.DataFrame()
+    binned = (hit["swing_timing_signed_ms"] / bin_ms).round() * bin_ms
+    grouped = hit.groupby(binned)["spray_angle_deg"]
+    out = pd.DataFrame({"n": grouped.size(), "spray": grouped.mean()})
+    out = out[out["n"] >= min_n]
+    out.index.name = "timing_ms"
+    return out
+
+
 # ── Formatting helpers shared by both renderers ──────────────────────────
 def fmt_ip(outs):
     return f"{outs // 3}.{outs % 3}"

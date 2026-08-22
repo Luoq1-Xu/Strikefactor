@@ -36,6 +36,16 @@ class _StubGame:
 
 
 def _make(hand="R", timing=0.5, voff=0.0, quality=0.3):
+    """A foul, mistimed by `timing` in [-1, 1] — negative early, positive late.
+
+    `timing` used to be `foul_timing_norm`, which the animation read directly
+    and turned into a side of the field. The animation reads a *bearing* now
+    (`spray_deg`), so this converts: an early swing turns the bat further
+    round and hooks the ball toward the pull-side pole, a late one leaves it
+    open and slices it the other way. Same physical claim the old constant
+    encoded, one model earlier — see `spray`.
+    """
+    spray_deg = -timing * 70.0
     return HitAnimation(
         _StubGame(hand),
         outcome="FOUL",
@@ -43,8 +53,7 @@ def _make(hand="R", timing=0.5, voff=0.0, quality=0.3):
         vertical_offset=voff,
         quality=quality,
         batted_ball_type=None,
-        horizontal_inside=0.0,
-        foul_timing_norm=timing,
+        spray_deg=spray_deg,
     )
 
 
@@ -164,8 +173,7 @@ def test_actual_home_run_still_shows_a_distance():
         vertical_offset=3.0,
         quality=0.95,
         batted_ball_type=None,
-        horizontal_inside=0.0,
-        foul_timing_norm=0.0,
+        spray_deg=8.0,
     )
     assert anim.hr_distance_ft is not None
     assert 300 < anim.hr_distance_ft < 550

@@ -159,3 +159,87 @@ def plate_discipline(ctx):
                  fontweight="bold", fontsize=10.5)
     ax.grid(True)
     return save(fig, ctx, "13_plate_discipline.png")
+
+
+def spray(ctx):
+    """Where batted balls went, and whether timing is what sent them there."""
+    prof = metrics.spray_profile(ctx)
+    if prof.empty:
+        return empty_figure(
+            ctx, "16_spray.png", "Spray",
+            "No spray angles recorded — schema v9 and later only.")
+
+    fig = plt.figure(figsize=(16, 9.0))
+    figure_title(fig, "Spray: Where the Ball Went", ctx, y=0.99)
+    gs = GridSpec(2, 2, figure=fig, hspace=0.38, wspace=0.22,
+                  height_ratios=[1.15, 1.0])
+
+    # -- the distribution itself, as a fan over fair territory ---------------
+    ax = fig.add_subplot(gs[0, 0], projection="polar")
+    deg = ctx.pitches["spray_angle_deg"].dropna()
+    fair = deg[deg.abs() <= 45.0]
+    # Drawn in *field* orientation: straight up is centre field, and the fan
+    # opens to the foul lines at +/-45. Pull is plotted to the left so the
+    # picture matches a right-hander's spray chart, which is what a reader of
+    # one of these expects to see.
+    ax.set_theta_zero_location("N")
+    ax.set_theta_direction(-1)
+    ax.set_thetamin(-45)
+    ax.set_thetamax(45)
+    ax.hist(np.radians(fair), bins=36, color=theme.PITCHER_PALETTE[1],
+            edgecolor=theme.BG, linewidth=0.5)
+    for line in (-45, 45):
+        ax.axvline(np.radians(line), color="#e74c3c", linestyle="--",
+                   linewidth=1.2)
+    ax.set_xticks(np.radians([-45, -22.5, 0, 22.5, 45]))
+    ax.set_xticklabels(["OPPO\nLINE", "OPPO", "CF", "PULL", "PULL\nLINE"],
+                       fontsize=8)
+    ax.set_yticklabels([])
+    ax.set_title("Fair balls, pull-positive", fontweight="bold", pad=18)
+
+    # -- how much of all contact left the park sideways ----------------------
+    ax = fig.add_subplot(gs[0, 1])
+    n_all = len(deg)
+    foul = int((deg.abs() > 45.0).sum())
+    ax.bar([0, 1], [100.0 * (n_all - foul) / n_all, 100.0 * foul / n_all],
+           color=[theme.PITCHER_PALETTE[2], theme.PITCHER_PALETTE[0]],
+           edgecolor=theme.BG)
+    ax.set_xticks([0, 1])
+    ax.set_xticklabels(["Between the lines", "Sprayed foul"])
+    ax.set_ylabel("% of bat-on-ball contact")
+    ax.grid(True, axis="y")
+    ax.set_title("Direction as a foul verdict", fontweight="bold")
+    note(ax, "Direction is only part of the foul verdict — the rest is "
+              "glancing contact, which quality measures.")
+
+    # -- spray against timing, the claim the model rests on -------------------
+    ax = fig.add_subplot(gs[1, 0])
+    curve = metrics.spray_vs_timing(ctx)
+    if curve.empty:
+        ax.set_axis_off()
+        note(ax, "No signed swing timing recorded.")
+    else:
+        ax.plot(curve.index, curve["spray"], marker="o",
+                color=theme.PITCHER_PALETTE[3], linewidth=2)
+        ax.axhline(0, color=theme.GRID, linewidth=1)
+        ax.axvline(0, color=theme.GRID, linewidth=1)
+        ax.set_xlabel("Swing timing (ms) — negative early, positive late")
+        ax.set_ylabel("Mean spray (deg, pull-positive)")
+        ax.grid(True)
+        ax.set_title("Early pulls, late goes the other way", fontweight="bold")
+
+    # -- the split, against the league ---------------------------------------
+    ax = fig.add_subplot(gs[1, 1])
+    ax.set_axis_off()
+    rows = [[str(t), f"{r['N']:.0f}", f"{r['Mean']:+.1f}", f"{r['SD']:.1f}",
+             f"{r['Pull%']:.0f}%", f"{r['Centre%']:.0f}%", f"{r['Oppo%']:.0f}%"]
+            for t, r in prof.iterrows()]
+    rows.append(["MLB", "—", "—", "—",
+                 f"{metrics.SPRAY_MLB_SPLIT['Pull']:.0f}%",
+                 f"{metrics.SPRAY_MLB_SPLIT['Centre']:.0f}%",
+                 f"{metrics.SPRAY_MLB_SPLIT['Oppo']:.0f}%"])
+    styled_table(ax, rows,
+                 ["Type", "N", "Mean", "SD", "Pull", "Centre", "Oppo"])
+    ax.set_title("Split by batted-ball type", fontweight="bold")
+
+    return save(fig, ctx, "16_spray.png")

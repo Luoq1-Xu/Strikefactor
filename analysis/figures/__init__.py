@@ -79,6 +79,12 @@ FIGURES = [
            "Full per-pitcher rate-stat table with stuff and K%/BB% charts.",
            results.plate_discipline),
 
+    Figure("spray", "16_spray.png", "results",
+           "Spray",
+           "Where batted balls went, and whether swing timing is what sent "
+           "them there.",
+           results.spray),
+
     Figure("trends", "14_trends.png", "trends",
            "Trends",
            "Rolling CSW%, chase, wOBA, and run value across the sample window.",

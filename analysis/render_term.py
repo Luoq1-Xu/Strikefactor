@@ -426,6 +426,29 @@ def results_section(ctx, console):
              "Chase%", "F-Str%", "PutAway%", "BABIP"], rows,
             title="Plate Discipline"))
 
+    prof = metrics.spray_profile(ctx)
+    if not prof.empty:
+        rows = [[
+            str(t), f"{r['N']:.0f}", f"{r['Mean']:+.1f}", f"{r['SD']:.1f}",
+            metrics.fmt_pct(r["Pull%"], 0), metrics.fmt_pct(r["Centre%"], 0),
+            metrics.fmt_pct(r["Oppo%"], 0),
+        ] for t, r in prof.iterrows()]
+        rows.append(["MLB", "—", "—", "—",
+                     metrics.fmt_pct(metrics.SPRAY_MLB_SPLIT["Pull"], 0),
+                     metrics.fmt_pct(metrics.SPRAY_MLB_SPLIT["Centre"], 0),
+                     metrics.fmt_pct(metrics.SPRAY_MLB_SPLIT["Oppo"], 0)])
+        console.print(_table(
+            ["Batted ball", "N", "Mean°", "SD°", "Pull", "Centre", "Oppo"],
+            rows, title="Spray (pull-positive, both hands)"))
+
+    curve = metrics.spray_vs_timing(ctx)
+    if not curve.empty:
+        console.print(_table(
+            ["Timing (ms)", "N", "Mean spray°"],
+            [[f"{t:+.0f}", f"{r['n']:.0f}", f"{r['spray']:+.1f}"]
+             for t, r in curve.iterrows()],
+            title="Spray by swing timing (early pulls, late does not)"))
+
 
 def trends_section(ctx, console):
     df = metrics.trends(ctx)

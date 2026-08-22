@@ -35,31 +35,55 @@ EV_CEIL_MPH = 116.0
 
 # Quality -> EV is a *calibrated* curve, not an analytic one, because the
 # game's `quality` is nowhere near uniform on [0, 1]. It is only computed
-# for swings that already timed the ball well enough to make contact, so
-# measured over the 2,620 recorded contacts in strikefactor.db it runs:
-#
-#     mean 0.841   p10 0.631   p25 0.770   p50 0.886   p75 0.954   p90 0.982
-#
-# Nearly half of all contact lands above q=0.9. A naive linear or power
-# mapping therefore puts the *median* batted ball near the top of the
-# scale, which is how you end up with the max-crack sample on routine
-# grounders — the exact failure this module exists to fix.
+# for swings that squared the ball up enough to put it in play, so its real
+# distribution is skewed hard toward 1.0. A naive linear or power mapping
+# therefore puts the *median* batted ball near the top of the scale, which
+# is how you end up with the max-crack sample on routine grounders — the
+# exact failure this module exists to fix.
 #
 # So the observed quality quantiles are pinned to MLB exit-velocity
 # quantiles (mean ~89, p25 ~81, p50 ~91, p75 ~101, p90 ~106) and
-# interpolated between. Re-derive this table if the quality formula in
-# HitOutcomeManager changes; scratch queries against contact_quality in
-# the pitch DB are all it takes.
+# interpolated between.
+#
+# Re-derived most recently when the ball got a *direction* (see `spray`), which
+# changed which contacts are fair and therefore the distribution this table is
+# fitted to. Over fair contact at AMATEUR it now runs:
+#
+#     p10 0.580  p25 0.653  p50 0.743  p75 0.858  p90 0.932  p99 0.987
+#
+# against 0.690 / 0.717 / 0.769 / 0.851 / 0.918 / 0.985 for the slide model
+# before it, 0.61 / 0.70 / 0.81 / 0.93 / 0.98 / 1.00 for the anisotropic bat,
+# and 0.631 / 0.770 / 0.886 / 0.954 / 0.982 / 0.998 for the rectangle.
+#
+# The median barely moved and both tails **widened**, for two reasons that pull
+# in opposite directions and did not cancel. The quality threshold came down
+# from 0.67 to 0.52, because it no longer carries the whole foul verdict, so
+# weakly-struck balls that stay between the lines are now in play — that is the
+# bottom tail. And a *well*-struck ball can now be hooked past a pole, which
+# takes some of the best contact out of the fair population — that is the top,
+# which widened anyway because the threshold change admits more balls overall.
+#
+# Re-anchoring is not optional. Left on the previous anchors this table read
+# the p10 batted ball about 6 mph hot, which is a thumb on the scale toward
+# extra bases on exactly the balls that should be dying in the infield.
+#
+# **Never fit this against a uniform sweep of quality.** The numbers above
+# come from a Monte Carlo over a plausible player model (aim error in
+# pixels, timing error in ms) run through the real `resolve_contact`; the
+# alternative, once enough play is recorded, is quantiles of
+# `contact_quality` straight out of the pitch DB. Both describe the swings
+# players actually make. A `range(0, 1)` sweep does not, and four separate
+# constants in this codebase have been miscalibrated by assuming it does.
 EV_CALIBRATION = (
     (0.000,  52.0),
-    (0.350,  62.0),
-    (0.500,  68.0),
-    (0.631,  74.0),   # observed p10
-    (0.770,  82.0),   # observed p25
-    (0.886,  91.0),   # observed p50
-    (0.954, 101.0),   # observed p75
-    (0.982, 106.0),   # observed p90
-    (0.998, 112.0),   # observed p99
+    (0.300,  62.0),
+    (0.450,  68.0),
+    (0.580,  74.0),   # observed p10
+    (0.653,  82.0),   # observed p25
+    (0.743,  91.0),   # observed p50
+    (0.858, 101.0),   # observed p75
+    (0.932, 106.0),   # observed p90
+    (0.987, 112.0),   # observed p99
     (1.000, EV_CEIL_MPH),
 )
 
@@ -68,10 +92,11 @@ EV_POWER_BONUS_MPH = 5.0
 EV_POWER_JITTER_MPH = 4.5      # power swings are streakier
 EV_CONTACT_JITTER_MPH = 2.5
 
-# `quality` already folds in vertical alignment *and* timing (it is
-# sqrt(timing_score * alignment_score) in HitOutcomeManager). Do not
-# re-apply vertical_offset here — that would double-count the mishit and
-# push every off-centre ball into the silent floor.
+# `quality` already folds in all three ways a swing can be off: where along
+# the bat, how far across it, and how much of the clock the swing had to be
+# given (`bat_contact.Contact.quality` is the geometric mean of the three).
+# Do not re-apply vertical_offset here — that would double-count the mishit
+# and push every off-centre ball into the silent floor.
 
 
 def _interpolate(q, table):

@@ -11,6 +11,7 @@ back to "every homer is a moonshot", not any exact distribution.
 """
 
 import math
+import random
 import statistics
 
 import pytest
@@ -44,7 +45,18 @@ class _StubGame:
         self.batter = _StubBatter(hand)
 
 
-def _home_run(quality, hand="R", inside=0.0):
+def _home_run(quality, hand="R", spray_deg=None):
+    """A home run at a given contact quality.
+
+    `spray_deg` is the ball's bearing, pull-positive (see `spray`). It replaced
+    an `inside` argument that was the *pitch's* inside/outside location in
+    screen pixels — the animation no longer knows or cares where the pitch was,
+    only where the bat was pointing when it met it. `None` samples the same
+    spread of bearings a real swing produces, which is what the distribution
+    tests below want.
+    """
+    if spray_deg is None:
+        spray_deg = random.gauss(8.0, 20.0)
     return HitAnimation(
         _StubGame(hand),
         outcome="HOME RUN",
@@ -52,7 +64,7 @@ def _home_run(quality, hand="R", inside=0.0):
         vertical_offset=3.0,
         quality=quality,
         batted_ball_type=None,
-        horizontal_inside=inside,
+        spray_deg=spray_deg,
     )
 
 
