@@ -218,6 +218,19 @@ class UmpireCamera:
             return 0
         return real_radius_ft * self.scale_y / depth
 
+    @property
+    def ft_per_px_z(self):
+        """Vertical feet per screen pixel at the plate.
+
+        The one conversion that keeps a height stated in real feet and one
+        stated in the engine's pixels agreeing. It lives on the camera because
+        it is a fact about the projection, and because it was written out
+        independently in two gameplay modules that have to produce the same
+        number or the batted-ball model and the swing replay start describing
+        different swings.
+        """
+        return self.cam_dist / self.scale_y
+
     def screen_to_world_at_plate(self, screen_x, screen_y):
         """Convert screen pixel coordinates to real-world feet at the plate (y=0)."""
         depth_at_plate = self.cam_dist  # y=0, so depth = cam_dist

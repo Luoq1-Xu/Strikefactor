@@ -15,7 +15,7 @@ from strikefactor.utils.pitch_physics import DEFAULT_CAMERA
 # every constant downstream in inches. The two scales happen to be close: the
 # reachable offset is +/- 2.75 in, which is +/- 20.6 px, against anchors that
 # run to 22.
-FT_PER_PX_Z = DEFAULT_CAMERA.cam_dist / DEFAULT_CAMERA.scale_y
+FT_PER_PX_Z = DEFAULT_CAMERA.ft_per_px_z
 
 # Batted-ball type model. Classified at contact from (quality, vertical_offset);
 # drives the trajectory shape passed to the animation. The hit/out split is
@@ -125,22 +125,6 @@ class HitOutcomeManager:
         # zone is angled symmetrically rather than reusing the RHB pivot.
         self.rhpos = (490, 453)
         self.lhpos = (770, 453)
-
-    def compute_foul_contact(self, contact):
-        """Contact metrics for a foul, for the sound and the animation.
-
-        Pure: does not touch last_quality / last_vertical_offset /
-        last_batted_ball_type, which belong to the in-play path (DB record,
-        next hit's animation).
-
-        It used to relax the timing sigma from 35 ms to 70, because a
-        foul-graded swing was 20-60 ms off *by definition* and the standard
-        sigma would have capped its quality around 0.68. Quality is geometric
-        now — a foul is contact that genuinely was not squared up — so there
-        is nothing left to compensate for, and the special case goes. Fouls
-        will read weaker than they did, which is what a foul is.
-        """
-        return self.contact_metrics(contact)
 
     def _classify_batted_ball_type(self, quality, vertical_offset):
         """Pick a batted-ball type from contact metrics.
@@ -256,12 +240,11 @@ class HitOutcomeManager:
         one. There is one question now, asked of two solids in three
         dimensions, and when / where / how square all fall out of it together.
         """
-        multipliers = self._get_difficulty_multipliers()
+        zone_size_mult, timing_window_mult = self.contact_multipliers(swing_type)
         return bat_contact.resolve_contact(
             swing, trajectory, swing_start_s,
-            zone_size_mult=multipliers["contact_zone_size"],
-            timing_window_mult=multipliers[
-                "power_timing_window" if swing_type == 2 else "contact_timing_window"],
+            zone_size_mult=zone_size_mult,
+            timing_window_mult=timing_window_mult,
             power=(swing_type == 2),
         )
 
@@ -284,6 +267,18 @@ class HitOutcomeManager:
                 multipliers["power_timing_window" if swing_type == 2
                             else "contact_timing_window"])
 
+    def aim_assist(self):
+        """The in-swing aim adjustment in force, as a fraction of the error.
+
+        Here for the same reason `contact_multipliers` is: `PitchSimulation`
+        has to *stamp* this on the swing so `SwingRecord` can carry it, and
+        this class is the one place a difficulty multiplier becomes a real
+        quantity. Read off `_get_difficulty_multipliers` rather than the
+        settings manager directly, so the stamped value and the one
+        `resolve_aim` applies cannot come from two different tables.
+        """
+        return self._get_difficulty_multipliers()["aim_assist"]
+
     def resolve_aim(self, cursor_ft, trajectory, handedness):
         """The aim the player's cursor names against this pitch, assisted.
 
@@ -298,8 +293,7 @@ class HitOutcomeManager:
         quantity, so the gameplay layer never reads the multiplier dict itself.
         """
         return bat_contact.aim_at_pitch(
-            cursor_ft, trajectory, handedness,
-            assist=self._get_difficulty_multipliers()["aim_assist"])
+            cursor_ft, trajectory, handedness, assist=self.aim_assist())
 
     def swing_verdict(self, contact, swing_type=1):
         """0 whiff / 1 foul / 2 fair, from the resolved contact.
@@ -316,19 +310,22 @@ class HitOutcomeManager:
         return 1 if contact.is_foul(self._foul_threshold(swing_type)) else 2
 
     def _foul_threshold(self, swing_type):
-        multipliers = self._get_difficulty_multipliers()
-        window = multipliers["power_timing_window" if swing_type == 2
-                             else "contact_timing_window"]
-        return bat_contact.foul_threshold(window)
+        return bat_contact.foul_threshold(self.contact_multipliers(swing_type)[1])
 
     @staticmethod
     def contact_metrics(contact):
         """`(quality, vertical_offset_px)` for a resolved contact.
 
         The offset is bat-below-ball positive, in pygame's y-down screen
-        convention — the same sign and scale `_compute_contact_quality`
+        convention — the same sign and scale the old screen-space contact test
         produced, so the batted-ball type model and `hit_animation._pick_shape`
         read it unchanged.
+
+        Fouls come through here too. That path used to have a method of its
+        own, which relaxed the timing sigma from 35 ms to 70 because a
+        foul-graded swing was 20-60 ms off *by definition*. Quality is
+        geometric now — a foul is contact that genuinely was not squared up —
+        so there is nothing left to compensate for and the two are one call.
         """
         return contact.quality, contact.vertical_offset_ft / FT_PER_PX_Z
 

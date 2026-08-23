@@ -231,13 +231,17 @@ def spray(ctx):
     # -- the split, against the league ---------------------------------------
     ax = fig.add_subplot(gs[1, 1])
     ax.set_axis_off()
+    # `fmt_pct` rather than a raw f-string: it renders an empty group as an
+    # em dash where "%.0f%%" prints "nan%", which is the one way this table
+    # could disagree with the identical one in `render_term`.
     rows = [[str(t), f"{r['N']:.0f}", f"{r['Mean']:+.1f}", f"{r['SD']:.1f}",
-             f"{r['Pull%']:.0f}%", f"{r['Centre%']:.0f}%", f"{r['Oppo%']:.0f}%"]
+             metrics.fmt_pct(r["Pull%"], 0), metrics.fmt_pct(r["Centre%"], 0),
+             metrics.fmt_pct(r["Oppo%"], 0)]
             for t, r in prof.iterrows()]
     rows.append(["MLB", "—", "—", "—",
-                 f"{metrics.SPRAY_MLB_SPLIT['Pull']:.0f}%",
-                 f"{metrics.SPRAY_MLB_SPLIT['Centre']:.0f}%",
-                 f"{metrics.SPRAY_MLB_SPLIT['Oppo']:.0f}%"])
+                 metrics.fmt_pct(theme.SPRAY_MLB_SPLIT["Pull"], 0),
+                 metrics.fmt_pct(theme.SPRAY_MLB_SPLIT["Centre"], 0),
+                 metrics.fmt_pct(theme.SPRAY_MLB_SPLIT["Oppo"], 0)])
     styled_table(ax, rows,
                  ["Type", "N", "Mean", "SD", "Pull", "Centre", "Oppo"])
     ax.set_title("Split by batted-ball type", fontweight="bold")

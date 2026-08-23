@@ -112,6 +112,10 @@ COARSE_WHIFF_MARGIN_FT = 0.05
 ALONG_REFINE_ITERATIONS = 8
 REFINE_ITERATIONS = 24
 
+# Loop-invariant, and the sweep runs them tens of thousands of times a swing.
+_INV_PHI = (math.sqrt(5.0) - 1.0) / 2.0
+_BRACKET_ALONGS = tuple(i / BRACKET_STATIONS for i in range(BRACKET_STATIONS + 1))
+
 # Difficulty knobs, converted here so the callers pass real quantities.
 #
 # The bat's own tolerance beyond its physical surface, before `contact_zone_size`
@@ -508,8 +512,8 @@ def aim_at_pitch(cursor_ft, trajectory, handedness, *, assist=0.0):
     `assist = 0` it is the pure translation it has always been, and every test
     of the translation runs at that default.
 
-    It is deliberately *not* a tolerance. `margin_ft` and `cushion_s` say "close
-    enough counts as contact, and scores badly for it"; the assist moves the bat,
+    It is deliberately *not* a tolerance. `margin_ft` says "close enough
+    counts as contact, and scores badly for it"; the assist moves the bat,
     so it lifts quality too. That is what makes it reach getting *hits* rather
     than only making contact, and it is why it belongs on the aim rather than on
     the ellipsoid.
@@ -546,6 +550,49 @@ def _closest_along(knob, axis, ball):
     return min(1.0, max(0.0, sum(r[i] * axis[i] for i in range(3)) / dd))
 
 
+def _best_along(f, candidates):
+    """The candidate with the smallest `f`, as `(x, f(x))`; first wins a tie.
+
+    Keeps the winning value rather than re-evaluating `f` at the winner, which
+    is what `min(..., key=f)` forces and what the two scans here used to do.
+    """
+    best_x = best_v = None
+    for x in candidates:
+        v = f(x)
+        if best_v is None or v < best_v:
+            best_x, best_v = x, v
+    return best_x, best_v
+
+
+def _golden_min(f, lo, hi, iterations, key=None):
+    """Golden-section minimum of `f` on `[lo, hi]`, as `(x, f(x))`.
+
+    Written once because the sweep refines twice — along the bat, and along
+    the clock — with the same bracket-shrinking loop and different objectives.
+    `key` pulls the compared scalar out of a richer return value, so the
+    caller that wants the whole `(gap, along, state, ball)` tuple at the
+    winner gets it back without paying for another evaluation.
+    """
+    a, b = lo, hi
+    c = b - _INV_PHI * (b - a)
+    d = a + _INV_PHI * (b - a)
+    fc, fd = f(c), f(d)
+    kc = fc if key is None else key(fc)
+    kd = fd if key is None else key(fd)
+    for _ in range(iterations):
+        if kc < kd:
+            b, d, fd, kd = d, c, fc, kc
+            c = b - _INV_PHI * (b - a)
+            fc = f(c)
+            kc = fc if key is None else key(fc)
+        else:
+            a, c, fc, kc = c, d, fd, kd
+            d = a + _INV_PHI * (b - a)
+            fd = f(d)
+            kd = fd if key is None else key(fd)
+    return (c, fc) if kc < kd else (d, fd)
+
+
 def _gap_at(swing, trajectory, swing_start_s, t_s, margin, precise=True):
     """How close the bat came to the ball at swing time `t_s`.
 
@@ -569,10 +616,23 @@ def _gap_at(swing, trajectory, swing_start_s, t_s, margin, precise=True):
     knob, tip = state.knob_ft, state.barrel_ft
     axis = tuple(tip[j] - knob[j] for j in range(3))
 
+    # Unpacked into scalars because this is the innermost thing in the game:
+    # it runs ~200k times per swing, on the frame the player is committing.
+    # Built out of tuples and generator expressions it allocated four objects
+    # an evaluation and was the largest single cost of a swing.
+    ax, ay, az = axis
+    rx = ball[0] - knob[0]
+    ry = ball[1] - knob[1]
+    rz = ball[2] - knob[2]
+    slack = margin + BALL_RADIUS_FT
+    bat_radius_ft = bat_path.bat_radius_ft
+
     def gap_at_along(along):
-        point = tuple(knob[j] + axis[j] * along for j in range(3))
-        sep = math.sqrt(sum((ball[j] - point[j]) ** 2 for j in range(3)))
-        return sep - bat_path.bat_radius_ft(along) - margin - BALL_RADIUS_FT
+        dx = rx - ax * along
+        dy = ry - ay * along
+        dz = rz - az * along
+        return (math.sqrt(dx * dx + dy * dy + dz * dz)
+                - bat_radius_ft(along) - slack)
 
     along = _closest_along(knob, axis, ball)
 
@@ -583,29 +643,15 @@ def _gap_at(swing, trajectory, swing_start_s, t_s, margin, precise=True):
     # which is what buys back the last inch of gap accuracy the solve alone
     # gives up.
     if not precise:
-        best_along = min((along, 0.0, 1.0), key=gap_at_along)
-        return gap_at_along(best_along), best_along, state, ball
+        best_along, best_gap = _best_along(gap_at_along, (along, 0.0, 1.0))
+        return best_gap, best_along, state, ball
 
-    candidates = [along] + [i / BRACKET_STATIONS for i in range(BRACKET_STATIONS + 1)]
-    best_along = min(candidates, key=gap_at_along)
+    best_along, _ = _best_along(gap_at_along, (along,) + _BRACKET_ALONGS)
     span = 1.0 / BRACKET_STATIONS
-    lo = max(0.0, best_along - span)
-    hi = min(1.0, best_along + span)
-    inv_phi = (math.sqrt(5.0) - 1.0) / 2.0
-    c = hi - inv_phi * (hi - lo)
-    d = lo + inv_phi * (hi - lo)
-    fc, fd = gap_at_along(c), gap_at_along(d)
-    for _ in range(ALONG_REFINE_ITERATIONS):
-        if fc < fd:
-            hi, d, fd = d, c, fc
-            c = hi - inv_phi * (hi - lo)
-            fc = gap_at_along(c)
-        else:
-            lo, c, fc = c, d, fd
-            d = lo + inv_phi * (hi - lo)
-            fd = gap_at_along(d)
-    best_along = c if fc < fd else d
-    return gap_at_along(best_along), best_along, state, ball
+    best_along, best_gap = _golden_min(
+        gap_at_along, max(0.0, best_along - span), min(1.0, best_along + span),
+        ALONG_REFINE_ITERATIONS)
+    return best_gap, best_along, state, ball
 
 
 def resolve_contact(swing, trajectory, swing_start_s, *,
@@ -656,24 +702,12 @@ def resolve_contact(swing, trajectory, swing_start_s, *,
 
     # Golden-section refine inside the bracketing samples. The coarse step is
     # 1 ms and the bat covers ~1.3 in in that time, which is half a ball.
-    lo = max(0.0, (best_i - 1) * step)
-    hi = min(bat_path.TOTAL_DURATION_S, (best_i + 1) * step)
-    inv_phi = (math.sqrt(5.0) - 1.0) / 2.0
-    a, b = lo, hi
-    c, d = b - inv_phi * (b - a), a + inv_phi * (b - a)
-    fc = _gap_at(swing, trajectory, start_s, c, margin)
-    fd = _gap_at(swing, trajectory, start_s, d, margin)
-    for _ in range(REFINE_ITERATIONS):
-        if fc[0] < fd[0]:
-            b, d, fd = d, c, fc
-            c = b - inv_phi * (b - a)
-            fc = _gap_at(swing, trajectory, start_s, c, margin)
-        else:
-            a, c, fc = c, d, fd
-            d = a + inv_phi * (b - a)
-            fd = _gap_at(swing, trajectory, start_s, d, margin)
-    t_s = c if fc[0] < fd[0] else d
-    gap, along, state, ball = fc if fc[0] < fd[0] else fd
+    t_s, (gap, along, state, ball) = _golden_min(
+        lambda t: _gap_at(swing, trajectory, start_s, t, margin),
+        max(0.0, (best_i - 1) * step),
+        min(bat_path.TOTAL_DURATION_S, (best_i + 1) * step),
+        REFINE_ITERATIONS,
+        key=lambda got: got[0])
     pitch_t = start_s + t_s
 
     knob, tip = state.knob_ft, state.barrel_ft

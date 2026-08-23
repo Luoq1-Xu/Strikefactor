@@ -39,14 +39,14 @@ the second, which is why a HOME RUN could be shown with the bat eight feet from
 the ball. Anything meant to be *looked at* runs on `contact_time_s`; the timing
 readouts stay on `bat_arrival_s`, which is what they have always measured.
 
-One consequence to be aware of when reading the replay: the engine evaluates
-contact against a ball *clamped* at the plate (`_update_ball_position` does
-`t = min(t, travel_time)`, and `_handle_contact_phase` never re-runs it). So
-on a late swing the rectangle test used a ball frozen at `y = 0` while the
-real ball was already past. The replay draws the unclamped trajectory, since
-that is the physically real ball and the whole basis of the depth readout, and
-keeps the engine's evaluated screen position separately in
-`ball_screen_at_contact` so the two can be told apart.
+One consequence to be aware of when reading the replay: depth is deliberately
+unclamped. `PitchTrajectory.time_at_depth` extrapolates past the plate, and it
+has to — a late swing meets a ball that is genuinely already by, and clamping
+would draw every one of them meeting it exactly at the plate, which is the one
+thing that cannot have happened. The *drawing* on screen is clamped
+(`_update_ball_position` does `t = min(t, travel_time)`), so the engine's
+evaluated screen position is kept separately in `ball_screen_at_contact` and
+the two can be told apart.
 """
 
 from collections import namedtuple
@@ -60,7 +60,7 @@ from strikefactor.utils.pitch_physics import DEFAULT_CAMERA
 # column is named `vertical_offset_in` but a comment in `pitch_simulation`
 # admits the name is aspirational. Converting here rather than renaming the
 # column keeps every existing aggregate meaning what it meant.
-FT_PER_PX_Z = DEFAULT_CAMERA.cam_dist / DEFAULT_CAMERA.scale_y
+FT_PER_PX_Z = DEFAULT_CAMERA.ft_per_px_z
 INCHES_PER_FT = 12.0
 
 # How far either side of the datum `timing_windows_ms` looks, and how hard it
@@ -285,8 +285,38 @@ class SwingRecord:
             fair=self._edge_pair(2) if centre >= 2 else None,
         )
 
+    @cached_property
+    def _probe_cache(self):
+        """Verdicts already measured, by offset in ms.
+
+        `_edge_pair` bisects the same interval twice — once for the contact
+        boundary and once for the fair one — from the same start, so the two
+        walks answer the same offsets until their predicates diverge. About a
+        third of the sweep is a repeat without this.
+        """
+        return {}
+
+    def warm_timing_windows(self):
+        """Measure `timing_windows_ms` now rather than on the frame that draws it.
+
+        The measurement re-sweeps this swing about 26 times. Left to the first
+        `_draw_stats` it lands partway through the replay as a visible stutter,
+        so the overlay asks for it while the screen is changing anyway.
+        """
+        return self.timing_windows_ms
+
     def _probe_contact(self, offset_ms):
         """0 whiff / 1 foul / 2 fair, for this swing mistimed by `offset_ms`."""
+        key = round(offset_ms, 9)
+        cached = self._probe_cache.get(key)
+        if cached is not None:
+            return cached
+        verdict = self._measure_probe(offset_ms)
+        self._probe_cache[key] = verdict
+        return verdict
+
+    def _measure_probe(self, offset_ms):
+        """`_probe_contact` without the memo."""
         swing = self._nominal_swing()
         due = self.trajectory.time_at_depth(swing.contact_depth_ft)
         contact = bat_contact.resolve_contact(
@@ -336,7 +366,7 @@ class SwingRecord:
 
         Positive means the bat was *below* the ball — the pygame y-down
         convention `hit_outcome_manager` uses, kept rather than flipped so
-        this reads the same way as `_compute_contact_quality`.
+        this reads the same way as `hit_outcome_manager.contact_metrics`.
         """
         if self.vertical_offset_px is None:
             return None
@@ -384,6 +414,16 @@ class SwingRecord:
         bat nobody swung — the same failure as preferring the cursor at bat
         arrival over the cursor at commit.
         """
+        return self._resolved_aim
+
+    @cached_property
+    def _resolved_aim(self):
+        """`swing_aim_ft()`, worked out once.
+
+        A frozen record's aim cannot change, and resolving it runs
+        `aim_at_pitch`'s fixed point — three `bat_path.swing` builds — so
+        every reader downstream of it used to pay again for the same answer.
+        """
         return bat_contact.aim_at_pitch(self.aim_ft, self.trajectory,
                                         self.handedness,
                                         assist=self.aim_assist)
@@ -397,6 +437,11 @@ class SwingRecord:
         barrel's depth by well under an inch — the aim's distance from the
         hands barely changes when only its height does.
         """
+        return self._nominal
+
+    @cached_property
+    def _nominal(self):
+        """`_nominal_swing()`, worked out once — see `_resolved_aim`."""
         return bat_path.swing(self.swing_aim_ft(), self.handedness)
 
     def _drawn_aim_ft(self, depth_ft):
@@ -460,6 +505,15 @@ class SwingRecord:
         is when it gets there. Three passes settle it below a thousandth of an
         inch. `barrel_depth_ft` deliberately does *not* follow the iteration —
         it reports the depth the engine's own bat reached, from the raw cursor.
+        """
+        return self._drawn_swing
+
+    @cached_property
+    def _drawn_swing(self):
+        """`bat_swing()`, worked out once — see `_resolved_aim`.
+
+        The replay reads this every frame, which is why the overlay had grown
+        a cache of its own.
         """
         swing = self._nominal_swing()
         for _ in range(3):

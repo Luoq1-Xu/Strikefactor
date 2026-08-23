@@ -158,6 +158,11 @@ SCOUTING_BENCH = {
 
 MLB_REFERENCE = {"k_pct": 22.0, "bb_pct": 8.0}
 
+# The league spray split, quoted against the conventional +/-15 degree cut
+# (`metrics.SPRAY_THIRD_DEG`). Here rather than in `metrics` because this is a
+# benchmark rather than a statistic, and both renderers already import theme.
+SPRAY_MLB_SPLIT = {"Pull": 40.0, "Centre": 35.0, "Oppo": 25.0}
+
 
 # ── Colors ───────────────────────────────────────────────────────────────
 BG = "#1a1a2e"

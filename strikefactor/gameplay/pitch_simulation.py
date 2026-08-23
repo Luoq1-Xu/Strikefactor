@@ -5,7 +5,7 @@ import pandas as pd
 import pygame
 import pygame.gfxdraw
 
-from strikefactor.gameplay import bat_path
+from strikefactor.gameplay import bat_contact, bat_path
 from strikefactor.helpers import EnhancedPitchRecord
 from strikefactor.utils.physics import collision
 from strikefactor.utils.pitch_physics import DEFAULT_CAMERA, PitchTrajectory, UmpireCamera
@@ -399,8 +399,7 @@ class PitchSimulation:
         # seen; the assist shrinks an error they genuinely made. Don't let the
         # two be read as one thing: the first is a bug fix and the second is
         # game feel, and only the second belongs on a difficulty ladder.
-        self.aim_assist = self.game.settings_manager.get_difficulty_multipliers()[
-            "aim_assist"]
+        self.aim_assist = self.game.hit_outcome_manager.aim_assist()
         # Stamped at commit and carried on the record, so the replay can
         # re-sweep this swing to measure the timing it actually had. Re-reading
         # difficulty at replay time would show a window nobody swung in.
@@ -459,11 +458,11 @@ class PitchSimulation:
         `_compute_foul_contact_metrics` under a comment explaining why — so
         the sign existed but only fouls ever saw it.
         """
-        if self.swing_starttime is None:
+        if self.swing_starttime is None or self.bat_swing is None:
             return None
-        due_ms = (self.starttime + self.windup
-                  + self.trajectory.time_at_depth(self.barrel_depth_ft) * 1000.0)
-        return (self.swing_starttime + bat_path.SWING_DURATION_MS) - due_ms
+        swing_start_s = (self.swing_starttime - self.starttime - self.windup) / 1000.0
+        return 1000.0 * bat_contact.timing_error_s(
+            self.bat_swing, self.trajectory, swing_start_s)
 
     @property
     def barrel_depth_ft(self):
@@ -563,7 +562,7 @@ class PitchSimulation:
         standing offer — *if it ever stops being cosmetic, measure it* — is
         what this is.
         """
-        quality, vertical_offset = self.game.hit_outcome_manager.compute_foul_contact(
+        quality, vertical_offset = self.game.hit_outcome_manager.contact_metrics(
             self.contact)
 
         self._foul_quality = quality
@@ -1060,7 +1059,9 @@ class PitchSimulation:
             vertical_offset=vertical_offset,
             quality=quality,
             batted_ball_type=self.game.hit_outcome_manager.last_batted_ball_type,
-            spray_deg=self.game.hit_outcome_manager.last_spray_deg,
+            # Off the contact itself, like the foul path: `last_spray_deg` is
+            # a snapshot of this same number, and one source cannot go stale.
+            spray_deg=self.contact.spray_deg,
         )
 
     def _start_foul_animation(self):

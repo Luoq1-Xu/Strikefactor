@@ -247,9 +247,11 @@ class SwingReplayOverlay:
         self._record = record
         self._swing = record.bat_swing()
         self._ghost = record.bat_state_at_ball_arrival()
-        self._depth_span = None
         self._depth_span = self._compute_depth_range()
-        record.timing_windows_ms
+        # Warmed here rather than on the first frame that draws the bands:
+        # measuring them re-sweeps the swing about 26 times, which is a
+        # visible stutter partway through an already-running replay.
+        record.warm_timing_windows()
         self._elapsed_ms = 0
         self._dismiss_started = False
         self._dismiss_elapsed = 0
@@ -370,13 +372,9 @@ class SwingReplayOverlay:
     def _depth_range(self):
         """The framed slice of depth, in feet, for this swing.
 
-        Cached at `trigger`, because `_project` asks for it on every point it
-        converts and `barrel_depth_ft` rebuilds four swings each time it is
-        read — a few hundred `bat_path.swing` constructions a frame, for a
-        number that cannot change while a record is open.
+        Computed at `trigger`, because `_project` asks for it on every point
+        it converts and it cannot change while a record is open.
         """
-        if self._depth_span is None:
-            self._depth_span = self._compute_depth_range()
         return self._depth_span
 
     def _compute_depth_range(self):
@@ -777,12 +775,11 @@ class SwingReplayOverlay:
         if contact is None:
             return
 
-        spin = spray.spin_for(self._record.handedness)
         deg = contact.spray_deg
-        rad = math.radians(deg)
-        # The departure direction in world feet. Pull is +x for a right-hander
-        # and -x for a left-hander, which is exactly what `spin` is.
-        direction = (spin * math.sin(rad), math.cos(rad), 0.0)
+        # From `spray`, which owns the handedness flip: pull is +x for a
+        # right-hander and -x for a left-hander.
+        direction = spray.world_direction(
+            deg, spray.spin_for(self._record.handedness))
         start = contact.ball_ft
         end = tuple(start[i] + _SPRAY_RAY_FT * direction[i] for i in range(3))
         # Projected rather than stepped in pixels: `_project` is the one
@@ -984,7 +981,7 @@ class SwingReplayOverlay:
         if inches is None:
             return "-"
         # Positive offset means the bat sat below the ball (pygame y-down),
-        # which is what `_compute_contact_quality` means by it.
+        # which is what `hit_outcome_manager.contact_metrics` means by it.
         return "%.1f IN %s" % (abs(inches), "UNDER" if inches > 0 else "OVER")
 
     def _result_text(self):

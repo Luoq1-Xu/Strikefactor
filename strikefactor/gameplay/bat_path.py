@@ -3,42 +3,44 @@
 Same contract as `engine/contact_audio.py` and `ball_flight.py` — real feet
 and seconds, no pygame, no game state, no rendering.
 
-This module exists because the game's bat has a position but no *motion*.
-`HitOutcomeManager` swings a real geometric object — a rotated rectangle
-120 px long by 50 px (contact) or 25 px (power) tall, centred 30 px inboard of
-the aim point, at `atan2(aim - pivot)` about a fixed pivot — but that rectangle
-exists for exactly one frame, in the plane of the screen, with no depth. Every
-question a timing replay wants to ask ("where was the barrel 40 ms ago", "how
-far in front of the plate did they meet it") is a question about the two axes
-the engine's bat does not have.
+This module exists because the game's bat used to have a position but no
+*motion*. The engine swung a rotated rectangle 120 px long by 50 px (contact)
+or 25 px (power) tall, centred 30 px inboard of the aim point, at
+`atan2(aim - pivot)` about a fixed pivot — and that rectangle existed for
+exactly one frame, in the plane of the screen, with no depth. Every question a
+timing replay wants to ask ("where was the barrel 40 ms ago", "how far in front
+of the plate did they meet it") is a question about the two axes it did not
+have. `bat_contact` sweeps this model instead now, and the rectangle is gone;
+it survives below only as the derivation of `PIVOT_PX` and the contact pose,
+which were solved against it.
 
-**The swing is a function of the player's inputs and nothing else** — aim,
-handedness, swing type. Not of the pitch. This is the whole shape of the
-module and it is worth stating as a prohibition, because the previous model
-violated it: `swing()` took a `contact_depth_ft` read off the *pitch's* own
-trajectory at bat arrival, and `hands_contact`, the bat's bearing and tilt, the
-rotation radius, the eased profile's exponent and therefore the entire load
-pose were all derived from it. The bat was modelled as a consequence of the
-ball — the two-models-of-one-thing fault CLAUDE.md tracks through the
-batted-ball code, in its purest form. What it drew: on a swing 68 ms early the
-hands finished 5.13 ft from the spine (they orbit at 1.15) and the knob
-*started* four feet behind the plate on the wrong side of it; 51 ms late, the
-knob started seven and a half feet toward third base. Where and whether the
-barrel meets the ball is now an intersection of two independent motions, and
-`bat_contact.resolve_contact` is what computes it.
+**The swing is a function of the player's inputs and nothing else** — aim and
+handedness. Not of the pitch, and not of the swing type. This is the whole
+shape of the module and it is worth stating as a prohibition, because the
+previous model violated it: `swing()` took a `contact_depth_ft` read off the
+*pitch's* own trajectory at bat arrival, and `hands_contact`, the bat's
+bearing and tilt, the rotation radius, the eased profile's exponent and
+therefore the entire load pose were all derived from it. The bat was modelled
+as a consequence of the ball — the two-models-of-one-thing fault CLAUDE.md
+tracks through the batted-ball code, in its purest form. What it drew: on a
+swing 68 ms early the hands finished 5.13 ft from the spine (they orbit at
+1.15) and the knob *started* four feet behind the plate on the wrong side of
+it; 51 ms late, the knob started seven and a half feet toward third base.
+Where and whether the barrel meets the ball is now an intersection of two
+independent motions, and `bat_contact.resolve_contact` is what computes it.
 
 Four things are worth knowing before changing anything here.
 
 **The engine's aiming pivot is the hands.** `HitOutcomeManager.rhpos` is
 (490, 453) px, which is (1.53, 2.93) ft — within a couple of inches of where a
 right-hander's hands are at contact. Read that way the whole contact pose is
-*solved* rather than fitted. The engine's rectangle is a screen-space object
-centred on the cursor with its long axis pointing at the pivot, so the 3D bat
-whose projection is that rectangle is pinned by two conditions — knob onto the
-pivot pixel, sweet spot onto the cursor pixel — and perspective maps lines to
-lines, so the whole bat then lies along the rectangle's axis. That leaves one
-unknown, the depth the sweet spot sits at, against one equation, the bat's
-length. See `_contact_pose`; it comes out to a quadratic.
+*solved* rather than fitted. The rectangle the engine used to swing was a
+screen-space object centred on the cursor with its long axis pointing at the
+pivot, so the 3D bat whose projection is that rectangle is pinned by two
+conditions — knob onto the pivot pixel, sweet spot onto the cursor pixel — and
+perspective maps lines to lines, so the whole bat lies along that axis. That
+leaves one unknown, the depth the sweet spot sits at, against one equation,
+the bat's length. See `_contact_pose`; it comes out to a quadratic.
 
 **Contact depth is an output.** It is the root of that quadratic, and it lands
 where real contact depth lands without a single tuned number: a pitch aimed
@@ -158,17 +160,35 @@ BAT_PROFILE_IN = (
 )
 
 
-def bat_radius_ft(frac):
-    """The bat's radius in feet at `frac` of the way from knob to tip."""
-    f = max(0.0, min(1.0, frac))
+def _bat_profile_segments():
+    """`(x_hi, r_lo_ft, slope_ft_per_frac, x_lo)` per segment of the profile.
+
+    The inches-to-feet division and the segment slope are the same numbers on
+    every call, and `bat_contact` asks for a radius ~200k times per swing, so
+    they are worked out once at import instead of inside that loop.
+    """
+    segments = []
     prev_x, prev_r = BAT_PROFILE_IN[0]
     for x, r in BAT_PROFILE_IN[1:]:
-        if f <= x:
-            span = x - prev_x
-            t = 0.0 if span <= 0.0 else (f - prev_x) / span
-            return (prev_r + (r - prev_r) * t) / 12.0
+        span = x - prev_x
+        lo_ft = prev_r / 12.0
+        slope = 0.0 if span <= 0.0 else (r / 12.0 - lo_ft) / span
+        segments.append((x, lo_ft, slope, prev_x))
         prev_x, prev_r = x, r
-    return BAT_PROFILE_IN[-1][1] / 12.0
+    return tuple(segments)
+
+
+_BAT_SEGMENTS = _bat_profile_segments()
+_BAT_TIP_RADIUS_FT = BAT_PROFILE_IN[-1][1] / 12.0
+
+
+def bat_radius_ft(frac):
+    """The bat's radius in feet at `frac` of the way from knob to tip."""
+    f = 0.0 if frac < 0.0 else (1.0 if frac > 1.0 else frac)
+    for x_hi, lo_ft, slope, x_lo in _BAT_SEGMENTS:
+        if f <= x_hi:
+            return lo_ft + slope * (f - x_lo)
+    return _BAT_TIP_RADIUS_FT
 
 
 # --- The body ------------------------------------------------------------
@@ -376,18 +396,19 @@ def _contact_pose(aim_ft, handedness):
     Returns `(hands_ft, axis3)` — the hands in world feet and the bat's unit
     long axis, knob to barrel.
 
-    The engine's rectangle is a screen-space object: centred on the cursor,
-    long axis pointing at the pivot. The 3D bat whose *projection* is that
-    rectangle is therefore pinned by two conditions — the knob projects to the
-    pivot pixel, the sweet spot projects to the cursor pixel — and since a
-    perspective projection maps lines to lines, the whole bat then lies along
-    the rectangle's axis on screen.
+    The rectangle the engine used to swing was a screen-space object: centred
+    on the cursor, long axis pointing at the pivot. The 3D bat whose
+    *projection* is that rectangle is therefore pinned by two conditions — the
+    knob projects to the pivot pixel, the sweet spot projects to the cursor
+    pixel — and since a perspective projection maps lines to lines, the whole
+    bat then lies along that axis on screen.
 
     That leaves exactly one unknown, the depth `d` the sweet spot sits at, and
     one equation: the bat is `HANDS_TO_SWEET_SPOT_FT` long. Both unprojected
     coordinates are linear in depth, so the equation is a quadratic and the
-    pose is solved outright — no search, no fitted parameter, and no way for
-    the drawn bat to come apart from the rectangle it was graded by.
+    pose is solved outright — no search and no fitted parameter. The
+    rectangle is gone; what it leaves behind is this pose, which is what
+    `bat_contact` now sweeps.
 
     Contact depth is the root. It is an *output*, and it lands where real
     contact depth lands: an inside pitch sits close to the hands on screen, so
@@ -468,15 +489,32 @@ def _reach(knob, axis3, span):
 # --- The swing -----------------------------------------------------------
 
 class BatState:
-    """The bat at one instant: both ends and the point that meets the ball."""
+    """The bat at one instant: both ends and the point that meets the ball.
 
-    __slots__ = ("knob_ft", "barrel_ft", "sweet_spot_ft", "speed_mph")
+    `speed_mph` is computed on demand. It is a two-sided numerical derivative,
+    so producing it eagerly cost three poses per state where one was wanted —
+    and `bat_contact`'s sweep builds hundreds of states per swing and reads
+    the speed of exactly the one it settles on.
+    """
 
-    def __init__(self, knob_ft, barrel_ft, sweet_spot_ft, speed_mph):
+    __slots__ = ("knob_ft", "barrel_ft", "sweet_spot_ft", "_swing", "_u",
+                 "_speed_mph")
+
+    def __init__(self, knob_ft, barrel_ft, sweet_spot_ft, swing=None, u=0.0):
         self.knob_ft = knob_ft
         self.barrel_ft = barrel_ft
         self.sweet_spot_ft = sweet_spot_ft
-        self.speed_mph = speed_mph
+        self._swing = swing
+        self._u = u
+        self._speed_mph = None
+
+    @property
+    def speed_mph(self):
+        """Sweet-spot speed at this instant, in mph."""
+        if self._speed_mph is None:
+            self._speed_mph = (0.0 if self._swing is None
+                               else self._swing._speed_at(self._u))
+        return self._speed_mph
 
 
 class BatSwing:
@@ -498,9 +536,9 @@ class BatSwing:
 
     `state_at(SWING_DURATION_S)` is pinned: the sweet spot sits at the aim
     point in (x, z), and the bat's (x, z) projection lies along the ray the
-    engine's collision tested — so the drawn bat and the rectangle it was
-    graded by cannot come apart in any plane the engine knows about. Its
-    *depth*, `contact_depth_ft`, is an output.
+    engine's old collision tested — the pose is solved against that geometry,
+    which is why it can be stated rather than fitted. Its *depth*,
+    `contact_depth_ft`, is an output.
     """
 
     def __init__(self, aim_ft, handedness):
@@ -512,8 +550,6 @@ class BatSwing:
 
         self.hands_contact, contact_axis = _contact_pose(aim_ft, self.handedness)
         self.contact_axis = contact_axis
-        self.contact_lead_rad = math.asin(
-            max(-1.0, min(1.0, contact_axis[1])))
 
         self.contact_ft = tuple(
             self.hands_contact[i] + HANDS_TO_SWEET_SPOT_FT * contact_axis[i]
@@ -658,7 +694,8 @@ class BatSwing:
                             for i in range(3)),
             sweet_spot_ft=tuple(knob[i] + axis[i] * HANDS_TO_SWEET_SPOT_FT
                                 for i in range(3)),
-            speed_mph=self._speed_at(u),
+            swing=self,
+            u=u,
         )
 
     def _speed_at(self, u):

@@ -217,3 +217,19 @@ def field_angle_rad(spray_deg, spin):
 def spin_for(handedness):
     """`BatSwing.spin` without building a swing: +1 for a RHB, -1 for a LHB."""
     return 1.0 if handedness != "L" else -1.0
+
+
+def world_direction(spray_deg, spin):
+    """The departure bearing as a unit vector in **world** feet, `(x, y, z)`.
+
+    `field_angle_deg`'s sibling, for the one consumer that wants the world
+    frame rather than the animation's: the swing replay, which draws the ray
+    on a diagram built out of the same world-feet models as the bat.
+
+    Here rather than open-coded there for the reason the module docstring
+    gives — the handedness flip gets exactly one home per frame, or a sign
+    error mirrors the batter in a view whose whole job is showing which way
+    the swing went.
+    """
+    rad = math.radians(spray_deg)
+    return (spin * math.sin(rad), math.cos(rad), 0.0)

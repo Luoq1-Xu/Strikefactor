@@ -434,9 +434,9 @@ def results_section(ctx, console):
             metrics.fmt_pct(r["Oppo%"], 0),
         ] for t, r in prof.iterrows()]
         rows.append(["MLB", "—", "—", "—",
-                     metrics.fmt_pct(metrics.SPRAY_MLB_SPLIT["Pull"], 0),
-                     metrics.fmt_pct(metrics.SPRAY_MLB_SPLIT["Centre"], 0),
-                     metrics.fmt_pct(metrics.SPRAY_MLB_SPLIT["Oppo"], 0)])
+                     metrics.fmt_pct(theme.SPRAY_MLB_SPLIT["Pull"], 0),
+                     metrics.fmt_pct(theme.SPRAY_MLB_SPLIT["Centre"], 0),
+                     metrics.fmt_pct(theme.SPRAY_MLB_SPLIT["Oppo"], 0)])
         console.print(_table(
             ["Batted ball", "N", "Mean°", "SD°", "Pull", "Centre", "Oppo"],
             rows, title="Spray (pull-positive, both hands)"))

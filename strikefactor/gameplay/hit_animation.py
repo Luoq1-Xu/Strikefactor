@@ -1448,12 +1448,6 @@ class HitAnimation:
     idle sway when at rest.
     """
 
-    def _batter_handedness(self):
-        batter = getattr(self.game, 'batter', None)
-        if batter is not None and hasattr(batter, 'get_handedness'):
-            return batter.get_handedness()
-        return 'R'
-
     def __init__(self, game, outcome, on_complete, vertical_offset=0.0, quality=0.0,
                  batted_ball_type=None, spray_deg=0.0):
         self.game = game
@@ -1726,13 +1720,10 @@ class HitAnimation:
                 self._is_wall_candidate = True
 
         if self._is_wall_candidate:
-            # Aim past the wall along a realistic angle (down-the-line or
-            # gap shot — same distribution _pick_hit_landing uses for high-
-            # quality HITs, since those are the angles where real wall
-            # caroms originate). Distance is wall_r + carry, with squared
-            # bias so most carries are small (impact low on the face).
             # The bat's bearing, crossed into screen polar because the wall
-            # is. This branch used to run its own line-versus-gap lottery and
+            # is. Distance is wall_r + carry, with squared bias so most
+            # carries are small (impact low on the face).
+            # This branch used to run its own line-versus-gap lottery and
             # then pick the *side* with `random.choice((-1, 1))` — so which
             # way a ball off the wall went, which is the difference between a
             # double down the line and one in the gap, was a coin flip taken

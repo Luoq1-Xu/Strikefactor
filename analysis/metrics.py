@@ -771,7 +771,6 @@ def outcome_breakdown(ctx):
 # field — the conventional cut, and the one MLB's own 40/35/25 league split is
 # quoted against.
 SPRAY_THIRD_DEG = 15.0
-SPRAY_MLB_SPLIT = {"Pull": 40.0, "Centre": 35.0, "Oppo": 25.0}
 
 
 def spray_profile(ctx):
