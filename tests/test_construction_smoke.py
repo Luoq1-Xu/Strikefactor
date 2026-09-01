@@ -7,7 +7,7 @@ tests in Phase 1. Behaviour is asserted only where it is unambiguous.
 
 from strikefactor import config
 from strikefactor.ai.batter_profile import BatterProfile
-from strikefactor.data.pitch_database import PitchDB
+from strikefactor.data.pitch_database import SCHEMA_VERSION, PitchDB
 from strikefactor.gameplay.challenge_manager import ChallengeManager
 from strikefactor.gameplay.gameday_manager import GameDayManager
 from strikefactor.helpers import ScoreKeeper
@@ -66,8 +66,7 @@ def test_batter_profile_constructs():
 def test_pitch_db_creates_schema_in_temp_dir(tmp_path):
     """A fresh DB builds its schema and reports the current version."""
     db = PitchDB(str(tmp_path / "test.db"))
-    conn = db.conn if hasattr(db, "conn") else None
-    assert conn is not None or True  # tolerate either connection attribute name
+    assert db.conn is not None
 
     import sqlite3
 
@@ -80,6 +79,15 @@ def test_pitch_db_creates_schema_in_temp_dir(tmp_path):
         }
     for expected in ["pitches", "pitch_trajectories", "at_bats", "games"]:
         assert expected in tables, f"missing table {expected}; got {sorted(tables)}"
+
+    # The half the docstring promised and the test never checked. A fresh
+    # database must be stamped at the *current* version, or the next launch
+    # re-runs every migration over a schema that already has them — the
+    # `user_version` preservation `reset_tracking` is careful about, asserted
+    # at the point the file is created.
+    with sqlite3.connect(str(tmp_path / "test.db")) as check:
+        version = check.execute("PRAGMA user_version").fetchone()[0]
+    assert version == SCHEMA_VERSION, f"fresh DB stamped v{version}"
 
 
 def test_roster_constant_matches_pitcher_modules():

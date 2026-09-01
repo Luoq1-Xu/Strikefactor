@@ -1,0 +1,27 @@
+{
+  "created_at": "2026-08-28T18:41:59",
+  "reason": "schema v10 + defense-strength feature: fielding model changes in phases 2-4, so prior play describes a different defense",
+  "scope": "all modes, all tracking stores",
+  "database": "strikefactor.db",
+  "json_files": [
+    "gameday_history.json",
+    "gameday_sessions.json",
+    "lap_history.json",
+    "batting_stats.json"
+  ],
+  "counts": {
+    "pitch_trajectories": 12580,
+    "pitches": 629,
+    "at_bats": 238,
+    "games": 49,
+    "batter_profiles": 6,
+    "_by_mode": {
+      "arcade": 452,
+      "sandbox": 177
+    },
+    "gameday_history.json": 0,
+    "gameday_sessions.json": 0,
+    "lap_history.json": 0,
+    "batting_stats.json": 7
+  }
+}

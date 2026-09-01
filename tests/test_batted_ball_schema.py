@@ -155,3 +155,127 @@ def test_batted_ball_type_is_an_independent_axis():
     outcomes = {_play("GROUNDER", quality=0.5 + i / 40.0).classified_outcome
                 for i in range(30)}
     assert len(outcomes) > 1, "every grounder resolved the same way"
+
+
+# ---- v10: which defense the ball was hit into -----------------------------
+
+V10_COLUMNS = ("defense_strength",)
+
+
+def test_a_fresh_database_records_the_defense(db_path):
+    db = PitchDB(db_path)
+    try:
+        for table in ("pitches", "games"):
+            cols = {r[1] for r in db.conn.execute(f"PRAGMA table_info({table})")}
+            assert set(V10_COLUMNS) <= cols, table
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    finally:
+        db.close()
+
+
+def test_migrating_a_v9_database_adds_the_defense_column_to_both_tables(db_path):
+    """`games` had no migration loop at all before v10 — only `pitches` and
+    `at_bats` did — so this is the first thing that would have silently
+    skipped it."""
+    conn = sqlite3.connect(db_path)
+    conn.executescript(PitchDB.SCHEMA)
+    conn.execute("ALTER TABLE pitches DROP COLUMN defense_strength")
+    conn.execute("ALTER TABLE games DROP COLUMN defense_strength")
+    conn.execute(
+        "INSERT INTO pitches (pitch_id, session_id, game_mode, difficulty, "
+        "created_at, pitcher_name, pitch_type, outcome) VALUES (?,?,?,?,?,?,?,?)",
+        ("p1", "s1", "arcade", "amateur", "2026-01-01T00:00:00", "Sale",
+         "FASTBALL", "SINGLE"))
+    conn.execute(
+        "INSERT INTO games (game_id, session_id, game_mode, difficulty, "
+        "started_at) VALUES (?,?,?,?,?)",
+        ("g1", "s1", "arcade", "amateur", "2026-01-01T00:00:00"))
+    conn.execute("PRAGMA user_version = 9")
+    conn.commit()
+    conn.close()
+
+    db = PitchDB(db_path)
+    try:
+        for table in ("pitches", "games"):
+            cols = {r[1] for r in db.conn.execute(f"PRAGMA table_info({table})")}
+            assert set(V10_COLUMNS) <= cols, table
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+        assert db.conn.execute("SELECT COUNT(*) FROM pitches").fetchone()[0] == 1
+        assert db.conn.execute("SELECT COUNT(*) FROM games").fetchone()[0] == 1
+    finally:
+        db.close()
+
+
+def test_play_recorded_before_the_setting_existed_stays_null(db_path):
+    """NULL means "not recorded", and must never be back-filled to "league".
+
+    A pre-v10 row is not a league-defense row: errors did not exist when it was
+    written, so its error rate is structurally zero. Filling it in would make
+    every error aggregate quietly average those zeros in — the same shape as
+    the pre-v2 `game_id IS NULL` correlation that forces the pitching line to
+    compute over one slice.
+    """
+    conn = sqlite3.connect(db_path)
+    conn.executescript(PitchDB.SCHEMA)
+    conn.execute("ALTER TABLE pitches DROP COLUMN defense_strength")
+    conn.execute(
+        "INSERT INTO pitches (pitch_id, session_id, game_mode, difficulty, "
+        "created_at, pitcher_name, pitch_type, outcome) VALUES (?,?,?,?,?,?,?,?)",
+        ("old", "s1", "arcade", "amateur", "2026-01-01T00:00:00", "Sale",
+         "FASTBALL", "GROUNDOUT"))
+    conn.execute("PRAGMA user_version = 9")
+    conn.commit()
+    conn.close()
+
+    db = PitchDB(db_path)
+    try:
+        value = db.conn.execute(
+            "SELECT defense_strength FROM pitches WHERE pitch_id='old'"
+        ).fetchone()[0]
+        assert value is None
+    finally:
+        db.close()
+
+
+def test_the_defense_column_round_trips(db_path):
+    db = PitchDB(db_path)
+    try:
+        db.insert_pitch({
+            "pitch_id": "p2", "session_id": "s1", "game_mode": "arcade",
+            "difficulty": "amateur", "defense_strength": "gold_glove",
+            "created_at": "2026-01-01T00:00:00", "pitcher_name": "Sale",
+            "pitch_type": "FASTBALL", "outcome": "GROUNDOUT",
+        }, [])
+        assert db.conn.execute(
+            "SELECT defense_strength FROM pitches WHERE pitch_id='p2'"
+        ).fetchone()[0] == "gold_glove"
+    finally:
+        db.close()
+
+
+def test_the_extractor_reads_the_live_defense_setting():
+    """The capture seam: whatever the settings manager says is what lands in
+    the column, so the recorded level and the level the ball was hit into
+    cannot disagree."""
+    from strikefactor.data.pitch_database import PitchDataExtractor
+    from strikefactor.settings_manager import SettingsManager
+
+    class _Game:
+        settings_manager = SettingsManager()
+
+    class _Sim:
+        game = _Game()
+
+    _Game.settings_manager.current_settings["defense_strength"] = "sandlot"
+    assert PitchDataExtractor._defense_value(_Sim()) == "sandlot"
+
+
+def test_an_unreadable_setting_records_null_rather_than_neutral():
+    """A row that could not read the setting is unknown, not average. Writing
+    "league" there would be the back-fill this column exists to avoid."""
+    from strikefactor.data.pitch_database import PitchDataExtractor
+
+    class _Sim:
+        game = object()          # no settings_manager at all
+
+    assert PitchDataExtractor._defense_value(_Sim()) is None

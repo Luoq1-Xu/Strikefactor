@@ -141,11 +141,55 @@ def attack_direction_deg(bat_axis_ft, spin):
 # adjustment. What is left of the gap belongs to the defensive alignment, not
 # here.
 #
-# Together these put ~24% of contact foul by direction. That is the *whole* of
-# what direction can carry — see `is_foul`.
+# Together these put 18-21% of contact foul by direction, depending on how wide
+# a player model it is measured over (it was 24-28% before the location term
+# saturated, and that difference was not real — see below). That is the *whole*
+# of what direction can carry — see `is_foul`.
+#
+# **The location term saturates, and it has to.** `_contact_pose` pins the bat
+# by knob-on-pivot and sweet-spot-on-the-cursor-ray, and past the point where
+# the bat can no longer span the ball from where the hands are, the pose comes
+# off the quadratic's vertex — the perpendicular foot from a *fixed* knob to a
+# family of near-parallel camera rays. That foot's bearing converges: pose runs
+# -1.7 deg at an aim of -0.90 ft and -2.7 at -1.40, a response of 1.9 deg/ft
+# against 27-136 deg/ft on the reachable side. The bat has stopped answering
+# the question.
+#
+# The limit it converges on is pose ~ 0, which is the bat square across and its
+# face normal at **dead centre field** — a perfectly good inside-out reach, and
+# harmless. What was not harmless was amplifying it. Read through a straight
+# line, `LEAGUE_MEAN_DEG + (0 - 49) * 1.30` is -55.7 deg: more than ten degrees
+# **foul**, on a pitch the hitter reached out and put the barrel on. So the
+# gain was manufacturing a foul ball out of a term that had no information left
+# in it, and doing it hardest exactly where a pitcher lives.
+#
+# Measured in recorded play before the change: 43% of all right-handed contact
+# landed in a **1.5 deg wide band at -59 deg**, every ball of it foul, over
+# pitches spanning 0.8 ft of plate. The same ball, over and over. It is the
+# flat spot `bat_path._reach` was rewritten to remove, and the rewrite did not
+# remove it — it moved the attractor from exactly 0 deg (fair, centre field) to
+# about -59 (foul), which is strictly worse.
+#
+# `tanh` is the smallest honest repair: it has slope exactly `LOCATION_GAIN` at
+# the reference, so the middle of the plate is untouched — bit-identical, not
+# merely close — and it only bends where the response was already fake. The
+# asymptote is `LEAGUE_MEAN_DEG +/- LOCATION_SPAN_DEG`, so a maximally reached
+# outside pitch goes to -40 deg: opposite field, just fair, which is what an
+# inside-out reach *is*. The pull side has no asymptote to hit (pose keeps
+# climbing at ~26 deg/ft on an inside aim, with no reach boundary to run into),
+# so hooking an inside pitch foul is still perfectly possible.
+#
+# Note what this does **not** fix: the dead zone is still there, so every ball
+# past the reach boundary still goes to about the same place. It is now a fair
+# place. Giving the reach genuine bearing authority means letting the hands come
+# off the anchor laterally — the same fixed-pivot problem named above for the
+# inside pitch — and that is a `bat_path` change that would need both constants
+# here re-derived. Worth knowing: at the knees the boundary sits at an aim of
+# -0.51 ft, which is inside the strike zone.
 SQUARE_REF_DEG = 49.0     # the bat's angle on a middle-middle pitch, met square
 LEAGUE_MEAN_DEG = 8.0     # MLB mean spray, pull side of centre
-LOCATION_GAIN = 1.30       # 79 deg of raw bat angle across the plate -> ~76
+LOCATION_GAIN = 1.30      # slope at the reference; 79 deg of raw bat angle -> ~76
+LOCATION_SPAN_DEG = 48.0  # where the location term saturates, +/- from the mean
 TIMING_GAIN = 2.4         # 0.63 deg/ms of model -> the real bat's ~1.5
 
 
@@ -157,8 +201,10 @@ def spray_angle_deg(pose_attack_deg, attack_deg):
     pointed. Their difference is the timing's contribution, and the two are
     scaled differently for the reasons above.
     """
+    location = LOCATION_SPAN_DEG * math.tanh(
+        (pose_attack_deg - SQUARE_REF_DEG) * LOCATION_GAIN / LOCATION_SPAN_DEG)
     return (LEAGUE_MEAN_DEG
-            + (pose_attack_deg - SQUARE_REF_DEG) * LOCATION_GAIN
+            + location
             + (attack_deg - pose_attack_deg) * TIMING_GAIN)
 
 

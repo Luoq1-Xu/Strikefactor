@@ -161,7 +161,9 @@ BASE_MARGIN_FT = 0.20
 # visible in `swing_timing_signed_ms` and in the replay's timing bands.
 TIMING_ASSIST_BASE_S = 0.026
 
-# What the borrowed time costs, as a Gaussian in it.
+# What the borrowed time costs, as a Gaussian in it — the **floor** on that
+# Gaussian's width, not its width at every difficulty. See
+# `timing_charge_sigma_s`, which is where the width is decided.
 #
 # **The charge is the price of spending the budget in time, and leaving it out
 # is the one way this rewrite could quietly make the game easier.** Inside the
@@ -174,10 +176,16 @@ TIMING_ASSIST_BASE_S = 0.026
 # Calibrated, not chosen: it is the value that holds the whiff/foul/fair split
 # and the fair-contact quality quantiles at what the anisotropic model produced
 # over the same player model, so the change is neutral to gameplay by
-# construction and any rebalancing stays a separate decision. Re-derive it the
-# same way if the assist budget moves. Outside the budget the charge saturates
-# and the residual geometry takes over, so the two regimes meet continuously.
-TIMING_CHARGE_SIGMA_S = 0.020
+# construction and any rebalancing stays a separate decision. Outside the
+# budget the charge saturates and the residual geometry takes over, so the two
+# regimes meet continuously.
+#
+# It became a floor rather than the whole answer because it was calibrated at
+# one difficulty and then applied to all five, which inverted the ladder — see
+# `timing_charge_sigma_s`. Nothing about the calibration changed: this is still
+# the width at every difficulty whose budget is narrower than it, which is
+# PROFESSIONAL and up.
+TIMING_CHARGE_SIGMA_FLOOR_S = 0.020
 # A power swing is harder to put on the ball than a contact swing. It always
 # has been — the old rectangle was 50 px tall on a W swing and 25 on an E —
 # and this is where that lives now, because the difference was never in the
@@ -210,10 +218,18 @@ SWEET_SIGMA = 0.13
 # **This is no longer the whole foul verdict**, and that is why it came down
 # from 0.67. A ball can now also be fouled by *direction* — hooked or sliced
 # past a pole, which `spray` decides and which a well-struck ball is perfectly
-# capable of. Direction carries about 24% of contact at AMATEUR, so what is
-# left for quality is the other kind of foul: tipped, topped, fouled straight
-# back. Together they hold the total at ~48% of contact, where quality alone
-# used to sit at 57%.
+# capable of. What is left for quality is the other kind of foul: tipped,
+# topped, fouled straight back. Together they hold the total at ~48% of
+# contact, where quality alone used to sit at 57%.
+#
+# **It went back up 0.52 -> 0.59 when `spray`'s location term was made to
+# saturate**, and the two numbers have to move together for the total to hold
+# still. Direction was carrying 24-28% of contact by manufacturing a foul out
+# of a saturated term — every ball the hitter reached for went past the line
+# at about -59° — and it carries 18-21% honestly now. The difference is what
+# quality took back: measured over the same contacts, total foul 47.4% before
+# against 47.6% after. Setting one without the other silently retunes how
+# often the bat puts the ball in play.
 #
 # Both were measured before they were set. Direction cannot carry the verdict
 # alone — it caps near 25% against a real ~50% — and quality alone cannot see
@@ -225,7 +241,7 @@ SWEET_SIGMA = 0.13
 # timing on the bat, which sprays more contact foul on its own — 19% at ROOKIE
 # against 38% at HALL OF FAME, with nothing tuned. The span came in from 0.30
 # because of it: the threshold has less of the ladder left to carry.
-FOUL_QUALITY_THRESHOLD = 0.52
+FOUL_QUALITY_THRESHOLD = 0.59
 FOUL_THRESHOLD_SPAN = 0.22
 
 
@@ -263,6 +279,11 @@ class Contact:
     # invent a direction for the ball out of a timing sign or a coin flip.
     attack_deg: float = 0.0
     pose_attack_deg: float = 0.0
+    # The width of the Gaussian `timing_score` charges `shift_s` against, in
+    # seconds. Carried for the same reason `shift_s` is: it is a property of
+    # the difficulty that granted the slide, and recomputing it downstream
+    # would let the charge and the budget come from two different tables.
+    charge_sigma_s: float = TIMING_CHARGE_SIGMA_FLOOR_S
 
     @property
     def depth_ft(self):
@@ -313,9 +334,13 @@ class Contact:
         1.0 for a swing that needed no help. The geometry cannot charge for
         the slide because it is shown the slid swing and nothing else, so
         without this a swing anywhere inside the assist budget would score
-        exactly 1.00 — see `TIMING_CHARGE_SIGMA_S`.
+        exactly 1.00 — see `TIMING_CHARGE_SIGMA_FLOOR_S`.
+
+        The width is `charge_sigma_s`, carried from the difficulty that
+        granted the slide, because a charge narrower than the budget it is
+        charging for inverts the ladder — see `timing_charge_sigma_s`.
         """
-        return math.exp(-0.5 * (self.shift_s / TIMING_CHARGE_SIGMA_S) ** 2)
+        return math.exp(-0.5 * (self.shift_s / self.charge_sigma_s) ** 2)
 
     @property
     def _scores(self):
@@ -399,6 +424,43 @@ def timing_assist_s(timing_window_mult):
     return TIMING_ASSIST_BASE_S * timing_window_mult
 
 
+def timing_charge_sigma_s(timing_window_mult):
+    """How wide the charge on the borrowed time is, at this difficulty.
+
+    **Never narrower than the budget it is charging for**, which is the whole
+    of this function. `TIMING_CHARGE_SIGMA_FLOOR_S` was calibrated at one
+    difficulty and then applied to all five, and because the charge is a
+    Gaussian in the slide while `timing_assist_s` runs 39 ms down to 10, that
+    made the ladder *inverted at the easy end*: the easier the setting, the
+    more slide it granted and so the deeper a fixed 20 ms charge could dig.
+
+    Measured on a swing that spent its whole budget, before this:
+
+        level         budget  timing_score  quality cap  foul thr  vertical
+                                                                   room left
+        rookie         39 ms         0.149        0.531     0.410    1.72 in
+        amateur        26 ms         0.430        0.755     0.520    2.06 in
+        professional   21 ms         0.582        0.835     0.564    2.12 in
+        all_star       16 ms         0.738        0.904     0.608    2.13 in
+        hall_of_fame   10 ms         0.874        0.956     0.652    2.09 in
+
+    ROOKIE was the *strictest* setting on the ladder for a mistimed swing, and
+    ~45% of AMATEUR contacts sat at full saturation. That is the mechanism
+    behind "even on rookie it is all foul balls": the difficulty gave with one
+    hand (a bigger slide, so contact instead of a whiff) and took with the
+    other (a bigger charge, so a lower quality and a foul), and what it
+    converted was whiffs into fouls rather than either into balls in play.
+
+    Scaling with the budget makes spending your whole allowance cost the same
+    fraction of quality at every difficulty — the setting decides how much
+    error is forgiven, not what forgiveness costs — and leaves the residual
+    geometry to do the rest. The floor is what keeps PROFESSIONAL and up
+    exactly as shipped: their budgets are already inside it, so nothing there
+    moves.
+    """
+    return max(timing_assist_s(timing_window_mult), TIMING_CHARGE_SIGMA_FLOOR_S)
+
+
 def timing_error_s(swing, trajectory, swing_start_s):
     """How far off this swing was, in seconds. Negative early, positive late.
 
@@ -414,7 +476,7 @@ def timing_error_s(swing, trajectory, swing_start_s):
 def foul_threshold(timing_window_mult):
     """The quality below which contact goes foul, at this difficulty.
 
-    Runs from about 0.41 at ROOKIE to 0.65 at HALL OF FAME against 0.52 in the
+    Runs from about 0.48 at ROOKIE to 0.72 at HALL OF FAME against 0.59 in the
     middle, mirroring what `contact_timing_window` did to the old perfect and
     foul windows — which it scaled together, so a harder setting made it harder
     both to touch the ball and to square it up.
@@ -726,4 +788,5 @@ def resolve_contact(swing, trajectory, swing_start_s, *,
         attack_deg=spray.attack_direction_deg(axis, swing.spin),
         pose_attack_deg=spray.attack_direction_deg(swing.contact_axis,
                                                    swing.spin),
+        charge_sigma_s=timing_charge_sigma_s(timing_window_mult),
     )

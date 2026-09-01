@@ -217,14 +217,21 @@ class HitOutcomeManager:
         self.last_spray_deg = contact.spray_deg
         return self._resolve_outcome(quality, vertical_offset, swing_type="power")
 
-    def apply_classified_outcome(self, outcome_str, suppress_out_advancement=False):
+    def apply_classified_outcome(self, outcome_str, suppress_out_advancement=False,
+                                 bases=1):
         """Called by pitch_simulation once the animation has classified an
         IN_PLAY contact into its final outcome. Runner movement is based on
         the resolved outcome so productive outs can advance runners.
+
+        `bases` is how far the batter got on a REACHED ON ERROR — a drop in
+        shallow left is a one-base error and one at the wall is a two-base
+        error. It is ignored for every other outcome, which carries its own
+        advance in its name.
         """
         self.score_keeper.update_hit_event(
             outcome_str,
             suppress_out_advancement=suppress_out_advancement,
+            bases=bases,
         )
     
     def resolve_swing(self, swing, trajectory, swing_start_s, swing_type=1):

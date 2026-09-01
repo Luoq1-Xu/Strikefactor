@@ -92,7 +92,15 @@ HIT_OUTCOMES = ("SINGLE", "DOUBLE", "TRIPLE", "HOME RUN")
 # and was previously missing from every one of these groups, silently dropping
 # at-bats from PA/BF/IP/K% denominators.
 BATTED_OUT_OUTCOMES = ("GROUNDOUT", "FLYOUT", "LINEOUT", "POP UP")
-IN_PLAY_OUTCOMES = HIT_OUTCOMES + BATTED_OUT_OUTCOMES
+# Reached on error: a ball in play and a terminal outcome, but neither a hit
+# nor an out. It has to be in IN_PLAY_OUTCOMES or it silently drops out of
+# every PA/BF denominator — the exact bug the POP UP note above records — and
+# it must stay out of HIT_OUTCOMES and OUT_OUTCOMES, which is what makes AVG
+# fall, OBP not rise, and BABIP count it in the denominator only. That is
+# standard scoring convention for a ROE, and it falls out of the grouping
+# rather than needing a special case in metrics.
+REACH_OUTCOMES = ("REACHED ON ERROR",)
+IN_PLAY_OUTCOMES = HIT_OUTCOMES + BATTED_OUT_OUTCOMES + REACH_OUTCOMES
 OUT_OUTCOMES = ("strikeout",) + BATTED_OUT_OUTCOMES
 TERMINAL_OUTCOMES = ("strikeout", "walk") + IN_PLAY_OUTCOMES
 
@@ -106,6 +114,7 @@ OUTCOME_COLORS = {
     "FLYOUT": "#7f8c8d",
     "LINEOUT": "#bdc3c7",
     "POP UP": "#636e72",
+    "REACHED ON ERROR": "#d69e2e",
     "SINGLE": "#2ecc71",
     "DOUBLE": "#27ae60",
     "TRIPLE": "#1abc9c",
@@ -115,14 +124,14 @@ OUTCOME_COLORS = {
 
 OUTCOME_ORDER = [
     "strikeout", "GROUNDOUT", "FLYOUT", "LINEOUT", "POP UP",
-    "SINGLE", "DOUBLE", "TRIPLE", "HOME RUN", "walk",
+    "REACHED ON ERROR", "SINGLE", "DOUBLE", "TRIPLE", "HOME RUN", "walk",
 ]
 
 # Short forms for narrow tables — the full names blow past any terminal width.
 OUTCOME_ABBREV = {
     "strikeout": "K", "GROUNDOUT": "GO", "FLYOUT": "FO", "LINEOUT": "LO",
     "POP UP": "PU", "SINGLE": "1B", "DOUBLE": "2B", "TRIPLE": "3B",
-    "HOME RUN": "HR", "walk": "BB",
+    "HOME RUN": "HR", "walk": "BB", "REACHED ON ERROR": "ROE",
 }
 
 
@@ -141,6 +150,11 @@ EVENT_RUN_VALUE = {
     "FLYOUT": -0.26,
     "LINEOUT": -0.26,
     "POP UP": -0.26,
+    # A baserunner with no out: worth more than a walk (0.29) and about the
+    # same as a single, because errors advance existing runners more often
+    # than a single does. Published tables disagree by ~0.06 and wOBA omits
+    # ROE entirely, so this is a defensible pick rather than a settled number.
+    "REACHED ON ERROR": 0.50,
 }
 
 

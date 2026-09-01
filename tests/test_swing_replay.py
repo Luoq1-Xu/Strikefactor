@@ -370,6 +370,46 @@ def test_a_swing_with_no_contact_freezes_where_the_barrel_arrived():
     assert rec.contact_reach_ft is None
 
 
+# ---- Where a clip stops -----------------------------------------------------
+
+@pytest.mark.parametrize("ms", [-100.0, -70.0, -40.0, -10.0])
+def test_a_missed_swing_is_replayed_until_the_ball_reaches_the_plate(ms):
+    """The reported fault: an early miss froze with the ball in mid-air.
+
+    `contact_time_s` answers a swing that missed with the barrel's arrival,
+    which is a fact about the bat — the ball is still feet out in front there,
+    so the pitch stopped happening part way through. It runs to the plate now.
+    """
+    rec = make_record(ms, made_contact="swung_and_miss", outcome="STRIKE",
+                      contact=None)
+    assert rec.clip_end_s >= rec.travel_time_s
+    assert rec.ball_at(rec.clip_end_s)[1] == pytest.approx(0.0, abs=1e-3)
+    # And the bat got there first: it is the ball that is still travelling.
+    assert rec.clip_end_s > rec.bat_arrival_s
+
+
+@pytest.mark.parametrize("ms", [20.0, 40.0, 90.0])
+def test_a_late_miss_still_ends_where_the_barrel_arrived(ms):
+    """The plate is a floor, never a ceiling. A swing late enough that the
+    barrel arrived after the ball was already by keeps its own arrival — the
+    later instant, with the ball genuinely past the plate and into the mitt,
+    which is what a late miss looks like."""
+    rec = make_record(ms, made_contact="swung_and_miss", outcome="STRIKE",
+                      contact=None)
+    assert rec.bat_arrival_s > rec.travel_time_s
+    assert rec.clip_end_s == rec.bat_arrival_s
+    assert rec.ball_at(rec.clip_end_s)[1] < 0.0
+
+
+@pytest.mark.parametrize("ms", [-40.0, 0.0, 40.0])
+def test_a_struck_swing_still_ends_at_contact(ms):
+    """Nothing about the extension may reach a swing that met the ball: the
+    frozen frame is the two of them touching, and a tail past it drags the
+    ball away from the mark that names it."""
+    rec, contact = struck_record(ms)
+    assert rec.clip_end_s == pytest.approx(contact.pitch_t_s)
+
+
 @pytest.mark.parametrize("ms", [-40.0, -20.0, 20.0, 40.0])
 def test_the_freeze_leaves_nothing_but_the_cushion_between_bat_and_ball(ms):
     """The regression pin, stated the way the screenshots showed it: how far
@@ -494,7 +534,12 @@ def test_the_replay_draws_the_swing_that_was_swept_not_the_one_committed():
 # ---- Labels and units -------------------------------------------------------
 
 @pytest.mark.parametrize("ms,label", [
-    (-45.0, "EARLY"), (45.0, "LATE"),
+    # Outside the fair window a perfectly aimed swing gets at these defaults
+    # (AMATEUR, -42.5..+45.0 ms). The late side is the forgiving one — see
+    # `test_the_measured_windows_are_asymmetric_and_late_is_the_forgiving_side`
+    # — so the two ends are not the same distance out, and +45 sits exactly on
+    # the boundary rather than outside it.
+    (-45.0, "EARLY"), (50.0, "LATE"),
     (-12.0, "ON TIME"), (12.0, "ON TIME"), (0.0, "ON TIME"),
 ])
 def test_timing_label_respects_this_swings_own_window(ms, label):
@@ -542,10 +587,22 @@ def test_the_screenshot_no_longer_reads_on_time_over_a_foul():
     The aim error is part of the reconstruction, not decoration: at ROOKIE the
     assist covers 39 ms, so a *well-aimed* swing 40 ms late is slid to within a
     millisecond and really is fair. What made the real one a foul was missing
-    by two and a half inches as well, and the measured window sees that — it
-    narrows to about +/-11 ms for this swing where a well-aimed one gets +/-41.
+    by nearly three inches as well, and the measured window sees that — it
+    narrows to about +/-27 ms for this swing where a well-aimed one gets
+    -57/+65.
+
+    The aim error needed to reproduce the foul is a moving target, and it moves
+    every time the foul verdict is retuned — which is the point of keeping it a
+    parameter rather than a constant of the fixture. It went 2.5 in -> 2.9 when
+    `timing_charge_sigma_s` stopped charging a 39 ms ROOKIE slide against a
+    20 ms Gaussian, and back to 2.6 when `FOUL_QUALITY_THRESHOLD` rose 0.52 ->
+    0.59 to hold the total foul rate after `spray`'s location term was made to
+    saturate. Both times that is the retune working rather than this case
+    expiring. The property under test is unchanged — a foul must not read ON
+    TIME — and `test_on_time_means_exactly_that_the_swing_squared_it_up` pins
+    it across the whole ladder without depending on any particular aim error.
     """
-    rec, contact = struck_record(40.0, aim_high_in=2.5)
+    rec, contact = struck_record(40.0, aim_high_in=2.6)
     threshold = bat_contact.foul_threshold(rec.timing_window_mult)
     assert contact.is_foul(threshold), "the model scores this a foul"
     assert rec.timing_label == "LATE", "so the panel must not call it on time"
@@ -754,6 +811,69 @@ def test_the_clip_runs_to_contact_and_holds_there(overlay, ms):
     assert overlay._swing_t(overlay._now_s()) == pytest.approx(contact.swing_t_s)
 
 
+@pytest.mark.parametrize("ms", [-90.0, -60.0, -30.0])
+def test_a_missed_swing_runs_the_whole_pitch_through_the_overlay(overlay, ms):
+    """End to end: the clip that used to stop in mid-air now finishes at the
+    plate, with the swing carried into its follow-through beside it."""
+    rec = make_record(ms, made_contact="swung_and_miss", outcome="STRIKE",
+                      contact=None)
+    _run(overlay, rec, ms=6000)
+    assert overlay._replay_progress() == pytest.approx(1.0)
+    assert overlay._now_s() == pytest.approx(rec.travel_time_s)
+    assert overlay._record.ball_at(overlay._now_s())[1] == pytest.approx(0.0,
+                                                                        abs=1e-3)
+    # The frame has to hold the ball it ends on, and the bat beside it.
+    lo, hi = overlay._depth_range()
+    state = overlay._swing.state_at(overlay._swing_t(overlay._now_s()))
+    assert lo < 0.0 < hi
+    assert lo < state.barrel_ft[1] < hi
+
+
+def test_the_frozen_miss_still_shows_the_ball_the_panel_reports(overlay):
+    """`BALL AT` names where the ball was when the barrel arrived, and the
+    crosshair marks the bat at that same instant. The clip runs on past both
+    now, so the ball at that moment is outlined — without it the panel reports
+    a depth that is nowhere on screen."""
+    import numpy as np
+    from pygame import surfarray
+
+    rec = make_record(-70.0, made_contact="swung_and_miss", outcome="STRIKE",
+                      contact=None)
+    surface = _run(overlay, rec, ms=6000)
+    px, py = overlay._project(rec.ball_at(rec.bat_arrival_s))
+    patch = surfarray.array3d(surface)[int(px) - 7:int(px) + 8,
+                                       int(py) - 7:int(py) + 8]
+    assert np.asarray(patch).max() > 0, "nothing drawn where BALL AT points"
+    # And it is a different place from the ball the clip ends on.
+    end = overlay._project(rec.ball_at(rec.clip_end_s))
+    assert math.dist((px, py), end) > 10
+
+
+def test_the_slow_motion_rate_is_the_same_for_every_swing(overlay):
+    """One rate, not one duration.
+
+    Divided out of a fixed 2180 ms the rate was a function of the swing — the
+    clips with the most pitch to show played fastest, which is backwards. A
+    longer window now buys a longer clip and the bat sweeps at one speed.
+    """
+    records = [make_record(ms, made_contact="swung_and_miss", contact=None)
+               for ms in (-90.0, -40.0, 0.0, 40.0)]
+    records += [struck_record(ms)[0] for ms in (-40.0, 0.0, 40.0)]
+    rates = []
+    for rec in records:
+        overlay.trigger(record=rec)
+        start, end = overlay._window_s()
+        rates.append((overlay._replay_end_ms - 420) / (end - start))
+    # Within a millisecond of rounding on the clip length, which is the only
+    # thing between the rate and an exact constant.
+    assert max(rates) - min(rates) < 0.001 * min(rates), rates
+    # And a clip with more pitch in it takes longer, rather than speeding up.
+    overlay.trigger(record=records[0])
+    long_ms = overlay._replay_end_ms
+    overlay.trigger(record=records[2])
+    assert long_ms > overlay._replay_end_ms
+
+
 @pytest.mark.parametrize("ms", [-40.0, 0.0, 40.0])
 def test_the_bat_enters_the_frame_before_it_starts_moving(overlay, ms):
     """The window is anchored to the swing's launch, not measured back from
@@ -812,7 +932,11 @@ def test_escape_closes_and_tab_toggles_the_view(overlay):
 
 
 def test_scrubbing_pauses_and_moves_the_clock(overlay):
+    """A scrub step is a fortieth of the replay, whatever length that is —
+    read off the overlay rather than off a literal, since the clip is as long
+    as the slice of pitch it has to show."""
     overlay.trigger(record=make_record())
+    step = (overlay._replay_end_ms - 420) // 40
     for _ in range(80):
         overlay.update(16)
     before = overlay._elapsed_ms
@@ -820,16 +944,17 @@ def test_scrubbing_pauses_and_moves_the_clock(overlay):
     assert overlay._paused
     assert overlay._elapsed_ms < before
     overlay.update(16)
-    assert overlay._elapsed_ms == pytest.approx(before - (2600 - 420) // 40, abs=1)
+    assert overlay._elapsed_ms == pytest.approx(before - step, abs=1)
 
 
 def test_space_restarts_a_finished_replay(overlay):
     overlay.trigger(record=make_record())
+    end = overlay._freeze_end_ms
     for _ in range(300):
         overlay.update(16)
-    assert overlay._elapsed_ms == 3100
+    assert overlay._elapsed_ms == end
     overlay.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_SPACE))
-    assert overlay._elapsed_ms < 3100
+    assert overlay._elapsed_ms < end
     assert not overlay._paused
 
 

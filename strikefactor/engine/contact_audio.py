@@ -45,23 +45,26 @@ EV_CEIL_MPH = 116.0
 # quantiles (mean ~89, p25 ~81, p50 ~91, p75 ~101, p90 ~106) and
 # interpolated between.
 #
-# Re-derived most recently when the ball got a *direction* (see `spray`), which
-# changed which contacts are fair and therefore the distribution this table is
-# fitted to. Over fair contact at AMATEUR it now runs:
+# Re-derived most recently when the location term in `spray` was made to
+# **saturate** — see `spray.LOCATION_SPAN_DEG`. Over fair contact at AMATEUR
+# it now runs:
 #
-#     p10 0.580  p25 0.653  p50 0.743  p75 0.858  p90 0.932  p99 0.987
+#     p10 0.643  p25 0.689  p50 0.763  p75 0.871  p90 0.937  p99 0.988
 #
-# against 0.690 / 0.717 / 0.769 / 0.851 / 0.918 / 0.985 for the slide model
-# before it, 0.61 / 0.70 / 0.81 / 0.93 / 0.98 / 1.00 for the anisotropic bat,
-# and 0.631 / 0.770 / 0.886 / 0.954 / 0.982 / 0.998 for the rectangle.
+# against 0.580 / 0.653 / 0.743 / 0.858 / 0.932 / 0.987 immediately before it,
+# 0.690 / 0.717 / 0.769 / 0.851 / 0.918 / 0.985 for the slide model, 0.61 /
+# 0.70 / 0.81 / 0.93 / 0.98 / 1.00 for the anisotropic bat, and 0.631 / 0.770 /
+# 0.886 / 0.954 / 0.982 / 0.998 for the rectangle.
 #
-# The median barely moved and both tails **widened**, for two reasons that pull
-# in opposite directions and did not cancel. The quality threshold came down
-# from 0.67 to 0.52, because it no longer carries the whole foul verdict, so
-# weakly-struck balls that stay between the lines are now in play — that is the
-# bottom tail. And a *well*-struck ball can now be hooked past a pole, which
-# takes some of the best contact out of the fair population — that is the top,
-# which widened anyway because the threshold change admits more balls overall.
+# **The bottom tail lifted and the top barely moved** (+0.063 at p10 against
+# +0.001 at p99), which is the signature of the change rather than a side
+# effect of it. The straight-line location term was sending every ball the
+# hitter had to reach for past the foul line at about -59 deg, and those balls
+# were **well struck** — reaching out and putting the barrel on an outside
+# pitch is not a mishit. Releasing them back into fair territory adds solid
+# contact at the bottom of the fair distribution, so the low quantiles rise.
+# `FOUL_QUALITY_THRESHOLD` came up 0.52 -> 0.59 at the same time to hold the
+# total foul rate (47.4% -> 47.6% measured), which lifts the floor again.
 #
 # Re-anchoring is not optional. Left on the previous anchors this table read
 # the p10 batted ball about 6 mph hot, which is a thumb on the scale toward
@@ -78,12 +81,12 @@ EV_CALIBRATION = (
     (0.000,  52.0),
     (0.300,  62.0),
     (0.450,  68.0),
-    (0.580,  74.0),   # observed p10
-    (0.653,  82.0),   # observed p25
-    (0.743,  91.0),   # observed p50
-    (0.858, 101.0),   # observed p75
-    (0.932, 106.0),   # observed p90
-    (0.987, 112.0),   # observed p99
+    (0.643,  74.0),   # observed p10
+    (0.689,  82.0),   # observed p25
+    (0.763,  91.0),   # observed p50
+    (0.871, 101.0),   # observed p75
+    (0.937, 106.0),   # observed p90
+    (0.988, 112.0),   # observed p99
     (1.000, EV_CEIL_MPH),
 )
 

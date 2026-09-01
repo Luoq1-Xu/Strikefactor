@@ -1,11 +1,23 @@
-"""Mode / difficulty / handedness filtering, shared by both analysis scripts."""
+"""Mode / difficulty / defense / handedness filtering, shared by both analysis scripts."""
 
 from dataclasses import dataclass
 
 MODE_CHOICES = ("arcade", "gameday", "sandbox")
 DIFFICULTY_CHOICES = ("rookie", "amateur", "professional", "all_star", "hall_of_fame")
 
+# Defense strength (schema v10). NULL on rows written before the setting
+# existed, and those rows are not "league" — they are unknown, and they carry a
+# structurally zero error rate because errors did not exist then. So filtering
+# on a level deliberately excludes them rather than lumping them in.
+DEFENSE_CHOICES = ("sandlot", "minors", "league", "gold_glove")
+
 MODE_LABEL = {"arcade": "Arcade", "gameday": "GameDay", "sandbox": "Sandbox"}
+DEFENSE_LABEL = {
+    "sandlot": "Sandlot",
+    "minors": "Minors",
+    "league": "League",
+    "gold_glove": "Gold Glove",
+}
 DIFFICULTY_LABEL = {
     "rookie": "Rookie",
     "amateur": "Amateur",
@@ -21,6 +33,7 @@ class Filter:
 
     modes: tuple = ()
     difficulties: tuple = ()
+    defenses: tuple = ()       # defense_strength values (schema v10)
     hands: tuple = ()          # batter handedness, subset of ("L", "R")
     pitchers: tuple = ()       # pitcher_name values as stored in the DB
 
@@ -31,6 +44,8 @@ class Filter:
              if self.difficulties else "All difficulties")
         h = ", ".join(f"{x}HB" for x in self.hands) if self.hands else "Both hands"
         parts = [m, d, h]
+        if self.defenses:
+            parts.append(", ".join(DEFENSE_LABEL[x] for x in self.defenses) + " defense")
         if self.pitchers:
             from .theme import pitcher_display
             parts.append(", ".join(pitcher_display(p) for p in self.pitchers))
@@ -40,12 +55,14 @@ class Filter:
     def slug(self):
         """Filesystem-safe key — one output subfolder per filter slice."""
         parts = (list(self.modes) + list(self.difficulties)
+                 + [f"def_{x}" for x in self.defenses]
                  + [f"{x}HB" for x in self.hands] + list(self.pitchers))
         return "__".join(parts) if parts else "all"
 
     @property
     def is_empty(self):
-        return not (self.modes or self.difficulties or self.hands or self.pitchers)
+        return not (self.modes or self.difficulties or self.defenses
+                    or self.hands or self.pitchers)
 
     def replace(self, **kw):
         from dataclasses import replace
@@ -63,6 +80,8 @@ class Filter:
             _and(df["game_mode"].isin(self.modes))
         if self.difficulties:
             _and(df["difficulty"].isin(self.difficulties))
+        if self.defenses:
+            _and(df["defense_strength"].isin(self.defenses))
         if self.hands:
             _and(df["batter_hand"].isin(self.hands))
         if self.pitchers:
@@ -98,6 +117,11 @@ def add_filter_args(parser):
         default="hall_of_fame",
         help="Difficulty to include (default: hall_of_fame). 'all' = no filter.")
     parser.add_argument(
+        "--defense", choices=list(DEFENSE_CHOICES) + ["all"], default="all",
+        help="Defense strength to include (default: all). Rows recorded before "
+             "the setting existed have this NULL and are excluded by any "
+             "concrete choice.")
+    parser.add_argument(
         "--handedness", choices=["L", "R", "all"], default="all",
         help="Batter handedness (default: all). Split L/R to avoid smearing "
              "inside/outside in location plots.")
@@ -114,6 +138,7 @@ def filter_from_args(args):
     return Filter(
         modes=() if args.mode == "all" else (args.mode,),
         difficulties=() if args.difficulty == "all" else (args.difficulty,),
+        defenses=() if getattr(args, "defense", "all") == "all" else (args.defense,),
         hands=() if args.handedness == "all" else (args.handedness,),
         pitchers=pitchers,
     )

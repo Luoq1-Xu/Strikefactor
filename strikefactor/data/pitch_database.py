@@ -34,7 +34,7 @@ PITCHER_HANDEDNESS = {
 }
 
 
-SCHEMA_VERSION = 9  # Bumped when migrations are added; see PitchDB._migrate.
+SCHEMA_VERSION = 10  # Bumped when migrations are added; see PitchDB._migrate.
 
 # v5 renamed the pop-up outcome from "POP_UP" to "POP UP", so it reads like
 # every other recorded outcome ("HOME RUN", "LINEOUT"). Data written before v5
@@ -56,6 +56,7 @@ class PitchDB:
         ab_id TEXT,
         game_mode TEXT,
         difficulty TEXT,
+        defense_strength TEXT,
         created_at TEXT NOT NULL,
 
         -- Pitcher
@@ -163,6 +164,7 @@ class PitchDB:
         session_id TEXT NOT NULL,
         game_mode TEXT NOT NULL,
         difficulty TEXT NOT NULL,
+        defense_strength TEXT,
         pitcher_name TEXT,
         started_at TEXT NOT NULL,
         ended_at TEXT,
@@ -306,6 +308,30 @@ class PitchDB:
         ("spray_angle_deg", "REAL"),
     ]
 
+    # v10: which defense the ball was hit into. A sibling of `difficulty` and a
+    # separate axis from it on purpose — difficulty is the bat, this is the
+    # glove. It moves BABIP, ground-ball hit rate, 2B/1B and the reached-on-error
+    # rate, i.e. every headline number the analysis package exists to check, so
+    # a rate measured across a mix of settings is a mix of games.
+    #
+    # NULL for rows written before the setting existed, and it must NOT be
+    # back-filled to "league": that would assert older play was recorded at
+    # league defense, which is neither true nor false but unknown. Those rows
+    # also have a structurally zero error rate, because errors did not exist —
+    # the same shape as the pre-v2 `game_id IS NULL` / `runs_scored_on_pitch IS
+    # NULL` correlation that makes the pitching line compute over one slice. Any
+    # error aggregate has to be taken over `defense_strength IS NOT NULL` and
+    # surface what it dropped, rather than silently averaging zeros in.
+    V10_PITCHES_COLUMNS = [
+        ("defense_strength", "TEXT"),
+    ]
+
+    # Same column on `games`, for the same reason `difficulty` is on both: a
+    # game is the unit history and the box score aggregate over.
+    V10_GAMES_COLUMNS = [
+        ("defense_strength", "TEXT"),
+    ]
+
     # Backup policy
     BACKUP_DIR_NAME = "backups"
     BACKUP_MIN_INTERVAL = timedelta(hours=1)  # don't backup more than once per hour
@@ -338,7 +364,7 @@ class PitchDB:
             for col, decl in (self.V2_PITCHES_COLUMNS + self.V3_PITCHES_COLUMNS
                              + self.V4_PITCHES_COLUMNS + self.V6_PITCHES_COLUMNS
                              + self.V7_PITCHES_COLUMNS + self.V8_PITCHES_COLUMNS
-                             + self.V9_PITCHES_COLUMNS):
+                             + self.V9_PITCHES_COLUMNS + self.V10_PITCHES_COLUMNS):
                 if col not in existing_pitches:
                     self.conn.execute(f"ALTER TABLE pitches ADD COLUMN {col} {decl}")
 
@@ -346,6 +372,11 @@ class PitchDB:
             for col, decl in self.V2_AT_BATS_COLUMNS:
                 if col not in existing_ab:
                     self.conn.execute(f"ALTER TABLE at_bats ADD COLUMN {col} {decl}")
+
+            existing_games = {row[1] for row in self.conn.execute("PRAGMA table_info(games)")}
+            for col, decl in self.V10_GAMES_COLUMNS:
+                if col not in existing_games:
+                    self.conn.execute(f"ALTER TABLE games ADD COLUMN {col} {decl}")
 
             # v5: outcome-string renames. Idempotent — re-running finds no rows
             # with the old spelling. Both tables store the outcome as free text,
@@ -491,6 +522,10 @@ class PitchDataExtractor:
     TERMINAL_OUTCOMES = frozenset({
         "STRIKEOUT", "WALK", "SINGLE", "DOUBLE", "TRIPLE", "HOME_RUN",
         "FLYOUT", "GROUNDOUT", "LINEOUT", "POP_UP",
+        # Underscored, like HOME_RUN and POP_UP: this set is compared against
+        # outcome.upper().replace(" ", "_"). Leaving it out does not raise —
+        # it silently never closes the at-bat.
+        "REACHED_ON_ERROR",
     })
 
     @staticmethod
@@ -506,6 +541,20 @@ class PitchDataExtractor:
         # Use the .value form ("hall_of_fame") so it joins cleanly against
         # gameday_history.json and the games table.
         return sim.game.settings_manager.get_difficulty().value
+
+    @staticmethod
+    def _defense_value(sim):
+        """Which defense this pitch was thrown in front of.
+
+        Falls back to None rather than to the neutral level: a row that could
+        not read the setting is unknown, not average, and the v10 column's
+        whole contract is that NULL means "not recorded" (see
+        V10_PITCHES_COLUMNS).
+        """
+        try:
+            return sim.game.settings_manager.get_defense_level()
+        except Exception:
+            return None
 
     @staticmethod
     def _gameday_context(sim):
@@ -551,6 +600,7 @@ class PitchDataExtractor:
 
         game_mode = PitchDataExtractor._classify_game_mode(sim)
         difficulty = PitchDataExtractor._difficulty_value(sim)
+        defense_strength = PitchDataExtractor._defense_value(sim)
         ai_selection = getattr(sim.game, "pitch_chosen", None)
         ctx = sim.new_data_entry
         gd = PitchDataExtractor._gameday_context(sim)
@@ -564,6 +614,7 @@ class PitchDataExtractor:
             "ab_id": ab_id,
             "game_mode": game_mode,
             "difficulty": difficulty,
+            "defense_strength": defense_strength,
             "created_at": datetime.now().isoformat(),
             "pitcher_name": sim.pitchername,
             "pitcher_hand": pitcher_hand,
@@ -674,7 +725,8 @@ class PitchDatabaseService:
 
     # --- Game lifecycle ---
 
-    def start_game(self, game_mode, difficulty, pitcher_name=None):
+    def start_game(self, game_mode, difficulty, pitcher_name=None,
+                   defense_strength=None):
         """Begin a new game. Returns the new game_id.
 
         Auto-ends any previously-open game so callers don't have to remember
@@ -691,6 +743,7 @@ class PitchDatabaseService:
                 "session_id": self.session_id,
                 "game_mode": game_mode,
                 "difficulty": difficulty,
+                "defense_strength": defense_strength,
                 "pitcher_name": pitcher_name,
                 "started_at": datetime.now().isoformat(),
                 "ended_at": None,

@@ -15,6 +15,8 @@ on the 3-1, and the 2B only when nobody ahead of them can get there).
 """
 
 import collections
+import math
+import random
 
 import pytest
 
@@ -55,16 +57,25 @@ def _make(shape="GROUNDER", quality=0.6):
 
 
 def _play(shape="GROUNDER", quality=0.6):
-    """Run one animation to completion, recording every cover assignment."""
+    """Run one animation to completion, recording every cover assignment.
+
+    `clashes` is the instantaneous form of the invariant below: frames where
+    the same fielder was both on the ball and on the bag. It has to be sampled
+    per frame rather than reconstructed afterwards, because *both* roles can
+    legitimately change mid-play — see
+    `test_the_fielder_it_was_hit_to_is_never_sent_to_cover`.
+    """
     anim = _make(shape, quality)
-    setup_primary, covers = anim._primary_role, set()
+    setup_primary, covers, clashes = anim._primary_role, set(), []
     t = 0
     while not anim.finished and t < 40000:
         t += 16
         anim.update(t)
         if anim._cover_role is not None:
             covers.add(anim._cover_role)
-    return anim, setup_primary, covers
+            if anim._cover_role == anim._primary_role:
+                clashes.append((t, anim._primary_role))
+    return anim, setup_primary, covers, clashes
 
 
 # ---- Whose ball is it -----------------------------------------------------
@@ -79,13 +90,30 @@ def test_ball_hit_at_a_fielder_is_fielded_by_that_fielder(monkeypatch):
 
 
 def test_the_fielder_it_was_hit_to_is_never_sent_to_cover(monkeypatch):
-    """Standing on the ball must not be a reason to be free for the bag."""
+    """Standing on the ball must not be a reason to be free for the bag.
+
+    Asserted **per frame**, against whoever is on the ball at that instant.
+
+    It used to compare the primary as it was at *setup* against every cover
+    assignment made over the whole play, and that is a different claim: both
+    roles are allowed to change, so the union over time catches a sequence
+    that is ordinary baseball. A ball that goes THROUGH the first baseman
+    (`defense.py`'s misplay model, newer than this test) hands the primary to
+    the second baseman, and the first baseman — no longer fielding anything —
+    correctly goes back to cover their own bag. That is right, and the old
+    form called it a bug on about 2.5% of ambient RNG states, which is a flake
+    that only ever surfaced when something reordered the suite.
+
+    The per-frame form is also the stronger one: it checks the invariant on
+    every frame of every play rather than once against a stale value.
+    """
     for role in ("1B", "2B", "SS", "3B"):
         _aim(monkeypatch, FIELDER_HOMES[role])
         for _ in range(20):
-            anim, primary, covers = _play()
-            assert primary not in covers, (
-                f"{primary} was fielding the ball and covering first")
+            _, _, _, clashes = _play()
+            assert not clashes, (
+                f"{clashes[0][1]} was fielding the ball and covering first "
+                f"at t={clashes[0][0]}ms")
 
 
 def test_closest_fielder_wins_over_an_earlier_intercept(monkeypatch):
@@ -137,20 +165,41 @@ def test_first_base_priority_puts_the_second_baseman_last():
     assert COVER_ROLE_PRIORITY == ["1B", "P", "2B"]
 
 
+# Both of the next two compare a set unioned over the whole play against a
+# single expected cover, so both are scoped to plays the defense handled
+# cleanly. A misplay is a *different play*: a ball through the 1B hands the
+# primary to the 2B and sends the 1B back to their own bag, so `covers` reads
+# {'P', '1B'} and `primary` is no longer "1B" — all correct, and all outside
+# what these two claim. Unscoped, the first of them failed on ~4% of ambient
+# RNG states; the second has the same shape and had simply not been caught.
+# The instantaneous invariant that holds on *every* play, misplays included,
+# is the one in `test_the_fielder_it_was_hit_to_is_never_sent_to_cover`.
+
 def test_pitcher_covers_when_the_first_baseman_fields_it(monkeypatch):
+    """The 3-1: the bag is the 1B's, so when they field it the pitcher takes it."""
     _aim(monkeypatch, FIELDER_HOMES["1B"])
+    clean = 0
     for _ in range(25):
-        anim, primary, covers = _play()
+        anim, primary, covers, _ = _play()
+        if anim._misplay_kind is not None:
+            continue
+        clean += 1
         assert primary == "1B"
         assert covers == {"P"}, f"3-1 play covered by {covers}"
+    assert clean > 15, f"only {clean}/25 clean plays — too few to judge"
 
 
 def test_first_baseman_covers_when_anyone_else_fields_it(monkeypatch):
     for role in ("2B", "SS", "3B"):
         _aim(monkeypatch, FIELDER_HOMES[role])
+        clean = 0
         for _ in range(20):
-            _, _, covers = _play()
+            anim, _, covers, _ = _play()
+            if anim._misplay_kind is not None:
+                continue
+            clean += 1
             assert covers == {"1B"}, f"ball to the {role}, bag covered by {covers}"
+        assert clean > 12, f"only {clean}/20 clean plays to the {role}"
 
 
 def test_second_baseman_almost_never_covers_first():
@@ -158,7 +207,7 @@ def test_second_baseman_almost_never_covers_first():
     seen = collections.Counter()
     n = 150
     for i in range(n):
-        _, _, covers = _play(quality=(i % 10) / 10.0)
+        _, _, covers, _ = _play(quality=(i % 10) / 10.0)
         seen.update(covers)
     assert seen["2B"] / n < 0.05, (
         f"2B covered first on {seen['2B']}/{n} grounders: {dict(seen)}")
@@ -208,3 +257,108 @@ def test_the_cover_man_does_not_field_the_ball(monkeypatch):
     assert anim._check_in_flight_intercept() is False
     anim._cover_role = None
     assert anim._check_in_flight_intercept() is True
+
+
+# ---- The throw gets made --------------------------------------------------
+
+def _run(anim, limit_ms=40000):
+    """Run to completion, recording whether a throw or a carry was drawn."""
+    t, thrown, carried = 0, False, False
+    while not anim.finished and t < limit_ms:
+        t += 16
+        anim.update(t)
+        if anim._secured and anim._go_throw_start_ms is not None:
+            if anim._go_throw_start_ms < t <= anim._go_throw_arrive_ms:
+                thrown = True
+        elif anim._secured and anim._go_done_ms is not None:
+            carried = True
+    return thrown, carried
+
+
+def _is_infield_play(anim):
+    return (anim._secured
+            and anim.shape == "GROUNDER"
+            and anim._primary_role not in ha.OUTFIELD_ROLES
+            and anim._fielded_ft() <= ha.INFIELD_PLAY_MAX_FT)
+
+
+def test_an_infielder_who_fields_a_grounder_always_makes_a_play_on_it():
+    """The reported bug: GROUNDOUT appearing the instant the fielder reached
+    the ball, with no throw and nobody covering first.
+
+    The throw sub-animation used to be scheduled *only* inside
+    `_trigger_in_flight_intercept`, so it existed only for a ball cut off in
+    the air. A grounder secured after it had already landed — the fielder
+    charging a slow roller and picking it up, which is the most ordinary
+    infield play there is — ran its race in `_resolve_extra_bases` and went
+    straight to the banner. Both paths schedule through
+    `_begin_infield_play` now.
+
+    Swept rather than aimed, because the population this missed is exactly
+    the one a single hand-placed ball is least likely to land in: a slow
+    roller dies short of every set position, so it is *never* intercepted in
+    flight. `quality` is swept low, where those live.
+    """
+    missed = []
+    for i in range(60):
+        random.seed(i)
+        anim = _make(quality=0.20 + 0.01 * i)
+        thrown, carried = _run(anim)
+        if _is_infield_play(anim) and not (thrown or carried):
+            missed.append((i, anim._primary_role, anim.classified_outcome))
+    assert not missed, (
+        f"{len(missed)} fielded infield grounders showed no throw and no "
+        f"carry: {missed[:5]}")
+
+
+def test_the_throw_is_drawn_on_a_ball_picked_up_off_the_ground():
+    """The specific path that had none — asserted directly, so a regression
+    cannot hide behind the in-flight intercepts in the sweep above."""
+    found = None
+    for i in range(200):
+        random.seed(i)
+        anim = _make(quality=0.20 + 0.004 * i)
+        thrown, carried = _run(anim)
+        if _is_infield_play(anim) and not anim._secured_in_flight:
+            found = (anim, thrown, carried)
+            break
+    assert found is not None, "no ball was picked up off the ground to test"
+    anim, thrown, carried = found
+    assert thrown or carried, (
+        f"{anim._primary_role} picked the ball up and did nothing with it "
+        f"({anim.classified_outcome})")
+    assert anim._post_fielding, "the post-fielding sub-animation never started"
+
+
+def test_the_runner_beating_the_throw_still_shows_the_throw():
+    """A SINGLE off an infield grounder is a race the runner won, not a ball
+    nobody played. `_resolve_ground_ball` says so in as many words — "the
+    throw still plays, the runner just gets there first" — and it is the
+    whole reason the play is worth watching."""
+    seen = 0
+    for i in range(200):
+        random.seed(i)
+        anim = _make(quality=0.20 + 0.004 * i)
+        thrown, carried = _run(anim)
+        if _is_infield_play(anim) and anim.classified_outcome == "SINGLE":
+            seen += 1
+            assert thrown or carried, "an infield single with no play made"
+    assert seen, "no infield singles in the sweep — widen it"
+
+
+def test_first_base_is_still_covered_when_the_ball_was_picked_up():
+    """Standing the defense down before resolving the play sent the cover man
+    home, so the throw arced to an empty bag. Order of operations."""
+    for i in range(200):
+        random.seed(i)
+        anim = _make(quality=0.20 + 0.004 * i)
+        _run(anim)
+        if (_is_infield_play(anim) and not anim._secured_in_flight
+                and anim._go_throw_start_ms is not None):
+            assert anim._cover_role is not None, "throw to an empty bag"
+            cover = anim.fielders[anim._cover_role]
+            assert math.dist(cover.pos, ha.FIRST_BASE_BAG_POS) < 40.0, (
+                f"{anim._cover_role} was {math.dist(cover.pos, ha.FIRST_BASE_BAG_POS):.0f} "
+                "px from the bag when the throw arrived")
+            return
+    pytest.skip("no assisted play off a ground pickup in the sweep")

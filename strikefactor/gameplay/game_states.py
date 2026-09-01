@@ -144,6 +144,7 @@ class MenuState(GameState):
         'toggle_strikezone': 'toggle_strikezone_setting',
         'toggle_abs': 'toggle_abs_setting',
         'toggle_foul_animation': 'toggle_foul_animation_setting',
+        'cycle_defense_strength': 'cycle_defense_strength',
         'cycle_hud_mode': 'toggle_hud_mode',
         'toggle_umpire_sound': 'toggle_umpire_sound_setting',
         'cycle_display_fps': 'cycle_display_fps',
@@ -1697,6 +1698,11 @@ class GameDayTransitionState(GameState):
     # Hit / out classification reused across screens.
     _HIT_RESULTS = ('SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN')
     _OUT_RESULTS = ('STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP UP')
+    # Reaching on an error is an at-bat but neither a hit nor an out. Without
+    # its own branch below it matches none of these lists and the plate
+    # appearance vanishes from the AVG denominator entirely — a silent
+    # miscount rather than a crash, which is why it needs naming.
+    _REACH_RESULTS = ('REACHED ON ERROR',)
     # Compact labels for notable-play display.
     _HIT_ABBREV = {
         'SINGLE': '1B', 'DOUBLE': '2B', 'TRIPLE': '3B', 'HOME RUN': 'HR',
@@ -1737,6 +1743,8 @@ class GameDayTransitionState(GameState):
                 ab += 1
                 if event.result == 'STRIKEOUT':
                     so += 1
+            elif event.result in self._REACH_RESULTS:
+                ab += 1
             elif event.result == 'WALK':
                 bb += 1
             rbi += event.runs_scored

@@ -35,9 +35,15 @@ from strikefactor.ui import gameday_theme as gdt
 _SUBHEAD_Y = 58
 _HEADLINE_Y = 76
 _HINT_Y = 88
-_CONTENT_TOP = 132
+# Reclaimed 12px when the DEFENSE row landed: eight rows at the old
+# _CONTENT_TOP/_SECTION_GAP put the last one's bottom at 632, four past
+# _FOOTER_DIVIDER_Y. Taken out of the dead air above the list rather than out
+# of _ROW_STRIDE, because the rows are the content — compressing the stride to
+# 34 fits too, but pays for the new row with 4px of every other row's gutter.
+# The headline box ends at y=106, so 120 still leaves 14px of air.
+_CONTENT_TOP = 120
 
-_SECTION_GAP = 18          # space above a section label
+_SECTION_GAP = 16          # space above a section label
 _SECTION_LABEL_H = 22
 _ROW_STRIDE = 38
 _ROW_H = 32
@@ -195,6 +201,7 @@ class SettingsPanel(_RowPanel):
     # (nav key, row label, action id). Sections are display grouping only.
     SECTIONS = [
         ("GAMEPLAY", [
+            ('defense', "DEFENSE", 'cycle_defense_strength'),
             ('strikezone', "STRIKEZONE", 'toggle_strikezone'),
             ('abs', "ABS CHALLENGE", 'toggle_abs'),
             ('foul_animation', "FOUL ANIMATION", 'toggle_foul_animation'),
@@ -232,6 +239,8 @@ class SettingsPanel(_RowPanel):
         if key in self._BOOL_SETTING:
             on = bool(settings_manager.get_setting(self._BOOL_SETTING[key]))
             return ("ON" if on else "OFF"), not on
+        if key == 'defense':
+            return settings_manager.get_defense_level().replace("_", " ").upper(), False
         if key == 'hud':
             return settings_manager.get_hud_mode().upper(), False
         if key == 'display_fps':

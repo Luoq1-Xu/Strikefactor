@@ -62,6 +62,24 @@ crosshair in three different places on the one frame the player actually
 studies, which is what made a HOME RUN look like a whiff. See
 `SwingRecord.contact_time_s`.
 
+**A swing that missed names neither instant, so it runs to the plate.** There
+was no meeting to freeze on, and the fallback — the barrel's arrival — is a
+fact about the bat alone: on an early miss the ball is still feet out in front
+there, so the clip stopped with the pitch hanging in mid-air, which is the one
+frame nothing can be read off. Followed to the plate the pitch finishes, the
+swing carries into its follow-through beside it, and the ball the batter missed
+is last seen where the call is made. `SwingRecord.clip_end_s` owns the choice;
+the crosshair still marks the barrel's arrival and `_draw_missed_ball` outlines
+the ball as it was at that same moment, so the instant the panel reports is
+still on screen.
+
+**One slow-motion rate, not one duration.** The wall-clock length of the clip
+is the length of the slice it shows (`_compute_phases`), because the slice is
+not the same length every time — a late contact is more pitch than an early
+one, and a miss followed to the plate is more again. Divided out of a fixed
+duration, as it was, the rate became a function of the swing and the clips that
+had most to show played fastest.
+
 **The bat and the ball touch, and it took a model change to make that true.**
 `bat_contact` used to grant contact anisotropically — the bat was an ellipsoid
 stretched along the ball's flight line by the cushion times the ball's speed,
@@ -97,10 +115,23 @@ from strikefactor.gameplay import bat_path, spray
 from strikefactor.ui import gameday_theme as gdt
 
 # --- Phases, cumulative ms ---------------------------------------------------
+# The intro is a fixed piece of chrome; the two that follow are computed per
+# swing by `_compute_phases`, because the slice of pitch being shown is not the
+# same length every time.
 _PHASE_INTRO_END = 420      # panel fades up, pitch card slides in
-_PHASE_REPLAY_END = 2600    # the swing, in slow motion
-_PHASE_FREEZE_END = 3100    # held at contact, ghost bat fades in
+_FREEZE_HOLD_MS = 500       # held at the end, ghost bat fading in
 _DISMISS_FADE_MS = 260
+
+# **One slow-motion rate for every swing**, stated as wall-clock milliseconds
+# per second of pitch. The replay used to be a fixed 2180 ms of wall clock
+# divided by whatever window the swing happened to need, which is two clocks
+# again: a late contact is a longer slice of pitch and so played *faster* than
+# an early one, and a miss that follows the ball to the plate would have been
+# faster still. Fixing the rate instead means the swing looks the same at every
+# timing and a clip that has more pitch to show simply runs longer. 12000 is
+# 12x slow motion, and reproduces the old duration for an ordinary swing --
+# 0.18 s of pitch, since the window is `_PRE_SWING_S` plus the swing.
+_REPLAY_MS_PER_PITCH_S = 12000
 
 _DIM_ALPHA = 225
 
@@ -218,6 +249,10 @@ class SwingReplayOverlay:
         self._swing = None
         self._ghost = None   # a BatState, not a second swing — see _draw_ghost
         self._depth_span = None
+        # Per-swing phase boundaries, set by `_compute_phases` at `trigger`.
+        # Defaulted so the clock methods are total even with no record open.
+        self._replay_end_ms = _PHASE_INTRO_END
+        self._freeze_end_ms = _PHASE_INTRO_END + _FREEZE_HOLD_MS
         self._view = _VIEW_SIDE
         self._paused = False
         self._chip_hits = []
@@ -247,6 +282,7 @@ class SwingReplayOverlay:
         self._record = record
         self._swing = record.bat_swing()
         self._ghost = record.bat_state_at_ball_arrival()
+        self._replay_end_ms, self._freeze_end_ms = self._compute_phases()
         self._depth_span = self._compute_depth_range()
         # Warmed here rather than on the first frame that draws the bands:
         # measuring them re-sweeps the swing about 26 times, which is a
@@ -274,7 +310,7 @@ class SwingReplayOverlay:
             return
         if self._paused:
             return
-        self._elapsed_ms = min(_PHASE_FREEZE_END, self._elapsed_ms + int(dt_ms))
+        self._elapsed_ms = min(self._freeze_end_ms, self._elapsed_ms + int(dt_ms))
 
     def handle_event(self, event):
         """Scrub, toggle view, close. Returns True if the event was consumed."""
@@ -289,7 +325,7 @@ class SwingReplayOverlay:
                 # Replaying from the end rather than resuming a finished clip,
                 # which is the only sensible reading of "play" once the
                 # animation has already landed on the freeze.
-                if self._elapsed_ms >= _PHASE_FREEZE_END:
+                if self._elapsed_ms >= self._freeze_end_ms:
                     self._elapsed_ms = _PHASE_INTRO_END
                     self._paused = False
                 else:
@@ -313,9 +349,9 @@ class SwingReplayOverlay:
     def _step(self, direction):
         """Scrub one frame of the replay. Pauses, since scrubbing implies it."""
         self._paused = True
-        span = _PHASE_REPLAY_END - _PHASE_INTRO_END
+        span = self._replay_end_ms - _PHASE_INTRO_END
         self._elapsed_ms = max(_PHASE_INTRO_END,
-                               min(_PHASE_FREEZE_END,
+                               min(self._freeze_end_ms,
                                    self._elapsed_ms + direction * span // 40))
 
     # -- the replay clock -------------------------------------------------
@@ -324,7 +360,7 @@ class SwingReplayOverlay:
         """0 at the start of the shown window, 1 at the freeze."""
         if self._elapsed_ms <= _PHASE_INTRO_END:
             return 0.0
-        span = max(1, _PHASE_REPLAY_END - _PHASE_INTRO_END)
+        span = max(1, self._replay_end_ms - _PHASE_INTRO_END)
         return min(1.0, (self._elapsed_ms - _PHASE_INTRO_END) / span)
 
     def _window_s(self):
@@ -340,13 +376,38 @@ class SwingReplayOverlay:
         real contact point, so the freeze had a bat, a ball and a mark in three
         different places. See `SwingRecord.contact_time_s`.
 
+        **A swing that missed has no such instant, and used to stop the pitch
+        in mid-air.** It runs to the plate instead — see
+        `SwingRecord.clip_end_s`, which owns that choice because it is a fact
+        about the swing rather than about the drawing.
+
         The start is anchored to the swing's launch rather than measured back
         from the end, so moving the end cannot pull the bat into the frame
         already mid-arc.
         """
         rec = self._record
         return (rec.swing_launch_s - _PRE_SWING_S,
-                rec.contact_time_s + _REPLAY_TAIL_S)
+                rec.clip_end_s + _REPLAY_TAIL_S)
+
+    def _compute_phases(self):
+        """`(replay_end_ms, freeze_end_ms)` for the record now open.
+
+        The replay's wall-clock length is the window's length at one fixed
+        slow-motion rate, so the bat sweeps at the same speed on every swing
+        and a clip with more pitch to show simply runs for longer. Fixed at
+        2180 ms — as it was — the rate instead became a function of the swing:
+        a late contact is a longer slice of pitch and so played *faster* than
+        an early one, and a miss followed to the plate would have been faster
+        again, which is the opposite of what a replay is for.
+
+        Computed at `trigger` for the same reason the depth range is: it
+        cannot change while a record is open, and three clock methods ask for
+        it on every frame.
+        """
+        start, end = self._window_s()
+        replay = _PHASE_INTRO_END + round(max(0.0, end - start)
+                                          * _REPLAY_MS_PER_PITCH_S)
+        return replay, replay + _FREEZE_HOLD_MS
 
     def _now_s(self):
         """Where the replay clock currently sits, in pitch seconds."""
@@ -390,10 +451,16 @@ class SwingReplayOverlay:
         name and the ghost sits near. It used to be framed on the ball at bat
         arrival — which on a late swing is several feet past anything the clip
         now reaches, so half the view was empty air behind the catcher.
+
+        Everything here is asked at `clip_end_s`, which is where the clip
+        actually stops: on a miss that is the plate rather than the barrel's
+        arrival, and the bat has carried further into its follow-through by
+        then.
         """
         rec = self._record
-        marks = [rec.struck_depth_ft, rec.barrel_depth_ft]
-        state = self._swing.state_at(self._swing_t(rec.contact_time_s))
+        marks = [rec.struck_depth_ft, rec.barrel_depth_ft,
+                 rec.ball_at(rec.clip_end_s)[1]]
+        state = self._swing.state_at(self._swing_t(rec.clip_end_s))
         marks += [state.knob_ft[1], state.barrel_ft[1]]
         return (min([_MIN_DEPTH_RANGE[0]] + [d - _DEPTH_MARGIN_FT for d in marks]),
                 max([_MIN_DEPTH_RANGE[1]] + [d + _DEPTH_MARGIN_FT for d in marks]))
@@ -726,10 +793,10 @@ class SwingReplayOverlay:
         moving in step with the first, which reads as a rendering fault rather
         than a reference.
         """
-        if self._elapsed_ms < _PHASE_REPLAY_END:
+        if self._elapsed_ms < self._replay_end_ms:
             return
-        fade = min(1.0, (self._elapsed_ms - _PHASE_REPLAY_END)
-                   / max(1, _PHASE_FREEZE_END - _PHASE_REPLAY_END))
+        fade = min(1.0, (self._elapsed_ms - self._replay_end_ms)
+                   / max(1, self._freeze_end_ms - self._replay_end_ms))
         shade = int(_lerp(0, 90, fade))
         if shade <= 2:
             return
@@ -741,9 +808,9 @@ class SwingReplayOverlay:
 
         Falls back to where the barrel arrived when they never met at all — a
         whiff, where the gap between this mark and the ball is exactly what
-        the view is for. The clip now freezes *at* this instant, so on contact
-        the mark sits on the drawn ball rather than somewhere neither the bat
-        nor the ball ever reached.
+        the view is for. On contact the clip freezes *at* this instant, so the
+        mark sits on the drawn ball rather than somewhere neither the bat nor
+        the ball ever reached.
         """
         if self._replay_progress() < 1.0:
             return
@@ -753,7 +820,32 @@ class SwingReplayOverlay:
         pygame.draw.circle(surface, gdt.FG, (int(px), int(py)), 9, 1)
         pygame.draw.line(surface, gdt.FG, (px - 12, py), (px + 12, py), 1)
         pygame.draw.line(surface, gdt.FG, (px, py - 12), (px, py + 12), 1)
+        self._draw_missed_ball(surface, contact)
         self._draw_reach(surface, contact)
+
+    def _draw_missed_ball(self, surface, contact):
+        """On a miss, the ball as it was when the barrel arrived — outlined.
+
+        The crosshair beside it marks where the bat got to, and the two
+        together are the miss: one moment, two objects, however far apart the
+        swing left them. It is also the frame `BALL AT` reports, which is why
+        it has to be drawn now that the clip carries on to the plate — without
+        it the panel names a depth that is nowhere on screen, and the solid
+        ball sitting on the plate is a later instant than the mark.
+
+        Outlined rather than filled, and never on a contact: the solid circle
+        is *the* ball, and a second filled one would read as two balls rather
+        than as one ball twice.
+        """
+        rec = self._record
+        if contact is not None:
+            return
+        # A late miss ends *at* the barrel's arrival, so the outline would be
+        # a halo around the ball already drawn there. One ball, one circle.
+        if rec.clip_end_s <= rec.bat_arrival_s:
+            return
+        px, py = self._project(rec.ball_at(rec.bat_arrival_s))
+        pygame.draw.circle(surface, gdt.DIM, (int(px), int(py)), 5, 1)
 
     def _draw_spray(self, surface):
         """Where the ball went, drawn from where it was struck.
@@ -852,10 +944,12 @@ class SwingReplayOverlay:
 
         cells = [
             ("TIMING", self._timing_text()),
-            # The ball's depth *in the frame on screen*, which on contact is
-            # where it was struck and on a whiff is where it had got to when
-            # the barrel arrived. It read `contact_depth_ft` unconditionally,
-            # so a late swing showed the ball 6 ft behind the one it drew.
+            # On contact, where the ball was struck — the frame on screen. On
+            # a miss, where it had got to when the barrel arrived, which is
+            # the instant the crosshair marks and `_draw_missed_ball` outlines
+            # rather than the last frame, since that clip runs on to the
+            # plate. It read `contact_depth_ft` unconditionally, so a late
+            # swing showed the ball 6 ft behind the one it drew.
             ("BALL AT", "%+.1f FT" % rec.struck_depth_ft),
             ("BARREL AT", "%+.1f FT" % rec.barrel_depth_ft),
             ("RESULT", self._result_text()),

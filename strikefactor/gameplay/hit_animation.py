@@ -41,6 +41,10 @@ from strikefactor.gameplay import (
     spray,
 )
 
+# Aliased because `defense` is also the name of this class's constructor
+# argument, which would shadow the module inside __init__.
+from strikefactor.gameplay import defense as defense_model
+
 HOME = (640, 670)
 
 # How many animated seconds one real second is shown over. This is the
@@ -374,11 +378,17 @@ LANDING_WALL_MARGIN_PX  = 25
 BALL_WALL_MARGIN_PX     = 8
 # The ball's margin in normalized-ellipse units — √((dx/a)² + (dy/b)²),
 # which is 1 on the wall — since that is the form the containment step
-# works in. Stated once because it is also the *boundary of the park*
-# for `_point_outside_wall`: a live ball is pulled back to exactly this
-# limit, so testing against it is what makes "out of the park" and "in
-# play at the foot of the fence" the same question asked twice with the
-# same answer, rather than two thresholds that can disagree by a pixel.
+# works in. This is the line a live ball is *held* at, and every place
+# that puts a ball against the fence has to use this one expression of
+# it: written as a radial `wall_r - BALL_WALL_MARGIN_PX` instead it is a
+# different line at every angle but dead centre, because the ellipse's
+# radius runs 440–611 px while the normalization is against the smaller
+# semi-axis. `_maybe_trigger_in_flight_wall_impact` did exactly that, and
+# so parked the ball a shade *outside* the boundary on every carom that
+# was not to straightaway centre.
+#
+# It is deliberately *not* the boundary of the park — see
+# `_point_outside_wall`, which tests the fence itself.
 BALL_WALL_LIMIT_NORM    = 1.0 - BALL_WALL_MARGIN_PX / min(WALL_SEMI_X,
                                                           WALL_SEMI_Y)
 # Fielder containment lives with the fielder constants
@@ -431,11 +441,31 @@ WALL_REACH_FT              = 380.0
 WALL_HIT_CARRY_FT_MIN    = 5.0
 WALL_HIT_CARRY_FT_MAX    = 35.0
 WALL_HIT_CARRY_BIAS_EXP  = 2.0
-# Peak scale for wall-candidate FLYs. The standard FLY peak (60–130 px)
-# would put the ball *over* the wall at the crossing point — i.e., HR
-# territory, not "off the wall." Scaling down to ~0.6 of the standard
-# peak keeps the ball low enough at the wall to strike the face.
-WALL_HIT_FLY_PEAK_SCALE  = 0.60
+# How far up the fence face a ball off the wall may strike it, as a
+# fraction of the fence's own height. A **bound that is solved for**, not
+# a shape parameter: `_wall_impact_peak_cap` inverts the arc for the peak
+# that puts the ball exactly here at the moment its ground point reaches
+# the fence, and caps the shape's own peak at that.
+#
+# It replaced `WALL_HIT_FLY_PEAK_SCALE = 0.60`, a scale on the FLY peak
+# meant to do this same job, which could not: how high the ball is when it
+# reaches the fence is a consequence of where the arc was *aimed* and how
+# the flight is *paced*, and a scale on the peak can see neither. Measured
+# over 162 wall balls, **54% were drawn above the top of the fence at the
+# instant they struck it** — median 12 px against an 11 px fence, out to
+# 27.8 px, two and a half fence-heights up — and were then planted on the
+# grass in one frame. That is the reported "ball goes over the wall, then
+# clips back into play". It was always possible (the same measurement on a
+# linear flight gives median 7.8 px, max 18.2) but the decelerating flight
+# ease made it the common case: the last 2% of the path is covered over
+# the last 10% of the flight *time*, and the arc's height is keyed to the
+# time, not the path.
+#
+# The cap is written shape-independent. `_is_wall_candidate` admits FLY
+# and LINER, but `ball_flight` caps a liner's carry at ~320 ft against
+# WALL_REACH_FT's 380, so only FLY has ever reached it — which is why
+# nobody noticed that the old scale was applied to FLY alone.
+WALL_IMPACT_MAX_HEIGHT_FRAC = 0.85
 # Restitution on the post-impact rolling velocity for in-flight wall
 # contact. Real outfield walls have COR ~0.45–0.55; matching that lets a
 # screaming liner visibly carom off the wall and roll back into play, the
@@ -673,6 +703,29 @@ BODY_RADIUS_PX          = 8
 BODY_COLOR              = (220, 220, 220)
 GLOVE_COLOR             = (255, 200, 100)
 
+# The "!" that pops over a fielder the instant they are charged with an
+# error. Until now the only thing that said an error had happened was the
+# banner, several seconds later and after the runner had already been put
+# on base — so a muff read on screen as "the ball bounced oddly" and a
+# ball through the shortstop read as an ordinary base hit. This is the one
+# thing on screen that reports `is_error` before the banner does, and it
+# is drawn over the fielder who actually made it (`_error_role`), which is
+# not always the primary: a ball through the SS is retrieved by the LF,
+# and the LF did nothing wrong.
+#
+# Stated in real seconds and brought onto the animated clock by `_anim_ms`
+# like every other duration in this file, so it lasts the same wall-clock
+# time whatever time scale the play is running at.
+ERROR_MARK_HOLD_S       = 1.10          # full brightness before the fade
+ERROR_MARK_FADE_S       = 0.45
+ERROR_MARK_POP_S        = 0.16          # rise from the head, on appearance
+ERROR_MARK_RISE_PX      = 6.0
+ERROR_MARK_OFFSET_PX    = 17            # above the body's centre
+# The amber "reached, but not earned" wears everywhere else it is drawn:
+# the pitchviz trail dot (pitch_simulation._finalize_batted_ball), the
+# ScoreKeeper palette and analysis/theme.OUTCOME_COLORS.
+ERROR_MARK_COLOR        = (214, 158, 46)
+
 # How close to the fence a fielder may get, and the *only* thing that
 # stops them leaving the park: every target a defender is given is the
 # answer to a physical question — where the ball is, where it will land,
@@ -718,6 +771,10 @@ BALL_SHADOW_H_PX        = 3
 # friction guarantees the ball stops eventually, and the fielder converges
 # afterwards; we let the play run to a natural close rather than truncating.
 SECURE_RADIUS_PX        = 14
+# A ball goes past a fielder faster than they can reverse. Without this they
+# re-secure their own miss on the next frame, standing where the ball just
+# was, and the through-ball never reaches the outfield.
+THROUGH_TURN_S          = 0.45
 
 # In-flight interception tuning. INTERCEPT_REACH_PX is the screen-space
 # distance from a fielder's body to the ball at which an in-flight catch
@@ -1045,12 +1102,21 @@ def _clamp_inside_wall(point, margin):
 def _point_outside_wall(point):
     """True when a point on the *ground* lies beyond the outfield wall.
 
-    The boundary is BALL_WALL_LIMIT_NORM — the exact line a live ball is
-    pulled back to by `_step_ball_on_ground` — so a ball that reached the
-    fence and is rattling around at its foot reads False here no matter
-    how hard it caromed. Anything that reads True got there by being
+    The boundary is the fence. A ball that reached it and is rattling
+    around at its foot reads False no matter how hard it caromed, because
+    `_step_ball_on_ground` holds a live ball at BALL_WALL_LIMIT_NORM,
+    comfortably inside. Anything that reads True got there by being
     *aimed* past the wall: a home run, or the overshoot point of a
     wall-candidate flight.
+
+    It used to test BALL_WALL_LIMIT_NORM itself, which is that holding
+    line — 8 px inside the fence at centre field and 11 down the line. So
+    a band in front of the fence read "out of the park", and a ball still
+    in flight goes straight through it: a fly ball approaching the wall
+    low was hidden by `_ball_behind_wall` for the last several frames
+    before it got there and then reappeared at the fence. That is half of
+    the reported "the ball clips and abruptly appears back in play"; the
+    other half was the impact point itself landing outside this line.
 
     Home runs clear the fence by as little as a pixel of screen radius
     (the carry distribution is dominated by wall-scrapers), so a test
@@ -1059,7 +1125,12 @@ def _point_outside_wall(point):
     dx = point[0] - HOME[0]
     dy_math = HOME[1] - point[1]
     ellipse_d = math.hypot(dx / WALL_SEMI_X, dy_math / WALL_SEMI_Y)
-    return ellipse_d > BALL_WALL_LIMIT_NORM + 1e-9
+    # On the line counts as past it. A home run's carry past the fence
+    # starts at HR_CARRY_MIN_FT = 0, so 0.5% of them land within 1e-9 of
+    # exactly 1.0 — a strict `>` leaves those wall-scrapers drawn as a
+    # white dot in the black beyond the fence, which is the artifact
+    # `test_a_home_run_ball_is_gone_once_it_lands` was written for.
+    return ellipse_d >= 1.0
 
 
 def _polar_point(angle, dist_px):
@@ -1449,13 +1520,21 @@ class HitAnimation:
     """
 
     def __init__(self, game, outcome, on_complete, vertical_offset=0.0, quality=0.0,
-                 batted_ball_type=None, spray_deg=0.0):
+                 batted_ball_type=None, spray_deg=0.0, defense=None):
         self.game = game
         self.outcome = outcome
         self.on_complete = on_complete
         self.vertical_offset = vertical_offset
         self.quality = quality
         self.batted_ball_type = batted_ball_type
+        # The nine gloves behind the pitcher, as real feet and seconds
+        # (`gameplay/defense.py`). Handed in rather than read off
+        # `game.settings_manager` here: `defense` is a pure module and must
+        # not learn about a settings manager, and every fielding test builds
+        # this class with a stub game that has none. The default is the
+        # neutral profile, which restates the module constants exactly — so
+        # a caller that passes nothing gets precisely the old behaviour.
+        self.defense = defense_model.profile_for(defense)
         # Which way the ball left the bat: degrees from centre field,
         # pull-positive for either batter (`spray`). One number, used by every
         # direction decision in this class — the ball in play, the home run,
@@ -1510,9 +1589,16 @@ class HitAnimation:
         # In-flight interception state. Set by _check_in_flight_intercept
         # when a fielder reaches the ball before it lands. Drives the
         # post-intercept sub-animation rendered by
-        # _render_post_in_flight_catch (catch hold for flies; throw-to-1B
+        # _render_post_fielding (catch hold for flies; throw-to-1B
         # for grounders).
         self._secured_in_flight = False
+        # A fielder has the ball and a sub-animation owns the ball's position
+        # and the finish clock: the catch hold on a fly, or the throw to first
+        # on a grounder. **Deliberately not the same thing as
+        # `_secured_in_flight`**, which is how the ball got there. Gating the
+        # throw on that one is what let a grounder picked up off the ground
+        # skip straight from the pickup to the outcome banner.
+        self._post_fielding = False
         self._inflight_caught_at_ms = None
         self._inflight_catch_pos = None
         # Throw-to-1B schedule (used only for grounder intercepts). The
@@ -1549,6 +1635,9 @@ class HitAnimation:
         self._ball_px_per_ft = FT_TO_PX_X
         self._bounces = []
         self._bounces_end_ms = 0.0
+        # A ball that struck the fence above the grass, falling down the
+        # face: (height_px, duration_ms). See `_begin_wall_drop`.
+        self._wall_drop = None
         self._bounces_completed = 0
         # Per-frame cache for _forecast_ball.
         self._forecast = None
@@ -1579,9 +1668,21 @@ class HitAnimation:
             pos=list(FIELDER_HOMES[role]),
             target=FIELDER_HOMES[role],
             sway_phase=random.uniform(0, math.tau),
-            reaction_delay_s=random.uniform(REACTION_DELAY_MIN_S, REACTION_DELAY_MAX_S)
+            # The profile moves the *base draw*; ROLE_REACTION_BIAS_S is not
+            # scaled. That bias is recovery from a follow-through and a
+            # catcher's crouch — a fact about the position, not about skill —
+            # and scaling through it drives `break_delay_s` (which
+            # __post_init__ derives by subtracting it) toward zero, i.e. a
+            # pitcher breaking for first before contact.
+            reaction_delay_s=random.uniform(self.defense.reaction_min_s,
+                                            self.defense.reaction_max_s)
                 + ROLE_REACTION_BIAS_S.get(role, 0.0),
-            max_speed=FIELDER_SPRINT_FT_S * random.uniform(0.78, 1.22),
+            # The profile moves the centre of the speed distribution; the
+            # jitter keeps its shape. Widening the jitter to express the
+            # setting is what COVER_ROLE_PRIORITY exists to prevent — it is a
+            # strict list precisely because speed jitter was flipping an ETA
+            # race.
+            max_speed=self.defense.sprint_fts * random.uniform(0.78, 1.22),
             accel_time_s=FIELDER_ACCEL_TIME_S * random.uniform(0.7, 1.35),
             decel_radius_px=FIELDER_DECEL_RADIUS_PX * random.uniform(0.65, 1.4),
         ) for role in ROLES}
@@ -1614,6 +1715,36 @@ class HitAnimation:
         # at the mound snare it two frames later. See
         # PITCHER_CLEAN_FIELD_PROB.
         self._pitcher_fields_clean = self._roll_pitcher_clean_field()
+
+        # Misplay state. Rolled once per batted ball, at the moment a fielder
+        # first reaches the ball, and latched — a coin flipped every frame
+        # would let a fielder who muffed it snare it two frames later, which
+        # is the same reasoning `_roll_pitcher_clean_field` gives.
+        #
+        # It cannot be rolled here in __init__ like the pitcher's is, because
+        # the probability depends on how far the fielder had to range, which
+        # does not exist until somebody gets there.
+        self._misplay_rolled = False
+        self._misplay_kind = None          # None | "BOBBLE" | "THROUGH" | "MUFF"
+        self._misplay_s = 0.0              # a bobble's cost, seconds on release
+        self._misplay_role = None
+        # Fielders who have already had their chance at this ball. A beaten
+        # fielder is filtered out of the intercept pool for the rest of the
+        # play, exactly as the pitcher is when they lose their clean-fielding
+        # roll — otherwise they re-intercept on the very next frame.
+        self._beaten_roles = set()
+        # Ball on the grass after a muff: the earliest the fielder can pick it
+        # back up. Those seconds flow into `_secured_at_ms` and are spent by
+        # `extra_bases`, so a drop costs what it should.
+        self._misplay_recovered_at_ms = 0.0
+        self.is_error = False
+        self.error_bases = 1
+        # The presentation of the above: who wears the "!" and when it
+        # popped. Latched by `_charge_error`, the one place `is_error` is
+        # set, so the mark and the banner cannot disagree about whether
+        # there was an error or about whose it was.
+        self._error_role = None
+        self._error_marked_at_ms = None
 
         # Per-frame ball state.
         self._ball = HOME
@@ -1663,6 +1794,7 @@ class HitAnimation:
         # Lazy-init fonts on first draw that needs them.
         self._font = None
         self._prompt_font = None
+        self._error_font = None
 
     # ---- The real-time boundary -----------------------------------------
     #
@@ -1763,11 +1895,11 @@ class HitAnimation:
                 q = max(0.0, min(1.0, self.quality))
                 lo, hi = FLY_HIT_PEAK_RANGE
                 self._hit_peak = lo + q * (hi - lo)
-                # Wall candidates need a lower peak so the ball is *below*
-                # the wall top at the crossing point — otherwise the
-                # trajectory would clear the wall (HR territory).
-                if self._is_wall_candidate:
-                    self._hit_peak *= WALL_HIT_FLY_PEAK_SCALE
+                # A wall candidate's peak is capped further down, once the
+                # flight's pacing is known — see `_wall_impact_peak_cap`.
+                # It cannot be done here: the height at the fence depends
+                # on when the ball gets there, and that is not settled
+                # until `_flight_end_speed_ratio` is.
         elif self.shape == "LINER":
             self._hit_peak = random.uniform(*LINER_PEAK_RANGE)
         elif self.shape == "POP_UP":
@@ -1839,6 +1971,16 @@ class HitAnimation:
         # runs inside `_assign_in_play_targets` below and has to be timing
         # the same flight the viewer sees.
         self._flight_end_speed_ratio = self._landing_speed_ratio()
+
+        # A wall candidate is aimed *past* the fence, so how high the ball
+        # is when it actually reaches the fence is a leftover of the arc
+        # unless something asks for it. Ask: cap the peak at the value
+        # that has the ball strike the face rather than clear it. This has
+        # to run here rather than beside the peak, because the crossing
+        # phase is a question about the flight's pacing and the line above
+        # is where that is settled.
+        if self._is_wall_candidate:
+            self._hit_peak = min(self._hit_peak, self._wall_impact_peak_cap())
 
         # Route every plausible defender to their best intercept point on
         # the ball's path. The fielder whose intercept timing best matches
@@ -2094,11 +2236,17 @@ class HitAnimation:
             # catcher on pop-ups in fair territory. Including P/C in the
             # pool sent the pitcher chasing every centered pop-up, which
             # they almost never field in reality.
-            return ["1B", "2B", "SS", "3B"]
+            pool = ["1B", "2B", "SS", "3B"]
         else:
             pool = list(ROLES)
-        if not self._pitcher_fields_clean:
+        if not self._pitcher_fields_clean and "P" in pool:
             pool.remove("P")
+        # A fielder the ball has already gone through has had their chance.
+        # Without this they re-intercept on the next frame and the
+        # through-ball never happens. Same mechanism as the pitcher's roll
+        # above, applied at the moment of the reach rather than at setup.
+        if self._beaten_roles:
+            pool = [r for r in pool if r not in self._beaten_roles]
         return pool
 
     def _path_intercept(self, fielder):
@@ -2966,6 +3114,32 @@ class HitAnimation:
         """When the ball reaches path fraction `s`, as a time fraction."""
         return _decel_time_fraction(s, self._flight_end_speed_ratio)
 
+    def _wall_impact_peak_cap(self):
+        """The largest arc peak that still strikes the fence *face*.
+
+        The ball reaches the fence at path fraction `wall_r / dist`, which
+        the flight's deceleration puts at an earlier *phase* — and the
+        arc's height is keyed to the phase. Inverting `peak · sin(π·phase)`
+        for the peak at WALL_IMPACT_MAX_HEIGHT_FRAC of the fence height is
+        the whole calculation.
+
+        A crossing so late that the ball is already on the ground there
+        needs no cap and would divide by ~0, so it returns the peak
+        unchanged.
+        """
+        dx = self._hit_end[0] - HOME[0]
+        dy_math = HOME[1] - self._hit_end[1]
+        dist_px = math.hypot(dx, dy_math)
+        if dist_px <= 1e-9:
+            return self._hit_peak
+        wall_px = _wall_r_at(math.atan2(dy_math, dx))
+        phase = self._flight_time_fraction(min(1.0, wall_px / dist_px))
+        lift_per_peak = math.sin(math.pi * phase)
+        if lift_per_peak <= 1e-6:
+            return self._hit_peak
+        target_px = WALL_IMPACT_MAX_HEIGHT_FRAC * WALL_HEIGHT_FT * FT_TO_PX_Y
+        return target_px / lift_per_peak
+
     def _fielded_ft(self):
         """Where the ball was actually gloved, in feet from home.
 
@@ -3005,10 +3179,40 @@ class HitAnimation:
         self._bounces = []
         self._bounces_end_ms = 0.0
         self._bounces_completed = 0
+        self._wall_drop = None
         if self._ground_path is not None:
             self._ground_path = ground_roll.GroundPath(
                 speed_fts=0.0, hops=(), final_retention=1.0,
                 grass_decel_ft_s2=self._ground_path.grass_decel_ft_s2)
+
+    def _begin_wall_drop(self, height_px):
+        """Let a ball that struck the fence fall down the face.
+
+        It hits the wall several feet up (bounded by
+        WALL_IMPACT_MAX_HEIGHT_FRAC) and has to get to the grass. Planting
+        it there in the same frame is a jump downward at the exact moment
+        the viewer is watching the carom — the last of the reported
+        abruptness, and the part that survives even once the ball is no
+        longer being drawn over the fence. It falls the way a dropped ball
+        falls, free fall from rest over `sqrt(2h/g)`, while the rebound
+        carries it back out into the field. That is what a carom looks
+        like.
+
+        Vertical only. The horizontal is already the rebound
+        `_maybe_trigger_in_flight_wall_impact` set, and `_bounces_end_ms`
+        is set to the fall so `_integrate_ball`'s existing airborne gate
+        suspends friction for exactly as long as the ball is off the
+        ground — the module's rule that grass only brakes a ball that is
+        touching it. `_end_hopping` has already emptied the hop schedule,
+        so the single contact that gate releases carries a retention of
+        1.0 and changes nothing.
+        """
+        height_ft = max(0.0, height_px) / FT_TO_PX_Y
+        if height_ft <= 1e-6:
+            return
+        fall_ms = self._anim_ms(math.sqrt(2.0 * height_ft / ball_flight.G_FT_S2))
+        self._wall_drop = (height_px, fall_ms)
+        self._bounces_end_ms = fall_ms
 
     def _hops_completed(self, tau_ms):
         """Ground contacts already made at `tau_ms` since landing."""
@@ -3065,6 +3269,12 @@ class HitAnimation:
         rebound speed. After the last hop, the ball is rolling on the
         ground and lift is 0.
         """
+        if self._wall_drop is not None:
+            height_px, fall_ms = self._wall_drop
+            if tau_ms >= fall_ms:
+                return 0.0
+            # Free fall from rest: h − ½gt², with T² = 2h/g.
+            return height_px * (1.0 - (tau_ms / fall_ms) ** 2)
         if tau_ms >= self._bounces_end_ms:
             return 0.0
         for t_start, t_dur, h, _r in self._bounces:
@@ -3267,10 +3477,27 @@ class HitAnimation:
         if shadow_r < wall_r:
             return
 
-        # Impact point: the wall edge along this angle, pulled in by
-        # BALL_WALL_MARGIN_PX so the ball renders flush with the wall
+        # How far up the face the ball hit. Bounded by
+        # WALL_IMPACT_MAX_HEIGHT_FRAC, and read off the frame rather than
+        # re-derived, so the drop below starts from exactly where the ball
+        # was last drawn.
+        impact_lift_px = max(0.0, self._ball_shadow[1] - self._ball[1])
+
+        # Impact point: the wall edge along this angle, pulled in to the
+        # line a live ball is held at so the ball renders flush with the
         # face rather than embedded in it.
-        impact_r = wall_r - BALL_WALL_MARGIN_PX
+        #
+        # That line is BALL_WALL_LIMIT_NORM, in normalized-ellipse units.
+        # This used to subtract BALL_WALL_MARGIN_PX from the *radius*,
+        # which is the same line only at dead centre field: the ellipse's
+        # radius runs 440–611 px, so 8 px off it is a smaller normalized
+        # bite than 8 px off the 440 the constant normalizes against, and
+        # the impact point therefore landed *outside* the boundary at
+        # every other angle. `_point_outside_wall` then called it out of
+        # the park and `_ball_behind_wall` hid the ball on the very frame
+        # it struck the wall, on every carom — which is the other half of
+        # "it clips and abruptly appears back in play".
+        impact_r = wall_r * BALL_WALL_LIMIT_NORM
         impact_x = HOME[0] + impact_r * math.cos(angle)
         impact_y = HOME[1] - impact_r * math.sin(angle)
         self._hit_end = (impact_x, impact_y)
@@ -3293,15 +3520,19 @@ class HitAnimation:
         # down at the wall then settles dead" bug. Clearing the schedule
         # lets the ball roll back cleanly from the impact point.
         self._end_hopping()
+        # ...but it does still have to *come down*. Must follow
+        # `_end_hopping`, which clears this along with the hops.
+        self._begin_wall_drop(impact_lift_px)
 
         self._wall_hit = True
         self._wall_hit_in_flight = True
 
         # Render ball at the wall this frame too (otherwise the impact
         # frame briefly shows the ball past the wall before the next
-        # frame snaps it back).
-        self._ball = (impact_x, impact_y)
+        # frame snaps it back). The shadow is at the foot of the fence;
+        # the ball is still up the face, where it just hit.
         self._ball_shadow = (impact_x, impact_y)
+        self._ball = (impact_x, impact_y - impact_lift_px)
 
         # End the flight phase now. Next frame's `in_flight` check is
         # `elapsed <= self.duration_ms`; setting duration_ms to the
@@ -3391,7 +3622,18 @@ class HitAnimation:
             if self._range_ft(f, (sx, sy)) > self._max_intercept_dist(f):
                 continue
             if math.hypot(sx - f.pos[0], sy - f.pos[1]) < INTERCEPT_REACH_PX:
-                self._trigger_in_flight_intercept(role, (bx, by))
+                # Reaching the ball is no longer the same as fielding it.
+                # Rolled here rather than at setup — which is how the
+                # pitcher's clean-fielding roll works — so the fielder is
+                # seen breaking for the ball and failing, instead of never
+                # routing to it at all.
+                kind = self._roll_misplay(f, in_air=(self.shape != "GROUNDER"))
+                if kind == "THROUGH":
+                    self._trigger_through(role, (bx, by))
+                elif kind == "MUFF":
+                    self._trigger_muff(role, (bx, by))
+                else:
+                    self._trigger_in_flight_intercept(role, (bx, by))
                 return True
         return False
 
@@ -3432,8 +3674,12 @@ class HitAnimation:
         # it already measures the distance to first itself. Modelling a
         # carry as a throw would turn every unassisted play into an easy
         # out.
-        throw_fts = (FIELDER_SPRINT_FT_S if unassisted
-                     else infield_timing.THROW_EFFECTIVE_FTS)
+        # Both branches come off the profile. Reading the module constant for
+        # the unassisted carry would let a Gold Glove first baseman sprint at
+        # 29 ft/s and then carry the ball to the bag at 27 — two models of one
+        # fielder's legs.
+        throw_fts = (self.defense.sprint_fts if unassisted
+                     else self.defense.throw_fts)
 
         # How long the ball actually took to reach the glove. For an
         # in-flight intercept the ball's own travel time is right, because
@@ -3463,13 +3709,148 @@ class HitAnimation:
             sprint_fts=self._runner_sprint_fts(),
             difficulty_offset_s=self._difficulty_time_offset_s(),
             effective_throw_fts=throw_fts,
+            release_scale=self.defense.release_scale,
+            # A bobble the roll at the reach already decided, in seconds.
+            # It lands on the release clock because glove contact to release
+            # is what a bobble delays, and because `defense_s` has to stay
+            # equal to ball + release + throw. It also means the throw the
+            # player watches is scheduled off the delayed release, so the
+            # picture and the verdict cannot disagree.
+            misplay_s=self._misplay_s,
             rng=random,
         )
         self.play_timing = timing
-        if not infield_timing.roll_is_out(timing):
+        # One draw, three outcomes. The window [p_out, p_out_clean) is exactly
+        # the set of plays that would have been outs without the bobble and
+        # were not with it — the official scorer's rule, arrived at rather
+        # than judged. With no bobble the window is empty and this is the old
+        # `roll_is_out`.
+        verdict = infield_timing.roll_verdict(timing)
+        if verdict == "ERROR":
+            # The bobble is what the window [p_out, p_out_clean) is made of,
+            # so the fielder charged is the one who rolled it.
+            self._charge_error(self._misplay_role or catcher.role)
+            self.error_bases = 1
+            self.classified_outcome = "REACHED ON ERROR"
+        elif verdict == "HIT":
             # Beaten out. The throw still plays — the runner just gets
             # there first, which is the whole point of showing it.
             self.classified_outcome = "SINGLE"
+        return timing
+
+    def _begin_infield_play(self, catcher_role):
+        """An infielder has the ball. Route the bag, run the clocks, and
+        schedule the throw the player is about to watch.
+
+        **Shared by both ways a fielder ends up holding a grounder**, and
+        that is the whole point of it being a method. It used to live inline
+        in `_trigger_in_flight_intercept`, which meant only a ball cut off
+        *in the air* ever got a throw drawn. A grounder secured after it had
+        already landed — the fielder charging a slow roller and picking it
+        up, which is the most ordinary infield play there is — ran the race
+        in `_resolve_extra_bases` and then jumped straight to the banner:
+        the fielder reached the ball and GROUNDOUT appeared, with no throw
+        and nobody covering first.
+
+        The two paths differ only in how the ball got to the glove, which is
+        `_resolve_ground_ball`'s business (it reads `_secured_at_ms` for
+        exactly that) and not the throw's. Anything else they disagreed
+        about would be two models of one play — the fault this file has been
+        pulled apart to remove several times already. `unassisted` is the
+        one that had actually drifted: the ground path hard-coded it False,
+        so a first baseman who picked the ball up beside the bag was modelled
+        as throwing it to somebody instead of stepping on the base, and
+        `_resolve_ground_ball` explicitly warns that costs a throw's speed
+        against a carry's.
+
+        Returns the `infield_timing` result, which is also parked on
+        `self.play_timing`.
+        """
+        catcher = self.fielders[catcher_role]
+        # Provisional. The real verdict is a race between the throw and
+        # the runner, and it cannot be settled until the branch below
+        # decides whether this is a throw or an unassisted carry — the
+        # two have very different clocks. See `_resolve_ground_ball`.
+        self.classified_outcome = "GROUNDOUT"
+        self._go_first_base_pos = FIRST_BASE_BAG_POS
+        # Re-resolve the bag assignment now that we know who actually
+        # came up with the ball — it may not be who we expected during
+        # flight, and the fielder holding the ball is never the cover.
+        # The estimate the deadline was running on is now a fact.
+        self._fielded_at_ms = self._elapsed
+        cover_role, cover_eta_ms = self._route_first_base_cover(catcher_role)
+        carry_ms = self._eta_to_point(catcher, FIRST_BASE_BAG_POS)
+        unassisted = cover_role is None or carry_ms <= cover_eta_ms
+
+        # Run the clocks *before* scheduling the sub-animation, so the
+        # throw the player watches is the throw the verdict was computed
+        # from — the release the model charged and the flight time it
+        # measured. Previously the schedule was fixed at 280/760 ms and
+        # the timing was resolved afterwards, so a throw from deep in
+        # the hole looked identical to one from on top of the bag while
+        # the model knew they were 0.4 s apart.
+        timing = self._resolve_ground_ball(catcher, unassisted=unassisted)
+
+        # From here the throw (or the carry) owns ball rendering and the
+        # finish clock, whichever way the ball reached the glove.
+        self._post_fielding = True
+
+        if unassisted:
+            # Unassisted: the fielder is closer to the bag than anyone
+            # they'd throw to, so they carry the ball over and step on
+            # it. `_go_throw_start_ms = None` is the flag the renderer
+            # uses to skip the throw arc and pin the ball to the
+            # fielder as they cross to the base.
+            catcher.target = FIRST_BASE_BAG_POS
+            # Restore full sprint speed (the primary was paced for the
+            # in-flight catch) and a tight decel zone so they run hard
+            # for the bag and land on it.
+            catcher.max_speed = catcher.base_max_speed
+            catcher.decel_radius_px = SECURE_RADIUS_PX
+            self._go_throw_start_ms = None
+            self._go_throw_arrive_ms = None
+            # Time the done-frame to the actual run from the catch
+            # position to the bag (plus a brief step-on-base hold). A
+            # fixed window would either leave them short of the bag on
+            # long carries or stall the animation on short ones.
+            run_ms = self._travel_ms(catcher, catcher.pos, FIRST_BASE_BAG_POS)
+            self._go_done_ms = (self._elapsed + run_ms
+                                + self._anim_ms(GO_CATCH_HOLD_S))
+            # Nobody is receiving a throw, so wave the cover man off
+            # rather than have two defenders converge on the bag.
+            cover = self.fielders.get(cover_role)
+            if cover is not None:
+                cover.target = cover.home_pos
+                cover.decel_radius_px = FIELDER_DECEL_RADIUS_PX
+                self._lean_excluded.discard(cover_role)
+            self._cover_role = None
+        else:
+            # Throw to first — but not before the bag is covered.
+            # Delaying the *release* (rather than stretching the throw,
+            # which would read as a lob) makes the ball and the cover
+            # man arrive together, so the throw always has someone to
+            # arrive to. Capped by GO_COVER_WAIT_MAX_S so a badly
+            # out-of-position cover can't stall the animation; the
+            # fielder just holds the ball a beat, which is exactly what
+            # an infielder does when first isn't covered yet.
+            #
+            # The release and the flight come from the timing that
+            # decided the play, so the throw on screen is the throw in
+            # the model. GO_FIELD_HOLD_S survives only as the floor on
+            # the gather — a fielder must be seen to have the ball
+            # before it leaves — and GO_THROW_S as the fallback if the
+            # model produced no flight (a fielder standing on the bag).
+            self._go_throw_ms = (self._anim_ms(timing.throw_flight_s)
+                                 if timing.throw_flight_s > 0
+                                 else self._anim_ms(GO_THROW_S))
+            release_ms = self._anim_ms(max(GO_FIELD_HOLD_S, timing.release_s))
+            wait_ms = min(max(0.0, cover_eta_ms - self._go_throw_ms),
+                          self._anim_ms(GO_COVER_WAIT_MAX_S))
+            self._go_throw_start_ms = (self._elapsed
+                                       + max(release_ms, wait_ms))
+            self._go_throw_arrive_ms = self._go_throw_start_ms + self._go_throw_ms
+            self._go_done_ms = (self._go_throw_arrive_ms
+                                + self._anim_ms(GO_CATCH_HOLD_S))
         return timing
 
     def _resolve_extra_bases(self):
@@ -3508,11 +3889,7 @@ class HitAnimation:
         if (self.shape == "GROUNDER"
                 and self._primary_role not in OUTFIELD_ROLES
                 and self._fielded_ft() <= INFIELD_PLAY_MAX_FT):
-            fielder = self.fielders[self._primary_role]
-            timing = self._resolve_ground_ball(fielder, unassisted=False)
-            if self.classified_outcome is None:
-                self.classified_outcome = "GROUNDOUT"
-            return timing
+            return self._begin_infield_play(self._primary_role)
 
         secured_ft = _to_field_ft(self._ball)
         retrieved_at_s = self._secured_at_ms / (1000.0 * self.time_scale)
@@ -3538,9 +3915,19 @@ class HitAnimation:
             sprint_fts=self._runner_sprint_fts(),
             difficulty_offset_s=self._difficulty_time_offset_s(),
             min_base=min_base,
+            effective_fts=self.defense.throw_fts,
+            release_scale=self.defense.release_scale,
             rng=random,
         )
-        self.classified_outcome = {1: "SINGLE", 2: "DOUBLE", 3: "TRIPLE"}[base]
+        if self.is_error:
+            # The batter reached on the misplay. How far they got is the
+            # ordinary base race — a drop in shallow left is a one-base error
+            # and one at the track is a two-base error, out of the same model
+            # that decides doubles, with no new distance thresholds.
+            self.error_bases = base
+            self.classified_outcome = "REACHED ON ERROR"
+        else:
+            self.classified_outcome = {1: "SINGLE", 2: "DOUBLE", 3: "TRIPLE"}[base]
         # Recorded as the play's margin when no infield race ran — this is
         # the race that decided the outcome, so it is the honest thing to
         # put in `play_margin_s`.
@@ -3580,6 +3967,185 @@ class HitAnimation:
             return 0.0
         return (modifier - 1.0) * DIFFICULTY_SECONDS_PER_MODIFIER
 
+    def _roll_misplay(self, fielder, in_air):
+        """Did this fielder handle the ball cleanly? Rolled once, then latched.
+
+        `in_air` means the ball was going to be *caught* for an out, as
+        opposed to fielded off the ground — which is what decides whether a
+        misplay can be a through-ball at all. A ball does not go "through" a
+        fielder who was going to catch it; that is a drop.
+
+        Returns None (clean), "BOBBLE", "THROUGH" or "MUFF".
+        """
+        if self._misplay_rolled:
+            return None
+        self._misplay_rolled = True
+        catch_ft = _to_field_ft(fielder.pos)
+        home_ft = _to_field_ft(fielder.home_pos)
+        kind = defense_model.roll_misplay(
+            self.defense, random,
+            ranging_ft=math.dist(catch_ft, home_ft),
+            ev_mph=self.exit_velocity_mph,
+            is_charging=math.hypot(*catch_ft) < math.hypot(*home_ft) - 2.0,
+            in_air=in_air,
+        )
+        if kind is not None:
+            self._misplay_kind = kind
+            self._misplay_role = fielder.role
+            if kind == "BOBBLE":
+                self._misplay_s = defense_model.misplay_cost_s(random)
+        return kind
+
+    def _charge_error(self, role):
+        """Charge the play as an error, and pop the "!" over the fielder.
+
+        Every site that decides there was an error goes through here, for
+        the same reason `spray_deg` is resolved once: the mark on screen and
+        the outcome in the record are then the same fact rendered twice
+        rather than two things that could drift apart. `role` is who
+        misplayed the ball, which the play may well move on from — a ball
+        through the shortstop is retrieved by the left fielder, who becomes
+        the primary and did nothing wrong.
+
+        The mark's clock starts now rather than at the banner, because the
+        moment worth seeing is the misplay itself: the fielder gets there,
+        and the ball does not stay in the glove.
+        """
+        self.is_error = True
+        self._error_role = role
+        self._error_marked_at_ms = self._elapsed
+
+    def _clean_play_p_out(self, fielder):
+        """What this play would have been had the fielder handled it cleanly.
+
+        The counterfactual half of the scorer's rule. For a ball that went
+        through a fielder there is no `PlayTiming` to read a `p_out_clean`
+        off — no play happened — so it is computed here from the same inputs
+        the real race would have used, with no misplay on the clock.
+        """
+        catch_ft = _to_field_ft(fielder.pos)
+        home_ft = _to_field_ft(fielder.home_pos)
+        timing = infield_timing.resolve_infield_play(
+            ev_mph=self.exit_velocity_mph,
+            fielder_xy_ft=catch_ft,
+            ball_distance_ft=math.hypot(*catch_ft),
+            ranging_ft=math.dist(catch_ft, home_ft),
+            is_charging=math.hypot(*catch_ft) < math.hypot(*home_ft) - 2.0,
+            handedness=self._batter_handedness(),
+            sprint_fts=self._runner_sprint_fts(),
+            difficulty_offset_s=self._difficulty_time_offset_s(),
+            effective_throw_fts=self.defense.throw_fts,
+            release_scale=self.defense.release_scale,
+            rng=None,          # the counterfactual must not add its own noise
+        )
+        return timing.p_out
+
+    def _trigger_through(self, role, ball_pos):
+        """The ball goes through the fielder and on into the outfield.
+
+        The third state, and until now the model had only two: a ball was
+        either untouched (a hit) or touched (a race). Real baseball has
+        "reached, and still through", and §8 of
+        docs/infield-timing-refactor.md names it as the missing 2.7 points of
+        ground-ball hit rate: "our fielders execute a clean route on every
+        ball they can reach; MLB's do not."
+
+        The play does *not* end here. The ball keeps most of its pace, the
+        beaten fielder is latched out of the pool, and the outfield runs it
+        down — which needs no new routing, because `_pick_retrieval_role`
+        already sends the responsible outfielder as a backup from the first
+        frame.
+        """
+        f = self.fielders[role]
+        self._beaten_roles.add(role)
+        self._hit_end = (f.pos[0], f.pos[1])
+        self._init_ball_on_ground()
+        # How much it kept says what happened: a ball that kept everything
+        # went clean under the glove and did not turn; one that lost half its
+        # pace clearly hit something, and should have deflected. Coupling the
+        # bearing to the speed lost is the physical statement, and it has a
+        # consequence — a deflected ball is slower and easier to run down, so
+        # it is more often a single than a gapper.
+        retention = defense_model.through_retention(random)
+        deflect = (1.0 - retention) * random.uniform(-1.2, 1.2)
+        # The ball keeps a fraction of the speed it *actually had*, not of the
+        # nominal landing speed `_init_ball_on_ground` builds for the shape.
+        # A grounder is intercepted partway along its path, where it is still
+        # moving far faster than it would be when it finally settles; scaling
+        # the landing speed instead left the ball dead 16 ft past the fielder
+        # (median, over 400 sandlot grounders), so they simply turned round
+        # and picked it up — 28 of 35 through-balls were retrieved by the very
+        # fielder they went through, and a third of them were still outs.
+        #
+        # The live speed comes off `infield_timing`'s retention curve rather
+        # than a new estimate, because that is the same curve the infield race
+        # times the ball with: the ball that beats the shortstop has to be the
+        # ball the verdict was computed against.
+        ev = self.exit_velocity_mph
+        live_fts = (ev * infield_timing.MPH_TO_FTS
+                    * infield_timing.ground_speed_retention(ev))
+        speed_px_ms = self._fts_to_px_ms(
+            max(infield_timing.MIN_GROUND_SPEED_FTS, live_fts * retention))
+        vx, vy = self._ball_v
+        mag = math.hypot(vx, vy)
+        if mag > 1e-9:
+            vx, vy = vx / mag * speed_px_ms, vy / mag * speed_px_ms
+        self._ball_v = [
+            vx * math.cos(deflect) - vy * math.sin(deflect),
+            vx * math.sin(deflect) + vy * math.cos(deflect),
+        ]
+        self._ball = self._ball_shadow = self._hit_end
+        # End the flight here, so the next frame takes the ball-on-ground
+        # path — the same idiom `_maybe_trigger_in_flight_wall_impact` uses.
+        # The play is not over; the ball is loose in the outfield.
+        self.duration_ms = self._elapsed
+        # The ball is past them: they have to turn and go after it, and
+        # cannot re-secure it on the very next frame just by standing there.
+        self._misplay_recovered_at_ms = (
+            self._elapsed + self._anim_ms(THROUGH_TURN_S))
+        # Charged as an error exactly when the clean play would have been an
+        # out — the same rule `roll_verdict` applies to a bobble, written out
+        # here because no race ran. It gives the right baseball answer without
+        # being asked for: a ball through a diving fielder in the hole was a
+        # bang-bang play anyway and is scored a hit, while the same ball
+        # through a fielder standing still on a routine hop is an error.
+        if role in OUTFIELD_ROLES or random.random() < self._clean_play_p_out(f):
+            self._charge_error(role)
+
+    def _trigger_muff(self, role, ball_pos):
+        """Off the glove. The ball is on the grass at the fielder's feet.
+
+        The play stays live: an error is a *fielding* event, and the races
+        already in this class decide what it costs. Nothing here decides an
+        out. A drop in shallow left stays a one-base error and one at the
+        track becomes a two-base error, out of the same `extra_bases` model
+        that already decides doubles — no new distance thresholds.
+        """
+        f = self.fielders[role]
+        self._hit_end = (f.pos[0], f.pos[1])
+        self._init_ball_on_ground()
+        # The glove takes nearly all of it, so the ball squirts a few feet
+        # and dies. A small bearing jitter so it reads as a muff rather than
+        # a teleport, and so the fielder has to take a step to it.
+        theta = random.uniform(-0.7, 0.7)
+        vx, vy = self._ball_v
+        self._ball_v = [
+            (vx * math.cos(theta) - vy * math.sin(theta)) * defense_model.MUFF_RETENTION,
+            (vx * math.sin(theta) + vy * math.cos(theta)) * defense_model.MUFF_RETENTION,
+        ]
+        self._ball = self._ball_shadow = self._hit_end
+        self._primary_role = role
+        self.duration_ms = self._elapsed
+        # What stops it being re-secured on the very next frame, and the one
+        # place the drop's cost is charged. These seconds flow into
+        # `_secured_at_ms` -> `retrieved_at_s` -> `extra_bases.final_base`.
+        self._misplay_recovered_at_ms = (
+            self._elapsed + self._anim_ms(self.defense.muff_recovery_s))
+        # No counterfactual roll needed: the fielder was going to catch it,
+        # so the clean play was a certain out and the drop is what the batter
+        # reached on.
+        self._charge_error(role)
+
     def _trigger_in_flight_intercept(self, catcher_role, catch_pos):
         """A fielder reached the ball pre-landing. Switch to the
         appropriate finishing sub-animation: throw-to-1B for grounders
@@ -3587,6 +4153,7 @@ class HitAnimation:
         """
         self._secured = True
         self._secured_in_flight = True
+        self._post_fielding = True
         self._secured_at_ms = self._elapsed
         # The catcher becomes the primary so subsequent draw logic shows
         # them holding the ball.
@@ -3599,86 +4166,7 @@ class HitAnimation:
         self._ball_shadow = self._inflight_catch_pos
 
         if self.shape == "GROUNDER":
-            # Provisional. The real verdict is a race between the throw and
-            # the runner, and it cannot be settled until the branch below
-            # decides whether this is a throw or an unassisted carry — the
-            # two have very different clocks. See `_resolve_ground_ball`.
-            self.classified_outcome = "GROUNDOUT"
-            self._go_first_base_pos = FIRST_BASE_BAG_POS
-            # Re-resolve the bag assignment now that we know who actually
-            # came up with the ball — it may not be who we expected during
-            # flight, and the fielder holding the ball is never the cover.
-            # The estimate the deadline was running on is now a fact.
-            self._fielded_at_ms = self._elapsed
-            cover_role, cover_eta_ms = self._route_first_base_cover(catcher_role)
-            carry_ms = self._eta_to_point(catcher, FIRST_BASE_BAG_POS)
-            unassisted = cover_role is None or carry_ms <= cover_eta_ms
-
-            # Run the clocks *before* scheduling the sub-animation, so the
-            # throw the player watches is the throw the verdict was computed
-            # from — the release the model charged and the flight time it
-            # measured. Previously the schedule was fixed at 280/760 ms and
-            # the timing was resolved afterwards, so a throw from deep in
-            # the hole looked identical to one from on top of the bag while
-            # the model knew they were 0.4 s apart.
-            timing = self._resolve_ground_ball(catcher, unassisted=unassisted)
-
-            if unassisted:
-                # Unassisted: the fielder is closer to the bag than anyone
-                # they'd throw to, so they carry the ball over and step on
-                # it. `_go_throw_start_ms = None` is the flag the renderer
-                # uses to skip the throw arc and pin the ball to the
-                # fielder as they cross to the base.
-                catcher.target = FIRST_BASE_BAG_POS
-                # Restore full sprint speed (the primary was paced for the
-                # in-flight catch) and a tight decel zone so they run hard
-                # for the bag and land on it.
-                catcher.max_speed = catcher.base_max_speed
-                catcher.decel_radius_px = SECURE_RADIUS_PX
-                self._go_throw_start_ms = None
-                self._go_throw_arrive_ms = None
-                # Time the done-frame to the actual run from the catch
-                # position to the bag (plus a brief step-on-base hold). A
-                # fixed window would either leave them short of the bag on
-                # long carries or stall the animation on short ones.
-                run_ms = self._travel_ms(catcher, catcher.pos, FIRST_BASE_BAG_POS)
-                self._go_done_ms = (self._elapsed + run_ms
-                                    + self._anim_ms(GO_CATCH_HOLD_S))
-                # Nobody is receiving a throw, so wave the cover man off
-                # rather than have two defenders converge on the bag.
-                cover = self.fielders.get(cover_role)
-                if cover is not None:
-                    cover.target = cover.home_pos
-                    cover.decel_radius_px = FIELDER_DECEL_RADIUS_PX
-                    self._lean_excluded.discard(cover_role)
-                self._cover_role = None
-            else:
-                # Throw to first — but not before the bag is covered.
-                # Delaying the *release* (rather than stretching the throw,
-                # which would read as a lob) makes the ball and the cover
-                # man arrive together, so the throw always has someone to
-                # arrive to. Capped by GO_COVER_WAIT_MAX_S so a badly
-                # out-of-position cover can't stall the animation; the
-                # fielder just holds the ball a beat, which is exactly what
-                # an infielder does when first isn't covered yet.
-                #
-                # The release and the flight come from the timing that
-                # decided the play, so the throw on screen is the throw in
-                # the model. GO_FIELD_HOLD_S survives only as the floor on
-                # the gather — a fielder must be seen to have the ball
-                # before it leaves — and GO_THROW_S as the fallback if the
-                # model produced no flight (a fielder standing on the bag).
-                self._go_throw_ms = (self._anim_ms(timing.throw_flight_s)
-                                     if timing.throw_flight_s > 0
-                                     else self._anim_ms(GO_THROW_S))
-                release_ms = self._anim_ms(max(GO_FIELD_HOLD_S, timing.release_s))
-                wait_ms = min(max(0.0, cover_eta_ms - self._go_throw_ms),
-                              self._anim_ms(GO_COVER_WAIT_MAX_S))
-                self._go_throw_start_ms = (self._elapsed
-                                           + max(release_ms, wait_ms))
-                self._go_throw_arrive_ms = self._go_throw_start_ms + self._go_throw_ms
-                self._go_done_ms = (self._go_throw_arrive_ms
-                                    + self._anim_ms(GO_CATCH_HOLD_S))
+            self._begin_infield_play(catcher_role)
         else:
             # A line drive caught before it lands is a LINEOUT; everything
             # else caught in the air (fly balls, pop-ups) is classified by
@@ -3704,7 +4192,7 @@ class HitAnimation:
         # diamond after a 2B catch).
         self._stand_down_non_primary(keep_at_bag=(self.shape == "GROUNDER"))
 
-    def _render_post_in_flight_catch(self, elapsed):
+    def _render_post_fielding(self, elapsed):
         """Ball rendering during the post-catch sub-animation. For
         FLYOUT, the ball is pinned to the catcher (who may still be
         decelerating into position). For GROUNDOUT, the ball stays at
@@ -3782,7 +4270,7 @@ class HitAnimation:
         #   * IN_PLAY ball lands and rolls (SINGLE/DOUBLE/TRIPLE): finish
         #     once a fielder secures it on the ground.
         #   * HOME RUN: scripted duration_ms; finish on expiry.
-        if self._secured_in_flight:
+        if self._post_fielding:
             if self._go_done_ms is not None and self._elapsed >= self._go_done_ms:
                 self.finished = True
         elif self._elapsed >= self.duration_ms:
@@ -3811,8 +4299,8 @@ class HitAnimation:
         # Post-intercept sub-animations (the in-flight catch + the throw
         # to first on a fielded grounder) own ball rendering once the
         # catch fires — bypass the standard flight/ground branches.
-        if self._secured_in_flight:
-            self._render_post_in_flight_catch(elapsed)
+        if self._post_fielding:
+            self._render_post_fielding(elapsed)
             return
 
         in_flight = elapsed <= self.duration_ms
@@ -3857,13 +4345,18 @@ class HitAnimation:
                     and not self._secured
                     and not self._is_wall_candidate):
                 if self._check_in_flight_intercept():
-                    # Intercept fired this frame — the post-catch flow
-                    # owns rendering and fielder targets from here on.
-                    # Returning short-circuits the in-flight primary
-                    # motion block below, which would otherwise reset
-                    # the catcher's target to self._hit_end and pull
-                    # the 1B away from the bag we just routed them to.
-                    self._render_post_in_flight_catch(elapsed)
+                    # Something happened at the ball this frame. Returning
+                    # short-circuits the in-flight primary motion block
+                    # below, which would otherwise reset the catcher's
+                    # target to self._hit_end and pull the 1B away from the
+                    # bag we just routed them to.
+                    #
+                    # Only a *catch* hands rendering to the post-catch flow.
+                    # A ball that went through the fielder or off their glove
+                    # is loose: its triggers truncated the flight, so the
+                    # next frame takes the ball-on-ground path instead.
+                    if self._secured_in_flight:
+                        self._render_post_fielding(elapsed)
                     return
         elif self._needs_secure:
             # SINGLE/DOUBLE/TRIPLE: stateful ball-on-ground physics — linear
@@ -4033,21 +4526,23 @@ class HitAnimation:
             # its arc.
             in_reach = (self._ball_shadow[1] - self._ball[1]
                         <= GLOVE_REACH_FT * FT_TO_PX_Y)
-            if closest_dist < SECURE_RADIUS_PX and in_reach:
+            if (closest_dist < SECURE_RADIUS_PX and in_reach
+                    and self._elapsed >= self._misplay_recovered_at_ms):
                 self._secured = True
                 self._secured_at_ms = self._elapsed
                 if closest_role is not None and closest_role != self._primary_role:
                     self._primary_role = closest_role
-                # Stand down every other defender. On this branch
-                # `self.finished` flips on the next update tick, so
-                # there's only one frame left to render — but without
-                # this reset that final frame still shows the pitcher
-                # / cutoff IF / unused secondaries one stride into
-                # their stale targets, which reads as them not noticing
-                # the play is over.
-                self._stand_down_non_primary(keep_at_bag=False)
+                # Resolve *before* standing anyone down. On an infield
+                # grounder this schedules the throw and names the cover
+                # man, and `keep_at_bag` then has to spare them — sending
+                # the whole defense home first left the throw arcing to an
+                # empty bag. Everyone else is reset because without it the
+                # remaining frames still show the pitcher / cutoff IF /
+                # unused secondaries running at stale targets, which reads
+                # as them not noticing the play is over.
                 if self.outcome == "IN_PLAY" and self.classified_outcome is None:
                     self._resolve_extra_bases()
+                self._stand_down_non_primary(keep_at_bag=self._post_fielding)
 
     @property
     def fielder_role(self):
@@ -4124,6 +4619,57 @@ class HitAnimation:
         gx = int(x + 6 * bdx / bd)
         gy = int(y + 6 * bdy / bd)
         pygame.draw.circle(screen, GLOVE_COLOR, (gx, gy), 3)
+
+        if fielder.role == self._error_role:
+            self._draw_error_mark(screen, x, y)
+
+    def _error_mark_alpha(self):
+        """Fade ramp for the error "!": 1 through the hold, then down.
+
+        Split out from the draw for the same reason `_hr_distance_alpha` is:
+        *when the mark is on screen* becomes one pure expression that can be
+        tested without a display.
+        """
+        if self._error_marked_at_ms is None:
+            return 0.0
+        since = self._elapsed - self._error_marked_at_ms
+        if since < 0.0:
+            return 0.0
+        hold = self._anim_ms(ERROR_MARK_HOLD_S)
+        if since <= hold:
+            return 1.0
+        return max(0.0, 1.0 - (since - hold) / self._anim_ms(ERROR_MARK_FADE_S))
+
+    def _draw_error_mark(self, screen, x, y):
+        """The "!" over the fielder who just booted it.
+
+        Anchored to the fielder's own drawn position — including the idle
+        sway — rather than to where the misplay happened, so it stays with
+        them while they turn and chase the ball they let through.
+        """
+        alpha = self._error_mark_alpha()
+        if alpha <= 0.0:
+            return
+
+        if self._error_font is None:
+            self._error_font = pygame.font.SysFont(None, 30, bold=True)
+
+        # A small pop upward off the head on appearance, so it reads as
+        # something that just happened rather than a label that was always
+        # there.
+        since = self._elapsed - self._error_marked_at_ms
+        rise = ERROR_MARK_RISE_PX * min(
+            1.0, since / max(1e-6, self._anim_ms(ERROR_MARK_POP_S)))
+
+        body = self._error_font.render("!", True, ERROR_MARK_COLOR)
+        shadow = self._error_font.render("!", True, (0, 0, 0))
+        body.set_alpha(int(alpha * 255))
+        shadow.set_alpha(int(alpha * 200))
+
+        rect = body.get_rect(
+            center=(int(x), int(y - ERROR_MARK_OFFSET_PX - rise)))
+        screen.blit(shadow, rect.move(1, 1))
+        screen.blit(body, rect)
 
     def _hr_distance_alpha(self):
         """Reveal ramp for the distance readout: 0 until it appears, then

@@ -174,6 +174,13 @@ def _outcome_metrics(g):
     hr = counts.get("HOME RUN", 0)
     go = counts.get("GROUNDOUT", 0)
     ao = sum(counts.get(o, 0) for o in ("FLYOUT", "LINEOUT", "POP UP"))
+    # Reached on error. Not a hit and not an out, so it needs no special case
+    # in any of the rates below — it lands in `ab` and `bip` and stays out of
+    # `h` and `tb` purely by not being in HIT_OUTCOMES, which is the standard
+    # scoring convention for a ROE. Counted here only so it is *visible*: a
+    # defensive event that moves BABIP has to be reportable, or the defense
+    # setting has no readout anywhere.
+    roe = sum(counts.get(o, 0) for o in theme.REACH_OUTCOMES)
 
     h = s1 + d2 + t3 + hr
     ab = pa - bb
@@ -186,6 +193,7 @@ def _outcome_metrics(g):
         "pa": pa, "ab": ab, "h": h, "bb": bb, "k": k, "hr": hr,
         "singles": s1, "doubles": d2, "triples": t3,
         "go": go, "ao": ao, "tb": tb, "bip": bip,
+        "roe": roe, "roe_pct": _safe_div(roe, bip),
         "avg": avg,
         "obp": _safe_div(h + bb, pa),
         "slg": slg,

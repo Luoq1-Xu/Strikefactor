@@ -27,6 +27,7 @@ OUTCOME_COLORS = {
     'GROUNDOUT': (198, 169, 251),   # Purple
     'LINEOUT': (198, 169, 251),     # Purple
     'POP UP': (198, 169, 251),      # Purple
+    'REACHED ON ERROR': (214, 158, 46),  # Amber — reached, but not earned
 }
 
 
@@ -114,7 +115,7 @@ class ScoreKeeper:
         return basesFilled
 
     # Takes in hit_type, then returns tuple of (bases, score)
-    def update_hit_event(self, hit_type, suppress_out_advancement=False):
+    def update_hit_event(self, hit_type, suppress_out_advancement=False, bases=1):
         hit_map = {
             1: 'SINGLE',
             2: 'DOUBLE',
@@ -142,6 +143,18 @@ class ScoreKeeper:
                         runner.advance(1)
         elif outcome in ('LINEOUT', 'POP UP'):
             pass
+        elif outcome == 'REACHED ON ERROR':
+            # The batter reached; nobody is out. Written explicitly rather
+            # than left to the fallback below, which happened to do the right
+            # thing for one base — an outcome quietly relying on a fallback
+            # is the silent-miscount shape tests/test_outcome_names.py exists
+            # to prevent, and it could not express a two-base error at all.
+            advance = max(1, min(3, bases))
+            batter = Runner(advance)
+            self.runners.append(batter)
+            for runner in self.runners[:]:
+                if runner is not batter:
+                    runner.advance(advance)
         else:
             batter = Runner(1)
             self.runners.append(batter)

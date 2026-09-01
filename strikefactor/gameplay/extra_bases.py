@@ -111,16 +111,22 @@ def throw_to_base_s(ball_xy_ft, base, effective_fts=THROW_EFFECTIVE_FTS):
 
 
 def defense_to_base_s(base, ball_xy_ft, retrieved_at_s, is_outfielder=True,
-                      effective_fts=THROW_EFFECTIVE_FTS):
-    """Contact until the ball is in a fielder's glove *at* `base`."""
-    release = OF_RELEASE_S if is_outfielder else IF_RELEASE_S
+                      effective_fts=THROW_EFFECTIVE_FTS, release_scale=1.0):
+    """Contact until the ball is in a fielder's glove *at* `base`.
+
+    `release_scale` is the defense's hands (see `gameplay/defense.py`),
+    applied to the same release family the infield uses so an arm cannot be
+    quick to first and slow to second.
+    """
+    release = (OF_RELEASE_S if is_outfielder else IF_RELEASE_S) * release_scale
     return retrieved_at_s + release + throw_to_base_s(ball_xy_ft, base,
                                                       effective_fts)
 
 
 def final_base(ball_xy_ft, retrieved_at_s, is_outfielder=True,
                handedness="R", sprint_fts=27.0, difficulty_offset_s=0.0,
-               min_base=1, rng=None):
+               min_base=1, rng=None,
+               effective_fts=THROW_EFFECTIVE_FTS, release_scale=1.0):
     """How far the batter-runner gets. Returns (base, margin_s).
 
     The runner advances one base at a time, and stops at the first base
@@ -140,7 +146,8 @@ def final_base(ball_xy_ft, retrieved_at_s, is_outfielder=True,
         runner_s = home_to_base_s(nxt, handedness, sprint_fts,
                                   difficulty_offset_s)
         defense_s = defense_to_base_s(nxt, ball_xy_ft, retrieved_at_s,
-                                      is_outfielder)
+                                      is_outfielder, effective_fts,
+                                      release_scale)
         m = defense_s - runner_s - AGGRESSION_MARGIN_S
         if m <= 0:
             # Not enough daylight — hold. The margin at the base they

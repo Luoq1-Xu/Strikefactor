@@ -5,7 +5,7 @@ import pandas as pd
 import pygame
 import pygame.gfxdraw
 
-from strikefactor.gameplay import bat_contact, bat_path
+from strikefactor.gameplay import bat_contact, bat_path, defense
 from strikefactor.helpers import EnhancedPitchRecord
 from strikefactor.utils.physics import collision
 from strikefactor.utils.pitch_physics import DEFAULT_CAMERA, PitchTrajectory, UmpireCamera
@@ -49,9 +49,24 @@ def get_umpire_model():
     return _umpire_model
 
 class PitchSimulation:
+    # What the banner *calls* an outcome, where that differs from what the
+    # game *records* it as. The recorded vocabulary is load-bearing free
+    # text — "REACHED ON ERROR" is matched by exact string in about a dozen
+    # places that fail silently on an unknown value (see
+    # tests/test_outcome_names.py), so it is renamed here, at the one seam
+    # where an outcome becomes words on screen, and nowhere else. On screen
+    # the play has already shown itself: the fielder wears a "!" at the
+    # moment of the misplay (hit_animation._charge_error), so the banner
+    # only has to name it.
+    _DISPLAY_NAMES = {
+        "REACHED ON ERROR": "ERROR",
+    }
+
     @staticmethod
     def _format_display_outcome(outcome):
-        return outcome.replace("_", " ") if isinstance(outcome, str) else outcome
+        if not isinstance(outcome, str):
+            return outcome
+        return PitchSimulation._DISPLAY_NAMES.get(outcome, outcome.replace("_", " "))
 
     def __init__(self, game, release_point, pitchername, speed_mph, pfx_x, pfx_z,
                  target_x, target_y, pitchtype):
@@ -712,10 +727,17 @@ class PitchSimulation:
         timing = getattr(self.hit_animation, 'play_timing', None)
         self.play_margin_s = timing.margin_s if timing is not None else None
 
+        # Three states, not two. Reaching on an error is neither an out nor a
+        # hit, and the old binary put it in the `else` — crediting the batter
+        # a hit, incrementing `game.hits`, and feeding it to the batting
+        # heatmap as though they had earned it.
         is_out = classified in ("FLYOUT", "GROUNDOUT", "LINEOUT", "POP UP")
+        is_error = classified == "REACHED ON ERROR"
         if is_out:
             self.is_hit = False
             self.game.currentouts += 1
+        elif is_error:
+            self.is_hit = False
         else:
             self.is_hit = True
             self.game.hits += 1
@@ -728,7 +750,10 @@ class PitchSimulation:
         # sharing the same plate coordinates.
         out_color = (119, 86, 179)
         hit_color = (71, 204, 252)
-        new_trail_color = out_color if is_out else hit_color
+        error_color = (214, 158, 46)      # amber: reached, but not earned
+        new_trail_color = (out_color if is_out
+                           else error_color if is_error
+                           else hit_color)
         if self.game.last_pitch_information:
             last_entry = self.game.last_pitch_information[-1]
             if len(last_entry) >= 5 and last_entry[4] == "hit":
@@ -739,11 +764,14 @@ class PitchSimulation:
         self.game.hit_outcome_manager.apply_classified_outcome(
             classified,
             suppress_out_advancement=suppress_out_advancement,
+            bases=getattr(self.hit_animation, 'error_bases', 1),
         )
 
         # Hit-location stats only record actual hits — outs don't contribute
         # to the batting-zone heatmap.
-        if not is_out:
+        # `record_hit` increments `total_hits` unconditionally, so an error
+        # must not reach it — the batting heatmap is a record of hits earned.
+        if not is_out and not is_error:
             self.game.field_renderer.record_hit(
                 self.game.ball[0], self.game.ball[1], hit_type=classified
             )
@@ -1062,7 +1090,28 @@ class PitchSimulation:
             # Off the contact itself, like the foul path: `last_spray_deg` is
             # a snapshot of this same number, and one source cannot go stale.
             spray_deg=self.contact.spray_deg,
+            defense=self._defense_profile(),
         )
+
+    def _defense_profile(self):
+        """The nine gloves behind this pitcher, resolved once per batted ball.
+
+        This is the settings->physics seam for the defense setting, and it
+        lives here rather than inside `HitAnimation` for the same reason
+        `spray_deg` and `batted_ball_type` are passed in: the animation gets a
+        resolved value, not a settings handle. `defense.profile_for` is total,
+        so a hand-edited settings.json cannot raise on the path that decides a
+        batted ball; the try/except covers a `game` with no settings manager
+        at all, which is what every fielding test builds.
+
+        Resolved per ball rather than cached, so changing the setting takes
+        effect on the next ball in play and never mid-flight.
+        """
+        try:
+            return defense.profile_for(
+                self.game.settings_manager.get_defense_level())
+        except Exception:
+            return defense.NEUTRAL
 
     def _start_foul_animation(self):
         """Begin the cosmetic foul-ball animation; defers the FOUL result
@@ -1104,6 +1153,7 @@ class PitchSimulation:
             quality=quality,
             batted_ball_type=None,
             spray_deg=spray_deg,
+            defense=self._defense_profile(),
         )
 
     def _handle_hit_animation_phase(self, current_time, time_delta):
@@ -1151,6 +1201,7 @@ class PitchSimulation:
                 'FLYOUT': 'FLYOUT',
                 'GROUNDOUT': 'GROUNDOUT',
                 'LINEOUT': 'LINEOUT',
+                'REACHED ON ERROR': 'REACHED ON ERROR',
             }
             return outcome_map.get(outcome, outcome.upper() if isinstance(outcome, str) else 'UNKNOWN')
         return 'UNKNOWN'

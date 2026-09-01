@@ -16,7 +16,7 @@ import numpy
 import pygame
 import pytest
 
-from strikefactor.config import SCREEN_WIDTH
+from strikefactor.config import SCREEN_HEIGHT, SCREEN_WIDTH
 from strikefactor.gameplay.game_states import MenuState
 from strikefactor.key_binding_manager import KeyAction, KeyBindingManager
 from strikefactor.settings_manager import DifficultyLevel, SettingsManager
@@ -346,3 +346,34 @@ def test_pending_rebind_changes_only_its_own_row(bindings):
             assert not same, "the pending row drew no prompt"
         else:
             assert same, f"{action} changed while rebinding {target}"
+
+
+def test_the_settings_page_has_headroom_left():
+    """The page is nearly full: with the DEFENSE row it bottoms out at 614
+    against a 628 divider, so exactly *no* further row fits at this stride.
+
+    The margin is asserted so the next person to add a setting finds out at
+    review time rather than by looking at a screenshot. When it fails, the
+    answer is not to shave the stride again — it is a scroll, a second column,
+    or a sub-screen.
+    """
+    panel = sp.SettingsPanel()
+    settings = SettingsManager()
+    surface = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
+    panel.render(surface, settings)
+    bottom = max(rect.bottom for rect, _ in panel._row_rects)
+    assert bottom <= sp._FOOTER_DIVIDER_Y - 8, (
+        f"settings rows reach {bottom}, divider at {sp._FOOTER_DIVIDER_Y}")
+
+
+def test_the_defense_row_shows_the_current_level():
+    panel = sp.SettingsPanel()
+    settings = SettingsManager()
+    original = settings.get_setting("defense_strength")
+    try:
+        settings.current_settings["defense_strength"] = "gold_glove"
+        assert panel.value_for('defense', settings)[0] == "GOLD GLOVE"
+        settings.current_settings["defense_strength"] = "league"
+        assert panel.value_for('defense', settings)[0] == "LEAGUE"
+    finally:
+        settings.current_settings["defense_strength"] = original

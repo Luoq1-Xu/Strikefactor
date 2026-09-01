@@ -1,5 +1,5 @@
 {
-  "difficulty": "rookie",
+  "difficulty": "amateur",
   "umpire_sound": true,
   "master_volume": 1.0,
   "show_strikezone": true,
@@ -7,7 +7,8 @@
   "display_mode": "windowed",
   "display_fps": 120,
   "engine_fps": 120,
-  "abs_enabled": false,
+  "abs_enabled": true,
   "foul_animation_enabled": true,
-  "hud_mode": "legacy"
+  "hud_mode": "legacy",
+  "defense_strength": "league"
 }

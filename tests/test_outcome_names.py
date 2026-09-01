@@ -128,3 +128,94 @@ def test_live_database_has_no_legacy_spelling():
             assert stale == 0, f"{table}.{col} still has {stale} POP_UP rows"
     finally:
         conn.close()
+
+
+def test_reached_on_error_is_in_the_right_groups():
+    """A ball in play and a terminal outcome, but neither a hit nor an out.
+
+    Getting the grouping wrong fails silently in both directions: left out of
+    IN_PLAY_OUTCOMES it drops from every PA/BF denominator (the bug the pop-up
+    comment above records), and slipped into HIT_OUTCOMES it inflates AVG and
+    BABIP with hits the batter never earned. The membership *and* the
+    non-membership are both load-bearing, so both are asserted.
+    """
+    assert "REACHED ON ERROR" in theme.REACH_OUTCOMES
+    assert "REACHED ON ERROR" in theme.IN_PLAY_OUTCOMES
+    assert "REACHED ON ERROR" in theme.TERMINAL_OUTCOMES
+    assert "REACHED ON ERROR" in theme.OUTCOME_ORDER
+    assert "REACHED ON ERROR" in theme.OUTCOME_COLORS
+    assert "REACHED ON ERROR" in theme.OUTCOME_ABBREV
+    assert "REACHED ON ERROR" in theme.EVENT_RUN_VALUE
+
+    assert "REACHED ON ERROR" not in theme.HIT_OUTCOMES
+    assert "REACHED ON ERROR" not in theme.BATTED_OUT_OUTCOMES
+    assert "REACHED ON ERROR" not in theme.OUT_OUTCOMES
+
+
+def test_reaching_on_an_error_closes_the_at_bat():
+    """`PitchDataExtractor.TERMINAL_OUTCOMES` is a closed set compared against
+    the underscored form. An outcome missing from it does not raise — the
+    at-bat is simply never closed, which is the quietest possible failure."""
+    from strikefactor.data.pitch_database import PitchDataExtractor
+
+    assert ("REACHED ON ERROR".upper().replace(" ", "_")
+            in PitchDataExtractor.TERMINAL_OUTCOMES)
+
+
+def test_reaching_on_an_error_is_an_at_bat_but_not_a_hit_or_an_out():
+    """The GameDay batting line counts `ab` only inside its result lists, so
+    an outcome in none of them vanishes from the AVG denominator entirely."""
+    from strikefactor.gameplay.game_states import GameDayTransitionState as G
+
+    assert "REACHED ON ERROR" in G._REACH_RESULTS
+    assert "REACHED ON ERROR" not in G._HIT_RESULTS
+    assert "REACHED ON ERROR" not in G._OUT_RESULTS
+
+
+def test_the_scorekeeper_puts_the_batter_on_without_an_out():
+    """It used to work by falling through to the catch-all `else`, which
+    happened to be right for one base and could not express a two-base error
+    at all."""
+    from strikefactor.helpers import ScoreKeeper
+
+    sk = ScoreKeeper()
+    sk.update_hit_event("REACHED ON ERROR")
+    assert sk.isRunnerOnBase(1)
+    assert sk.get_score() == 0
+
+    sk2 = ScoreKeeper()
+    sk2.update_hit_event("REACHED ON ERROR", bases=2)
+    assert sk2.isRunnerOnBase(2)
+    assert not sk2.isRunnerOnBase(1)
+
+
+def test_the_banner_says_error_while_the_record_still_says_reached_on_error():
+    """The two vocabularies are separate, and only one of them is load-bearing.
+
+    Everything above this line matches "REACHED ON ERROR" by exact string and
+    fails *silently* on anything else, so the shorter word the player reads has
+    to be a display name applied at the seam where an outcome becomes text --
+    not a rename of the value. If this ever passes by the record having been
+    renamed too, the tests above are what break.
+    """
+    from strikefactor.gameplay.pitch_simulation import PitchSimulation
+
+    assert PitchSimulation._format_display_outcome("REACHED ON ERROR") == "ERROR"
+    # ...and the seam is still the plain underscore-to-space rule for the rest.
+    for outcome in ("SINGLE", "DOUBLE", "TRIPLE", "HOME RUN", "GROUNDOUT",
+                    "FLYOUT", "LINEOUT", "POP UP"):
+        assert PitchSimulation._format_display_outcome(outcome) == outcome
+    assert PitchSimulation._format_display_outcome("POP_UP") == "POP UP"
+
+
+def test_the_pitch_selection_ai_is_not_punished_for_its_defense():
+    """`GameStats.outcome_value` is the Q-learning reward, read as
+    `.get(outcome, 0)` and scored from the *pitcher's* side. Unmapped, an
+    error would return a neutral 0 for a pitch that did its job; scored like a
+    single it would teach the AI to stop inducing ground balls."""
+    from strikefactor.main import GameStats
+
+    values = GameStats().outcome_value
+    assert values["REACHED ON ERROR"] > 0
+    assert values["REACHED ON ERROR"] < values["GROUNDOUT"]
+    assert values["REACHED ON ERROR"] > values["SINGLE"]

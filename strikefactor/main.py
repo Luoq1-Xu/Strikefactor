@@ -219,7 +219,16 @@ class GameStats:
         self.outcome_value = {
             'strike': 0.5, 'ball': -0.25, 'foul': 0.3, 'strikeout': 2, 'walk': -1,
             'SINGLE': -1.5, 'DOUBLE': -2, 'TRIPLE': -2.5, 'HOME RUN': -3,
-            'FLYOUT': 1.5, 'GROUNDOUT': 1.5, 'LINEOUT': 1.5, 'POP UP': 1.5
+            'FLYOUT': 1.5, 'GROUNDOUT': 1.5, 'LINEOUT': 1.5, 'POP UP': 1.5,
+            # This table is the Q-learning reward (consumed in
+            # pitch_simulation as `outcome_value.get(self.outcome, 0)`) and it
+            # is scored from the *pitcher's* side: outs are positive, hits
+            # negative. An error is near the out value because the pitch did
+            # its job and the defense lost it — docked slightly because a
+            # runner still reached. Scoring it like a single would teach the
+            # pitch-selection AI to avoid inducing ground balls, and leaving
+            # it unmapped would silently return 0, which teaches nothing.
+            'REACHED ON ERROR': 1.0
         }
         
     def reset_game_stats(self):
@@ -750,7 +759,9 @@ class Game:
         try:
             from strikefactor.data.pitch_database import PitchDatabaseService
             difficulty = self.settings_manager.get_difficulty().value
-            PitchDatabaseService.get_instance().start_game(game_mode, difficulty, pitcher_name)
+            defense = self.settings_manager.get_defense_level()
+            PitchDatabaseService.get_instance().start_game(
+                game_mode, difficulty, pitcher_name, defense_strength=defense)
             # Steer the FieldRenderer to the matching aggregate bucket so
             # heatmap/triple-slash counters update the right partition.
             self.field_renderer.set_active_bucket(game_mode, difficulty)
@@ -1224,6 +1235,15 @@ class Game:
         self.settings_manager.reset_to_defaults()
         # Update legacy variables
         self.umpsound = self.settings_manager.get_setting("umpire_sound")
+
+    def cycle_defense_strength(self):
+        """Cycle sandlot -> minors -> league -> gold glove -> sandlot.
+
+        Nothing live to refresh. The profile is resolved once per batted ball
+        in `PitchSimulation._defense_profile`, so a change lands on the next
+        ball in play and can never take effect mid-flight.
+        """
+        self.settings_manager.cycle_defense_level()
 
     def cycle_display_fps(self):
         """Cycle through display FPS options."""

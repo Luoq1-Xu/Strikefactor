@@ -346,6 +346,60 @@ def test_difficulty_narrows_both_touching_the_ball_and_squaring_it_up():
     assert windows[0] > windows[-1] * 1.5
 
 
+def test_the_charge_is_never_narrower_than_the_budget_it_charges_for():
+    """The invariant behind `timing_charge_sigma_s`, stated directly.
+
+    `TIMING_CHARGE_SIGMA_FLOOR_S` was calibrated at one difficulty and applied
+    to all five. Because the charge is a Gaussian in the slide while
+    `timing_assist_s` runs 39 ms down to 10, a fixed 20 ms width meant the
+    easier the setting the deeper it could dig.
+    """
+    for _, _, window in DIFFICULTIES:
+        assert bc.timing_charge_sigma_s(window) >= bc.timing_assist_s(window)
+    # And the floor still binds where the budget is inside it, so the hard end
+    # is exactly as it was calibrated.
+    assert bc.timing_charge_sigma_s(0.4) == bc.TIMING_CHARGE_SIGMA_FLOOR_S
+
+
+def test_an_easier_difficulty_never_charges_a_full_budget_swing_more():
+    """The inversion this fixes, measured the way a player meets it.
+
+    A swing that spends its whole timing allowance is the *common* case at the
+    easy end — about 45% of AMATEUR contacts sat at full saturation — and
+    before the fix it was charged against a width narrower than the allowance
+    itself. The result ran backwards down the ladder: a full-budget swing was
+    capped at quality 0.531 at ROOKIE against 0.956 at HALL OF FAME, and after
+    the foul threshold moved with it that left ROOKIE **1.72 in** of vertical
+    aim room against 2.06 at AMATEUR and 2.13 at ALL STAR. The easiest setting
+    was the strictest one on the ladder for a mistimed swing, which is the
+    mechanism behind "even on rookie it is all foul balls" — difficulty was
+    converting whiffs into fouls rather than into balls in play.
+
+    Ordered rather than pinned to values: what must never come back is the
+    *inversion*, and any future recalibration of the charge is free to move
+    the numbers.
+    """
+    tr = pitch()
+    ref = squared_up(tr)
+    floors = []
+    for name, zone, window in DIFFICULTIES:
+        budget = bc.timing_assist_s(window)
+        # Late by exactly the budget, so the slide is spent in full.
+        got = swing_at(tr, ref, budget * 1000.0, zone_size_mult=zone,
+                       timing_window_mult=window)
+        assert got is not None, f"{name}: a full-budget swing must reach"
+        assert got.shift_s == pytest.approx(-budget, abs=1e-9), name
+        floors.append((name, got.timing_score))
+    # Non-decreasing toward the hard end. Tolerant because the three easy
+    # rungs now tie exactly — their budget *is* their charge width, so all
+    # three floor at exp(-1/2) — and an exact `sorted` comparison turns the
+    # last bit of that tie into a failure.
+    for (easier, lo), (harder, hi) in zip(floors, floors[1:]):
+        assert lo <= hi + 1e-9, f"{easier} charges more than {harder}: {floors}"
+    # The easy end is where it was inverted, so pin that pair explicitly.
+    assert floors[0][1] == pytest.approx(floors[1][1]), floors[:2]
+
+
 def test_a_power_swing_is_harder_than_a_contact_swing():
     """It always has been — the old rectangle was 50 px tall on a W swing and
     25 on an E. Most of the difference comes free from `power_timing_window`
@@ -469,7 +523,7 @@ def test_the_sweep_is_cheap_enough_to_run_on_an_input_frame():
 # The ladder in `settings_manager.get_difficulty_multipliers`, restated so this
 # module can be tested without a settings file — same contract as `DIFFICULTIES`
 # above, and a test below pins it to the real table.
-AIM_ASSIST = [("ROOKIE", 0.85), ("AMATEUR", 0.65), ("PROFESSIONAL", 0.50),
+AIM_ASSIST = [("ROOKIE", 0.90), ("AMATEUR", 0.80), ("PROFESSIONAL", 0.50),
               ("ALL_STAR", 0.35), ("HALL_OF_FAME", 0.20)]
 
 

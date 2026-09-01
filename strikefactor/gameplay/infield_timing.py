@@ -130,7 +130,16 @@ RELEASE_JITTER_S = 0.05                 # footwork noise, play to play
 # rather than adding hard ones. Variance, not bias, was what was missing —
 # these leave the median play untouched (p50 margin 1.12 s -> 1.03 s) and
 # put the tail where the runner can reach it (p10 0.44 s -> 0.14 s).
-HARD_PLAY_PROB = 0.22
+# Lowered from 0.22 when `defense.py`'s misplay model arrived. Both terms
+# feed the same left tail, so they double-counted: with misplays added on top,
+# the infield-hit rate on fielded grounders ran past its 6-8% band. This is
+# the better trade rather than merely the necessary one — a flat rate is what
+# §8 of docs/infield-timing-refactor.md criticises about this constant ("the
+# real fix is a fielding-difficulty model rather than one flat probability"),
+# and the misplay term is that model: it reads how far the fielder ranged and
+# how hard the ball was hit. Handing it a share of the tail replaces a
+# hand-fit constant with a modelled one.
+HARD_PLAY_PROB = 0.18
 HARD_PLAY_COST_S = (0.25, 1.40)         # uniform: a hitch at one end, a fumble at the other
 
 
@@ -169,6 +178,15 @@ class PlayTiming:
     runner_s: float
     margin_s: float                     # runner_s - defense_s; > 0 favours defense
     p_out: float
+    # How much of `release_s` was a misplay, and what `p_out` would have been
+    # without it. Kept as components rather than folded away because the
+    # difference between them *is* the scorer's rule — see `roll_verdict`.
+    misplay_s: float = 0.0
+    p_out_clean: float = None
+
+    def __post_init__(self):
+        if self.p_out_clean is None:
+            object.__setattr__(self, "p_out_clean", self.p_out)
 
     @property
     def is_bang_bang(self):
@@ -213,26 +231,46 @@ def ball_travel_time_s(ev_mph, distance_ft):
     return max(0.0, distance_ft) / speed_fts
 
 
-def release_time_s(ranging_ft=0.0, is_charging=False, rng=None):
+def release_time_s(ranging_ft=0.0, is_charging=False, rng=None,
+                   release_scale=1.0, misplay_s=0.0):
     """Glove contact to release.
 
     `ranging_ft` is how far the fielder had to move off their set position
     — the further they went, the less balanced the throw. `is_charging`
     marks the barehand play in on a slow roller, which is *faster* than
     routine, not slower: the fielder is already moving toward first.
+
+    `release_scale` is how quick this defense's hands are (see
+    `gameplay/defense.py`). Multiplicative rather than additive because the
+    sourcing is a percentage band — catcher exchange 0.85 / 0.73 / 0.64 is
+    ±16% about the mean — and because an additive offset would drag
+    RELEASE_CHARGE_S below any observed exchange, making the barehand play
+    on a slow roller nearly free. The slow roller is the canonical infield
+    hit; it must not become the canonical easy out.
+
+    `misplay_s` is a bobble the caller already rolled, in seconds. It is
+    added here rather than anywhere else for two reasons: glove contact to
+    release *is* what a bobble delays, and `defense_s` has to stay equal to
+    ball + release + throw. It is deliberately *not* scaled — defense
+    strength decides how often a ball is misplayed, not how badly.
+
+    HARD_PLAY_COST_S is not scaled either: it models the play, not the
+    fielder, and scaling it would move HARD_PLAY_PROB's calibration behind
+    its back.
     """
     if is_charging:
         base = RELEASE_CHARGE_S
     else:
         stretch = min(1.0, max(0.0, ranging_ft) / RELEASE_STRETCH_FT)
         base = RELEASE_ROUTINE_S + (RELEASE_STRETCHED_S - RELEASE_ROUTINE_S) * stretch
+    base *= release_scale
     if rng is not None:
         if RELEASE_JITTER_S:
-            base += rng.gauss(0.0, RELEASE_JITTER_S)
+            base += rng.gauss(0.0, RELEASE_JITTER_S * release_scale)
         # The left tail of the margin distribution — see HARD_PLAY_PROB.
         if rng.random() < HARD_PLAY_PROB:
             base += rng.uniform(*HARD_PLAY_COST_S)
-    return max(0.35, base)
+    return max(0.35, base) + max(0.0, misplay_s)
 
 
 def throw_time_s(fielder_xy_ft, effective_fts=THROW_EFFECTIVE_FTS):
@@ -281,6 +319,8 @@ def resolve_infield_play(ev_mph, fielder_xy_ft, ball_distance_ft,
                          difficulty_offset_s=0.0,
                          effective_throw_fts=THROW_EFFECTIVE_FTS,
                          ball_to_glove_s=None,
+                         release_scale=1.0,
+                         misplay_s=0.0,
                          rng=None):
     """Run both clocks and return the timing.
 
@@ -296,7 +336,7 @@ def resolve_infield_play(ev_mph, fielder_xy_ft, ball_distance_ft,
     """
     ball_s = (ball_to_glove_s if ball_to_glove_s is not None
               else ball_travel_time_s(ev_mph, ball_distance_ft))
-    rel_s = release_time_s(ranging_ft, is_charging, rng)
+    rel_s = release_time_s(ranging_ft, is_charging, rng, release_scale, misplay_s)
     throw_s = throw_time_s(fielder_xy_ft, effective_throw_fts)
     defense_s = ball_s + rel_s + throw_s
     runner_s = home_to_first_s(handedness, sprint_fts, difficulty_offset_s)
@@ -309,6 +349,10 @@ def resolve_infield_play(ev_mph, fielder_xy_ft, ball_distance_ft,
         runner_s=runner_s,
         margin_s=margin_s,
         p_out=p_out_from_margin(margin_s),
+        misplay_s=max(0.0, misplay_s),
+        # What this play would have been without the bobble. The error
+        # window in `roll_verdict` is exactly the gap between the two.
+        p_out_clean=p_out_from_margin(margin_s + max(0.0, misplay_s)),
     )
 
 
@@ -317,3 +361,32 @@ def roll_is_out(timing, rng=random):
     timing can be computed, logged and displayed without consuming
     randomness — and so a replay can re-derive the numbers."""
     return rng.random() < timing.p_out
+
+
+def roll_verdict(timing, rng=random):
+    """OUT / ERROR / HIT from a single draw.
+
+    The one draw is the whole point. `u` is the same play under both
+    clocks, so the window [p_out, p_out_clean) is *precisely* the set of
+    plays that would have been outs without the misplay and were not with
+    it — which is the official scorer's rule, arrived at exactly rather
+    than by judgement. Two independent draws could not express it: they
+    would let a play be charged an error that the runner was beating
+    anyway, and let one the misplay genuinely cost go uncharged.
+
+    It also makes the picture and the record structurally unable to
+    disagree. The throw the player watches is scheduled off `release_s`,
+    which *contains* `misplay_s`; the verdict is drawn against `p_out`,
+    computed from the same number. A bobble that still gets the out shows
+    a bobble and says GROUNDOUT; one that costs the out says the batter
+    reached on an error; the rest say SINGLE — which is also what a scorer
+    would rule.
+
+    With `misplay_s == 0` the window is empty and this is `roll_is_out`.
+    """
+    u = rng.random()
+    if u < timing.p_out:
+        return "OUT"
+    if u < timing.p_out_clean:
+        return "ERROR"
+    return "HIT"

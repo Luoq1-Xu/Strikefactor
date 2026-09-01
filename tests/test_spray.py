@@ -140,24 +140,106 @@ def test_a_right_hander_pulls_toward_left_field():
 
 # ---- The geometry underneath ------------------------------------------------
 
-@pytest.mark.parametrize("hand", HANDS)
-def test_the_attack_angle_is_continuous_across_the_reach_boundary(hand):
-    """No flat spot where the bat stops being able to span the ball.
+def _pose_curve(hand, z=2.5, lo=-1.85, hi=1.60, step=0.05):
+    """`(aim_x, attack angle)` across the plate, in the *batter's* frame.
 
-    `bat_path._reach` used to answer that case with a bat lying flat in the
-    plane of the plate, whose face normal points at *exactly* centre field.
-    It fires on ~10% of swings, so the spray distribution grew a spike one
-    value wide — the same defect as clamping the home-run angle onto the foul
-    poles. The pose comes off the quadratic's vertex now, which is the
-    analytic continuation of the root.
+    Positive x is inside to this batter, negative is away, for both hands.
     """
-    xs = [1.6 - 0.05 * i for i in range(70)]
-    angles = [spray.attack_direction_deg(
-        bp.swing((_mirror(x, hand), 2.5), hand).contact_axis,
-        spray.spin_for(hand)) for x in xs]
-    assert angles == sorted(angles, reverse=True), "not monotone in the aim"
-    repeats = max(angles.count(a) for a in angles)
-    assert repeats == 1, f"{repeats} aims share one attack angle — a flat spot"
+    spin = spray.spin_for(hand)
+    n = int(round((hi - lo) / step))
+    xs = [lo + step * i for i in range(n + 1)]
+    return [(x, spray.attack_direction_deg(
+        bp.swing((_mirror(x, hand), z), hand).contact_axis, spin)) for x in xs]
+
+
+def _reaches(x, hand, z=2.5):
+    """True when the bat cannot span the ball from where the hands are."""
+    hands, _ = bp._contact_pose((_mirror(x, hand), z), hand)
+    return math.dist(hands, bp.hands_anchor_ft(hand)) > 1e-9
+
+
+@pytest.mark.parametrize("hand", HANDS)
+def test_the_attack_angle_is_monotone_in_the_aim(hand):
+    """Further inside points the bat further round, with no reversals."""
+    angles = [a for _, a in _pose_curve(hand)]
+    assert angles == sorted(angles), "not monotone in the aim"
+
+
+@pytest.mark.parametrize("hand", HANDS)
+def test_the_bat_answers_the_aim_wherever_it_can_reach_the_ball(hand):
+    """The response must not go slack on the reachable side of the plate.
+
+    **This is the test that replaced a tautology, and the story is worth
+    keeping.** The predecessor asserted monotonicity and that no two aims
+    produced a bit-identical angle. Neither can fail: a step is monotone, and
+    two floats out of a trig chain essentially never compare equal. It was
+    written to guard against `bat_path._reach` flattening the pose onto one
+    bearing, and it sat green over exactly that defect for the life of the
+    module — the pose response past the reach boundary had collapsed to
+    1.9 deg/ft against 27-136 on the reachable side, and 43% of recorded
+    right-handed contact was landing in a **1.5 deg wide band**, all of it
+    foul.
+
+    So this measures the rate instead of counting repeats.
+    """
+    curve = [(x, a) for x, a in _pose_curve(hand) if not _reaches(x, hand)]
+    assert len(curve) > 20, "the reachable span has itself collapsed"
+    rates = [(a1 - a0) / (x1 - x0)
+             for (x0, a0), (x1, a1) in zip(curve, curve[1:])]
+    assert min(rates) > 20.0, (
+        f"the bat stops answering the aim at {min(rates):.1f} deg/ft — "
+        "a flat spot inside the bat's own reach")
+
+
+@pytest.mark.parametrize("hand", HANDS)
+def test_a_ball_the_hitter_has_to_reach_for_still_lands_fair(hand):
+    """The invariant that the saturating location term exists to create.
+
+    Past the reach boundary the pose *does* still go flat — the hands are
+    pinned at the stance anchor and `_reach` slides them along the bat's own
+    axis, which by construction cannot rotate it, so the bearing converges on
+    the perpendicular to a near-constant camera ray. That limit is pose ~ 0:
+    the bat square across, its face normal at dead centre field. Which is a
+    perfectly good inside-out reach, and harmless.
+
+    What was not harmless was reading it through a straight line. At a gain of
+    1.30 about a 49 deg reference, pose 0 came out at -55.7 deg — thirteen
+    degrees **foul** — so every ball the hitter stretched for was an automatic
+    foul, struck well, hooking deep past the same pole every single time.
+    `spray.LOCATION_SPAN_DEG` saturates the term instead, and the limit lands
+    in fair territory where it belongs.
+
+    Asserted against `FOUL_LINE_DEG` rather than a literal, so it still asks
+    the right question if the park changes.
+    """
+    far = _mirror(-40.0, hand)
+    pose = spray.attack_direction_deg(
+        bp.swing((far, 2.5), hand).contact_axis, spray.spin_for(hand))
+    deg = spray.spray_angle_deg(pose, pose)
+    assert not spray.is_foul(deg), (
+        f"a maximally reached ball sprays to {deg:.1f} deg, past the line")
+    assert spray.FOUL_LINE_DEG - abs(deg) > 5.0, (
+        f"{spray.FOUL_LINE_DEG - abs(deg):.1f} deg of margin is too little to "
+        "absorb any residual timing")
+    assert deg < 0.0, "a ball reached for should go the other way, not pulled"
+
+
+@pytest.mark.parametrize("hand", HANDS)
+def test_the_flat_spot_starts_where_the_bat_runs_out_of_reach(hand):
+    """Pins the known dead zone so it cannot silently widen.
+
+    It is not fixed, only made harmless — see the test above. Closing it means
+    letting the hands come off the stance anchor laterally, which is a
+    `bat_path` change that would need both of `spray`'s gains re-derived. This
+    records where the edge currently is so that work has a baseline, and so a
+    regression that pushes the flat spot further into the plate fails here.
+
+    At the belt it starts about 0.87 ft off centre, just outside the strike
+    zone. It is worst at the knees, where it reaches 0.37 ft — well inside.
+    """
+    assert not _reaches(-0.80, hand), "flat spot has reached the belt-high zone"
+    assert _reaches(-0.95, hand), "the reach boundary has moved unexpectedly far"
+    assert not _reaches(-0.30, hand, z=1.45), "flat spot has swallowed the knees"
 
 
 def test_the_field_conversion_agrees_with_the_projection():
@@ -224,6 +306,16 @@ def test_a_flawless_swing_can_be_fair_anywhere_in_the_zone(hand):
 
 # ---- The distribution -------------------------------------------------------
 
+# Three tests below ask for `_population(AMATEUR)` verbatim and a fourth
+# sweeps it as one rung of the difficulty ladder — four identical runs of a
+# 1200-swing sweep, each asserting a different property. The chain is pure
+# (`spray`, `bat_path` and `bat_contact` take no global RNG) and every draw
+# comes from a locally seeded `random.Random`, so the same arguments always
+# produce the same contacts. `Contact` is frozen, so handing the same list to
+# four tests cannot let one of them disturb another.
+_POPULATION_CACHE = {}
+
+
 def _population(level, n=1200, hand="R", seed=17):
     """Contacts a plausible player produces, through the real sweep.
 
@@ -231,6 +323,13 @@ def _population(level, n=1200, hand="R", seed=17):
     sweep quality or spray uniformly to calibrate anything in this codebase —
     see the warning over `contact_audio.EV_CALIBRATION`.
     """
+    key = (level, n, hand, seed)
+    if key not in _POPULATION_CACHE:
+        _POPULATION_CACHE[key] = _run_population(level, n, hand, seed)
+    return _POPULATION_CACHE[key]
+
+
+def _run_population(level, n, hand, seed):
     rng = random.Random(seed)
     mult = DIFFICULTY_MULTIPLIERS[level]
     out = []

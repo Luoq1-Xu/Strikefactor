@@ -24,6 +24,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
+    # Required, not optional: `addopts` below runs the suite in parallel, so a
+    # dev environment without it fails on an unrecognised `-n`.
+    "pytest-xdist>=3.2",
     "ruff>=0.6",
 ]
 
@@ -43,6 +46,22 @@ testpaths = ["tests"]
 filterwarnings = ["ignore::DeprecationWarning"]
 # NOTE: SDL is forced to its dummy video/audio drivers in tests/conftest.py,
 # before pygame is imported, so the suite needs no display.
+#
+# The suite is ~900 tests but its runtime is not spread across them: a handful
+# of Monte Carlo fielding tests run thousands of full `HitAnimation`s and
+# account for the great majority of the wall clock, while ~850 tests finish in
+# under 5 ms each. That shape is what picks `worksteal` over the alternatives.
+# `--dist loadfile` pins each file to one worker, which leaves the slowest
+# *file* as an irreducible critical path (32 s, nearly all of it
+# test_infield_hit_verdict.py); `--dist load` splits per test but deals them
+# out up front, so a worker handed two long tests still finishes last (27 s).
+# `worksteal` rebalances as workers go idle, which is exactly the case here —
+# a few very long tests among many instant ones. Measured on 12 cores:
+# 115 s serial before this, 83 s serial after the sweep caching, 22 s here.
+#
+# Run a single test or a debugger with `-n0`, which disables xdist entirely:
+# breakpoints and `-s` do not work through a worker process.
+addopts = ["-n", "auto", "--dist", "worksteal"]
 
 [tool.ruff]
 target-version = "py312"

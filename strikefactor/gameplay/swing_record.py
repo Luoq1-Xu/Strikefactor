@@ -37,7 +37,9 @@ catches the ball earlier or later in the arc, up to ~25 ms away; at 101 mph
 that is six feet of ball. The replay froze on the first and drew a crosshair at
 the second, which is why a HOME RUN could be shown with the bat eight feet from
 the ball. Anything meant to be *looked at* runs on `contact_time_s`; the timing
-readouts stay on `bat_arrival_s`, which is what they have always measured.
+readouts stay on `bat_arrival_s`, which is what they have always measured. A
+swing that missed names neither — there was no meeting — so `clip_end_s` runs
+the replay on to the plate rather than freezing it on a pitch still in the air.
 
 One consequence to be aware of when reading the replay: depth is deliberately
 unclamped. `PitchTrajectory.time_at_depth` extrapolates past the plate, and it
@@ -181,6 +183,34 @@ class SwingRecord:
         if self.contact is None:
             return self.bat_arrival_s
         return self.contact.pitch_t_s
+
+    @property
+    def clip_end_s(self):
+        """When a replay of this swing should stop, in seconds after release.
+
+        On contact this is `contact_time_s` and nothing else: the frozen frame
+        is the bat and the ball at the instant they met, and a tail past it
+        drags the ball feet away from the mark that names it.
+
+        **A whiff has no such instant, and freezing on the one it falls back to
+        stops the pitch mid-air.** `contact_time_s` answers a swing that missed
+        with `bat_arrival_s`, which is a fact about the *bat* — when the barrel
+        got where it was going — and says nothing about where the ball had got
+        to. On an early miss the ball is still two or three feet out in front
+        there, so the clip ended with the pitch hanging in space, unfinished,
+        which is the one frame a player cannot read anything off. So a miss
+        runs on to the plate: the ball is followed to the datum the whole
+        screen is drawn around, the swing carries into its follow-through
+        beside it, and the picture ends where the pitch ended.
+
+        Never *shorter* than it was — a swing late enough that the barrel
+        arrived after the ball was already by keeps its own arrival as the end,
+        because that is the later instant and the ball by then is genuinely
+        past the plate.
+        """
+        if self.contact is not None:
+            return self.contact_time_s
+        return max(self.bat_arrival_s, self.travel_time_s)
 
     @property
     def struck_depth_ft(self):

@@ -93,6 +93,17 @@ def _derive(df):
     else:
         df["pitcher_hand"] = mapped
 
+    # defense_strength arrived in schema v10. The analysis connection is
+    # read-only, so a database opened here is never migrated — an archive
+    # snapshot under data/archives/ genuinely lacks the column. Materialise it
+    # as all-NA rather than letting --defense raise KeyError on old data.
+    #
+    # NA, never "league": a pre-v10 row is not a league-defense row, it is a
+    # row from before the setting existed, and filtering on a level must
+    # exclude it rather than silently claim it.
+    if "defense_strength" not in df.columns:
+        df["defense_strength"] = pd.NA
+
     outcome = df["outcome"]
     swing = df["swing_type"].fillna(0)
 
