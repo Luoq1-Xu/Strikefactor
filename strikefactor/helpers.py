@@ -12,23 +12,12 @@ from pygame_gui.elements.ui_label import UILabel
 from pygame_gui.elements.ui_scrolling_container import UIScrollingContainer
 from pygame_gui.elements.ui_window import UIWindow
 
-# Outcome color mapping
-OUTCOME_COLORS = {
-    'STRIKEOUT': (227, 75, 80),    # Red
-    'STRIKE': (227, 75, 80),        # Red
-    'BALL': (75, 227, 148),         # Green
-    'WALK': (75, 227, 148),         # Green
-    'FOUL': (255, 200, 100),        # Orange
-    'SINGLE': (71, 204, 252),       # Cyan
-    'DOUBLE': (71, 204, 252),       # Cyan
-    'TRIPLE': (71, 204, 252),       # Cyan
-    'HOME RUN': (71, 204, 252),     # Cyan
-    'FLYOUT': (198, 169, 251),      # Purple
-    'GROUNDOUT': (198, 169, 251),   # Purple
-    'LINEOUT': (198, 169, 251),     # Purple
-    'POP UP': (198, 169, 251),      # Purple
-    'REACHED ON ERROR': (214, 158, 46),  # Amber — reached, but not earned
-}
+from strikefactor import outcomes
+
+# Outcome color mapping. Owned by `strikefactor.outcomes`, which is where the
+# vocabulary lives; re-exported under the old name because a dozen call sites
+# read `helpers.OUTCOME_COLORS`.
+OUTCOME_COLORS = outcomes.COLORS
 
 
 @dataclass
@@ -116,17 +105,15 @@ class ScoreKeeper:
 
     # Takes in hit_type, then returns tuple of (bases, score)
     def update_hit_event(self, hit_type, suppress_out_advancement=False, bases=1):
-        hit_map = {
-            1: 'SINGLE',
-            2: 'DOUBLE',
-            3: 'TRIPLE',
-            4: 'HOME RUN',
-        }
-        outcome = hit_type if isinstance(hit_type, str) else hit_map.get(hit_type, 'SINGLE')
+        # The inverse of outcomes.HIT_BASES, derived rather than restated so
+        # the two cannot disagree about what a three-base hit is called.
+        hit_map = {n: o for o, n in outcomes.HIT_BASES.items()}
+        outcome = (hit_type if isinstance(hit_type, str)
+                   else hit_map.get(hit_type, outcomes.SINGLE))
         scored = 0
 
-        if outcome in ('SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN'):
-            advance = {'SINGLE': 1, 'DOUBLE': 2, 'TRIPLE': 3, 'HOME RUN': 4}[outcome]
+        if outcome in outcomes.HIT_OUTCOMES:
+            advance = outcomes.HIT_BASES[outcome]
             batter = Runner(advance)
             self.runners.append(batter)
             for runner in self.runners[:]:

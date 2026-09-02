@@ -22,6 +22,8 @@ import sqlite3
 import uuid
 from datetime import datetime, timedelta
 
+from strikefactor import outcomes
+
 # Pitcher handedness — used to populate pitches.pitcher_hand. Kept here
 # rather than on the Pitcher class so the existing pitcher constructors
 # don't need a new arg.
@@ -518,15 +520,11 @@ class PitchDB:
 class PitchDataExtractor:
     """Extract pitch records from a PitchSimulation instance."""
 
-    # Compared against outcome.upper().replace(" ", "_") — keep keys in that form.
-    TERMINAL_OUTCOMES = frozenset({
-        "STRIKEOUT", "WALK", "SINGLE", "DOUBLE", "TRIPLE", "HOME_RUN",
-        "FLYOUT", "GROUNDOUT", "LINEOUT", "POP_UP",
-        # Underscored, like HOME_RUN and POP_UP: this set is compared against
-        # outcome.upper().replace(" ", "_"). Leaving it out does not raise —
-        # it silently never closes the at-bat.
-        "REACHED_ON_ERROR",
-    })
+    # The underscored form, because this set is compared against
+    # `outcomes.db_key(outcome)`. Derived rather than enumerated: an outcome
+    # missing here does not raise, it silently never closes the at-bat, so the
+    # set must not be somewhere a new outcome can fail to be added.
+    TERMINAL_OUTCOMES = outcomes.DB_TERMINAL_OUTCOMES
 
     @staticmethod
     def _classify_game_mode(sim):
@@ -848,7 +846,7 @@ class PitchDatabaseService:
 
             # Check for terminal outcome
             outcome = getattr(sim, "outcome", "")
-            if outcome and outcome.upper().replace(" ", "_") in PitchDataExtractor.TERMINAL_OUTCOMES:
+            if outcome and outcomes.db_key(outcome) in PitchDataExtractor.TERMINAL_OUTCOMES:
                 self._record_at_bat(outcome)
         except Exception as e:
             # Never let DB errors crash the game, but surface them so silent

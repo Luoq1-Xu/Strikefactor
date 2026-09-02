@@ -12,6 +12,7 @@ import sqlite3
 import pytest
 
 from analysis import theme
+from strikefactor import outcomes
 from strikefactor.data.pitch_database import SCHEMA_VERSION, V5_OUTCOME_RENAMES, PitchDB
 
 
@@ -219,3 +220,64 @@ def test_the_pitch_selection_ai_is_not_punished_for_its_defense():
     assert values["REACHED ON ERROR"] > 0
     assert values["REACHED ON ERROR"] < values["GROUNDOUT"]
     assert values["REACHED ON ERROR"] > values["SINGLE"]
+
+
+# ---- One vocabulary, four consumers ---------------------------------------
+#
+# These pin the composition rather than the contents. Every set above used to
+# be enumerated by hand in its own module, in its own spelling, and the three
+# failure modes were all silent — an outcome missing from `TERMINAL_OUTCOMES`
+# never closes the at-bat, one missing from `_OUT_RESULTS` vanishes from the
+# AVG denominator, one missing from `is_out` is credited as a hit. What makes
+# a fifth outcome cheap is that it joins one group in `strikefactor.outcomes`
+# and every derived set follows; what these tests guard is that the sets are
+# still *derived*.
+
+def test_every_consumer_composes_the_shared_vocabulary():
+    from strikefactor.data.pitch_database import PitchDataExtractor
+    from strikefactor.gameplay.game_states import GameDayTransitionState as G
+    from strikefactor.helpers import OUTCOME_COLORS
+
+    assert G._HIT_RESULTS == tuple(o.upper() for o in outcomes.HIT_OUTCOMES)
+    assert G._OUT_RESULTS == tuple(o.upper() for o in outcomes.OUT_OUTCOMES)
+    assert G._REACH_RESULTS == tuple(o.upper() for o in outcomes.REACH_OUTCOMES)
+    assert PitchDataExtractor.TERMINAL_OUTCOMES is outcomes.DB_TERMINAL_OUTCOMES
+    assert OUTCOME_COLORS is outcomes.COLORS
+
+
+def test_the_analysis_groups_agree_with_the_games():
+    """`analysis/theme.py` deliberately keeps its own copy — it is an offline
+    process that must read an archived DB without the game installed. That
+    makes it the one place a drift cannot be prevented by construction, so it
+    is prevented by assertion instead."""
+    assert set(theme.HIT_OUTCOMES) == set(outcomes.HIT_OUTCOMES)
+    assert set(theme.BATTED_OUT_OUTCOMES) == set(outcomes.BATTED_OUT_OUTCOMES)
+    assert set(theme.REACH_OUTCOMES) == set(outcomes.REACH_OUTCOMES)
+    assert set(theme.IN_PLAY_OUTCOMES) == set(outcomes.IN_PLAY_OUTCOMES)
+    assert set(theme.OUT_OUTCOMES) == set(outcomes.OUT_OUTCOMES)
+    assert set(theme.TERMINAL_OUTCOMES) == set(outcomes.TERMINAL_OUTCOMES)
+
+
+def test_the_underscored_spelling_has_one_producer():
+    """`db_key` is the only place `POP UP` becomes `POP_UP`. It used to be
+    written out at each comparison, which is how two spellings of one outcome
+    both came to need matching."""
+    assert outcomes.db_key("POP UP") == "POP_UP"
+    assert outcomes.db_key("HOME RUN") == "HOME_RUN"
+    assert outcomes.db_key("strikeout") == "STRIKEOUT"
+    assert outcomes.db_key(None) == ""
+    assert all(" " not in k for k in outcomes.DB_TERMINAL_OUTCOMES)
+
+
+def test_the_error_amber_has_one_definition():
+    """It was a literal in four files, and the constant that was meant to be
+    authoritative carried a comment listing the other three copies."""
+    from strikefactor.gameplay import hit_animation as ha
+
+    assert ha.ERROR_MARK_COLOR == outcomes.ERROR_COLOR
+    assert outcomes.COLORS[outcomes.REACHED_ON_ERROR] == outcomes.ERROR_COLOR
+
+
+def test_a_hit_and_the_bases_it_is_worth_cannot_disagree():
+    assert set(outcomes.HIT_BASES) == set(outcomes.HIT_OUTCOMES)
+    assert sorted(outcomes.HIT_BASES.values()) == [1, 2, 3, 4]

@@ -13,6 +13,7 @@ once (`collision_angled` rotated its circle the wrong way for the life of the
 project). Every directional claim below is therefore made for both hands.
 """
 
+import functools
 import math
 import random
 
@@ -313,9 +314,6 @@ def test_a_flawless_swing_can_be_fair_anywhere_in_the_zone(hand):
 # comes from a locally seeded `random.Random`, so the same arguments always
 # produce the same contacts. `Contact` is frozen, so handing the same list to
 # four tests cannot let one of them disturb another.
-_POPULATION_CACHE = {}
-
-
 def _population(level, n=1200, hand="R", seed=17):
     """Contacts a plausible player produces, through the real sweep.
 
@@ -323,12 +321,10 @@ def _population(level, n=1200, hand="R", seed=17):
     sweep quality or spray uniformly to calibrate anything in this codebase —
     see the warning over `contact_audio.EV_CALIBRATION`.
     """
-    key = (level, n, hand, seed)
-    if key not in _POPULATION_CACHE:
-        _POPULATION_CACHE[key] = _run_population(level, n, hand, seed)
-    return _POPULATION_CACHE[key]
+    return _run_population(level, n, hand, seed)
 
 
+@functools.lru_cache(maxsize=None)
 def _run_population(level, n, hand, seed):
     rng = random.Random(seed)
     mult = DIFFICULTY_MULTIPLIERS[level]

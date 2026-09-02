@@ -11,6 +11,7 @@ import pygame
 import pygame.gfxdraw
 import pygame_gui
 
+from strikefactor import outcomes
 from strikefactor.gameplay.gameday_manager import GameDayManager, get_pitcher_attrs
 from strikefactor.ui import gameday_theme as gdt
 from strikefactor.ui.pitching_box_panel import PitchingBoxPanel, PitchingSide
@@ -1695,14 +1696,17 @@ class GameDayTransitionState(GameState):
     _DIM_SOFT = gdt.DIM_SOFT
     _DIVIDER = gdt.DIVIDER
 
-    # Hit / out classification reused across screens.
-    _HIT_RESULTS = ('SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN')
-    _OUT_RESULTS = ('STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP UP')
+    # Hit / out classification reused across screens. Composed from
+    # `strikefactor.outcomes` so a new outcome joins one group there rather
+    # than needing to be remembered here — event results are upper-cased,
+    # which is the only reason these are not the tuples themselves.
+    _HIT_RESULTS = tuple(o.upper() for o in outcomes.HIT_OUTCOMES)
+    _OUT_RESULTS = tuple(o.upper() for o in outcomes.OUT_OUTCOMES)
     # Reaching on an error is an at-bat but neither a hit nor an out. Without
     # its own branch below it matches none of these lists and the plate
     # appearance vanishes from the AVG denominator entirely — a silent
     # miscount rather than a crash, which is why it needs naming.
-    _REACH_RESULTS = ('REACHED ON ERROR',)
+    _REACH_RESULTS = tuple(o.upper() for o in outcomes.REACH_OUTCOMES)
     # Compact labels for notable-play display.
     _HIT_ABBREV = {
         'SINGLE': '1B', 'DOUBLE': '2B', 'TRIPLE': '3B', 'HOME RUN': 'HR',

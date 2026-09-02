@@ -181,12 +181,8 @@ class PlayTiming:
     # How much of `release_s` was a misplay, and what `p_out` would have been
     # without it. Kept as components rather than folded away because the
     # difference between them *is* the scorer's rule — see `roll_verdict`.
+    p_out_clean: float
     misplay_s: float = 0.0
-    p_out_clean: float = None
-
-    def __post_init__(self):
-        if self.p_out_clean is None:
-            object.__setattr__(self, "p_out_clean", self.p_out)
 
     @property
     def is_bang_bang(self):
@@ -225,10 +221,45 @@ def ball_travel_time_s(ev_mph, distance_ft):
     routine; a topped roller eats most of the runner's clock before anyone
     touches it.
     """
+    return max(0.0, distance_ft) / ground_speed_fts(ev_mph)
+
+
+def ground_speed_fts(ev_mph):
+    """How fast the ball is actually moving along the ground, in ft/s.
+
+    Public because it is not only the infield race that needs it: a ball
+    that goes *through* a fielder has to leave at the pace it really had,
+    and that has to be the same number the verdict was computed against.
+    """
     ev = max(0.0, ev_mph or 0.0)
-    speed_fts = max(MIN_GROUND_SPEED_FTS,
-                    ev * MPH_TO_FTS * ground_speed_retention(ev))
-    return max(0.0, distance_ft) / speed_fts
+    return max(MIN_GROUND_SPEED_FTS,
+               ev * MPH_TO_FTS * ground_speed_retention(ev))
+
+
+def stretch_fraction(ranging_ft):
+    """How far off their set position the fielder had to go, in [0, 1].
+
+    One definition, because two things interpolate on it: the release
+    penalty below and `defense.misplay_prob`. See `RELEASE_STRETCH_FT`.
+    """
+    return min(1.0, max(0.0, ranging_ft or 0.0) / RELEASE_STRETCH_FT)
+
+
+def defense_arm_fts(defense, override=None):
+    """The speed the ball leaves this fielder's hand at, in ft/s.
+
+    `override` is for the play with no throw in it: an unassisted first
+    baseman carries the ball to the bag on their own legs, so the caller
+    substitutes a sprint speed. Everything else takes the profile's arm.
+    """
+    if override is not None:
+        return override
+    return THROW_EFFECTIVE_FTS if defense is None else defense.throw_fts
+
+
+def defense_release_scale(defense):
+    """How quick this defense's hands are; 1.0 for the neutral defense."""
+    return 1.0 if defense is None else defense.release_scale
 
 
 def release_time_s(ranging_ft=0.0, is_charging=False, rng=None,
@@ -261,7 +292,7 @@ def release_time_s(ranging_ft=0.0, is_charging=False, rng=None,
     if is_charging:
         base = RELEASE_CHARGE_S
     else:
-        stretch = min(1.0, max(0.0, ranging_ft) / RELEASE_STRETCH_FT)
+        stretch = stretch_fraction(ranging_ft)
         base = RELEASE_ROUTINE_S + (RELEASE_STRETCHED_S - RELEASE_ROUTINE_S) * stretch
     base *= release_scale
     if rng is not None:
@@ -317,9 +348,9 @@ def resolve_infield_play(ev_mph, fielder_xy_ft, ball_distance_ft,
                          ranging_ft=0.0, is_charging=False,
                          handedness="R", sprint_fts=SPRINT_SPEED_LEAGUE_FTS,
                          difficulty_offset_s=0.0,
-                         effective_throw_fts=THROW_EFFECTIVE_FTS,
+                         effective_throw_fts=None,
                          ball_to_glove_s=None,
-                         release_scale=1.0,
+                         defense=None,
                          misplay_s=0.0,
                          rng=None):
     """Run both clocks and return the timing.
@@ -333,11 +364,21 @@ def resolve_infield_play(ev_mph, fielder_xy_ft, ball_distance_ft,
     was there to meet the ball, which is true of a ball fielded on the fly
     and false of one chased down and picked up — for that play the clock
     starts when the fielder reaches it, which can be seconds later.
+
+    `defense` is a `gameplay.defense.DefenseProfile`, passed as the value it
+    is rather than destructured into a keyword per attribute. It used to
+    arrive as `effective_throw_fts` and `release_scale` separately, so every
+    new attribute of a defense meant widening this signature and every call
+    site again. It is read by duck-typing rather than imported, deliberately:
+    `defense` imports *this* module for `RELEASE_STRETCH_FT`, and the edge
+    must not close into a cycle. `None` means the neutral defense, the same
+    thing it means to `HitAnimation`.
     """
     ball_s = (ball_to_glove_s if ball_to_glove_s is not None
               else ball_travel_time_s(ev_mph, ball_distance_ft))
-    rel_s = release_time_s(ranging_ft, is_charging, rng, release_scale, misplay_s)
-    throw_s = throw_time_s(fielder_xy_ft, effective_throw_fts)
+    rel_s = release_time_s(ranging_ft, is_charging, rng,
+                           defense_release_scale(defense), misplay_s)
+    throw_s = throw_time_s(fielder_xy_ft, defense_arm_fts(defense, effective_throw_fts))
     defense_s = ball_s + rel_s + throw_s
     runner_s = home_to_first_s(handedness, sprint_fts, difficulty_offset_s)
     margin_s = runner_s - defense_s
@@ -354,13 +395,6 @@ def resolve_infield_play(ev_mph, fielder_xy_ft, ball_distance_ft,
         # window in `roll_verdict` is exactly the gap between the two.
         p_out_clean=p_out_from_margin(margin_s + max(0.0, misplay_s)),
     )
-
-
-def roll_is_out(timing, rng=random):
-    """Sample the verdict. Separated from `resolve_infield_play` so the
-    timing can be computed, logged and displayed without consuming
-    randomness — and so a replay can re-derive the numbers."""
-    return rng.random() < timing.p_out
 
 
 def roll_verdict(timing, rng=random):
@@ -382,11 +416,30 @@ def roll_verdict(timing, rng=random):
     reached on an error; the rest say SINGLE — which is also what a scorer
     would rule.
 
-    With `misplay_s == 0` the window is empty and this is `roll_is_out`.
+    With `misplay_s == 0` the window is empty and this is a plain
+    `rng.random() < p_out`.
+
+    Kept separate from `resolve_infield_play` so the timing can be
+    computed, logged and displayed without consuming randomness — and so a
+    replay can re-derive the numbers.
+    """
+    return verdict_from(timing.p_out, timing.p_out_clean, rng)
+
+
+def verdict_from(p_out, p_out_clean, rng=random):
+    """The scorer's rule as a function of the two clocks, not of a `PlayTiming`.
+
+    Stated this way because a play can reach it without a race having run.
+    A ball that goes *through* a fielder is the `p_out = 0` case: nobody
+    threw, so the batter reached, and the only question left is whether the
+    clean play would have been an out — which is exactly the window
+    `[0, p_out_clean)`. `hit_animation._trigger_through` used to write that
+    out as its own second draw, which is the two-models-of-one-thing fault
+    this function exists to prevent, 400 lines from the rule it copied.
     """
     u = rng.random()
-    if u < timing.p_out:
+    if u < p_out:
         return "OUT"
-    if u < timing.p_out_clean:
+    if u < p_out_clean:
         return "ERROR"
     return "HIT"

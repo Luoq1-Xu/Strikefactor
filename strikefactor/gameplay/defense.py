@@ -34,6 +34,7 @@ See docs/defense-strength.md for sourcing on every number below.
 from dataclasses import dataclass
 from enum import Enum
 
+from strikefactor.gameplay import infield_timing
 from strikefactor.gameplay.infield_timing import RELEASE_STRETCH_FT
 
 
@@ -69,6 +70,7 @@ class DefenseProfile:
     body_block: float          # of balls they fail to glove, the share they still
                                # keep in front of them; the rest go through
     muff_recovery_s: float     # ball on the grass -> back under control
+    through_turn_s: float      # ball past you -> turned round and chasing it
 
 
 # Sourcing, field by field:
@@ -106,31 +108,40 @@ class DefenseProfile:
 #                 slow roller is the canonical infield hit; it must not become
 #                 the canonical easy out.
 #
-# field_misplay_p THE CALIBRATION DIAL, and now a measurement rather than a
-#                 guess. Fielding percentage .984 means ~1.6% of chances
-#                 become charged errors, but a charged error needs *both* a
-#                 misplay and that the misplay cost the out:
+# field_misplay_p THE CALIBRATION DIAL. Fielding percentage .984 means ~1.5%
+#                 of chances become charged errors. **Set by measuring, not by
+#                 deriving** -- run `python -m tools.calibrate_defense --n 2500`
+#                 and read ERR% off the LEAGUE row.
+#
+#                 It used to carry a derivation, and the derivation was wrong
+#                 in a way worth recording because it is the shape of mistake
+#                 this whole module is arranged to avoid. It said:
 #                     P(error) = field_misplay_p * mod * E[p_out_clean - p_out]
+#                 with E[p_out_clean - p_out] = 0.495 measured by forcing every
+#                 reached ball to be *bobbled*. But a bobble is one of three
+#                 mechanisms, and measured at LEAGUE it is much the smallest:
+#                     BOBBLE    39% of them become errors -> 0.28% of BIP
+#                     THROUGH   93%                       -> 1.56% of BIP
+#                     MUFF     100%                       -> 0.24% of BIP
+#                 A through-ball converts at 93% rather than 39% because no
+#                 race ran at all -- the batter has reached by construction, so
+#                 the only question left is whether the clean play would have
+#                 been an out. The formula modelled the 0.28% term and was read
+#                 as though it gave the total, so the constant was carrying the
+#                 error rate of one mechanism in three and ran ~1.4x hot:
+#                 measured 2.08% of balls in play at LEAGUE against MLB's 1.5%.
+#                 Rescaled x0.72 across the ladder (2026-09-02), which lands
+#                 LEAGUE at 1.47%.
 #
-#                 Both of those were measured over the batter this game
-#                 actually produces (quality from the recorded quantiles,
-#                 spray from the recorded distribution), forcing every
-#                 reached ball to be bobbled:
-#                     E[p_out_clean - p_out] = 0.495   (median 0.522)
-#                     mean modulation         = 3.18x
-#
-#                 The modulation is the part that is easy to miss and it is
-#                 the larger of the two: the ranging and hop gains multiply
-#                 the base by more than three on a *typical* play, because a
-#                 fielder who came up with a ball has usually moved for it.
-#                 The base is therefore not the rate — 0.045 here meant an
-#                 11% effective misplay rate, which ran errors at 3.4% of
-#                 balls in play against MLB's ~1.4% and took the ground-ball
-#                 hit rate to 41%.
-#
-#                 0.015 / (0.495 * 3.18) = 0.0095. Re-derive it the same way
-#                 whenever the gains or the contact distribution change, and
-#                 tune this rather than the better-sourced numbers above.
+#                 Two things the arithmetic cannot see, and the reason to
+#                 measure instead. The ranging and hop gains multiply the base
+#                 by ~3.18x on a *typical* play, because a fielder who came up
+#                 with a ball has usually moved for it -- so the base is not
+#                 the rate. And the roll only happens when a fielder reaches
+#                 the ball at all, which no closed form here knows the
+#                 frequency of. Tune this rather than the better-sourced
+#                 numbers above, and re-measure whenever the gains, the
+#                 mechanism split or the contact distribution change.
 #
 # catch_muff_p    MLB outfielders convert well over 99% of balls they reach;
 #                 outright drops are a few tenths of a percent of fly balls.
@@ -153,34 +164,52 @@ class DefenseProfile:
 # muff_recovery_s The ball is at your feet, but you still have to find it,
 #                 pick it and set. It is spent by extra_bases through
 #                 retrieved_at_s, so it is a real cost, not a cosmetic pause.
+#                 Fitted rather than published -- there is no source for "how
+#                 long does a fielder take to recover a ball he dropped".
+#
+# through_turn_s  The same recovery, for the other way a ball gets loose: it
+#                 went *past* you and you have to turn and chase it. Without
+#                 it a fielder re-secures their own miss on the next frame,
+#                 standing where the ball just was, and the through-ball never
+#                 reaches the outfield.
+#
+#                 It lived in hit_animation as a flat 0.45 s while its sibling
+#                 above was per-level, so a Sandlot fielder turned round
+#                 exactly as fast as a Gold Glove one -- on the mechanism that
+#                 produces most of this module's errors, which is where the
+#                 setting should read most clearly. Scaled off LEAGUE by the
+#                 same ratios muff_recovery_s uses (1.20 / 1.07 / 1.00 / 0.87):
+#                 recovery from a misplay scales with the defense whichever
+#                 misplay it was. LEAGUE stays exactly 0.45 so the neutral
+#                 identity still holds.
 _PROFILES = {
     DefenseLevel.SANDLOT: DefenseProfile(
         label="Sandlot",
         sprint_fts=23.0, reaction_min_s=0.260, reaction_max_s=0.480,
         throw_fts=98.0, release_scale=1.20,
-        field_misplay_p=0.061, catch_muff_p=0.0100, body_block=0.40,
-        muff_recovery_s=1.80,
+        field_misplay_p=0.044, catch_muff_p=0.0100, body_block=0.40,
+        muff_recovery_s=1.80, through_turn_s=0.54,
     ),
     DefenseLevel.MINORS: DefenseProfile(
         label="Minors",
         sprint_fts=25.5, reaction_min_s=0.225, reaction_max_s=0.420,
         throw_fts=104.0, release_scale=1.09,
-        field_misplay_p=0.038, catch_muff_p=0.0050, body_block=0.55,
-        muff_recovery_s=1.60,
+        field_misplay_p=0.027, catch_muff_p=0.0050, body_block=0.55,
+        muff_recovery_s=1.60, through_turn_s=0.48,
     ),
     DefenseLevel.LEAGUE: DefenseProfile(
         label="League",
         sprint_fts=27.0, reaction_min_s=0.200, reaction_max_s=0.380,
         throw_fts=110.0, release_scale=1.00,
-        field_misplay_p=0.023, catch_muff_p=0.0025, body_block=0.70,
-        muff_recovery_s=1.50,
+        field_misplay_p=0.017, catch_muff_p=0.0025, body_block=0.70,
+        muff_recovery_s=1.50, through_turn_s=0.45,
     ),
     DefenseLevel.GOLD_GLOVE: DefenseProfile(
         label="Gold Glove",
         sprint_fts=29.0, reaction_min_s=0.170, reaction_max_s=0.320,
         throw_fts=118.0, release_scale=0.88,
-        field_misplay_p=0.012, catch_muff_p=0.0012, body_block=0.85,
-        muff_recovery_s=1.30,
+        field_misplay_p=0.009, catch_muff_p=0.0012, body_block=0.85,
+        muff_recovery_s=1.30, through_turn_s=0.39,
     ),
 }
 
@@ -284,9 +313,11 @@ def stretch(ranging_ft):
     """How far off their set position the fielder had to go, in [0, 1].
 
     The same quantity `infield_timing.release_time_s` interpolates its release
-    penalty on, by construction -- see RANGING_FULL_FT.
+    penalty on -- not by restatement but by call, so that if the penalty is
+    ever made non-linear in ranging the misplay probability follows it. See
+    RANGING_FULL_FT.
     """
-    return _unit(ranging_ft, 0.0, RANGING_FULL_FT)
+    return infield_timing.stretch_fraction(ranging_ft)
 
 
 def misplay_prob(profile, ranging_ft=0.0, ev_mph=None, is_charging=False,

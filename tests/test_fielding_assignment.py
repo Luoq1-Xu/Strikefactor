@@ -282,6 +282,28 @@ def _is_infield_play(anim):
             and anim._fielded_ft() <= ha.INFIELD_PLAY_MAX_FT)
 
 
+# Three tests below assert different properties of one deterministic sweep.
+# `random.seed(i)` per play makes each one a function of its index alone, so
+# the sample is reproducible and a longer run is a superset of a shorter one.
+# Simulated once and handed out, for the reason `test_defense.py::_plays`
+# gives: separate assertions each naming their own cause, one run.
+_SWEEP_CACHE = {}
+
+
+def _sweep(n=200, q0=0.20, step=0.004):
+    """`n` plays off one quality ramp as `(anim, thrown, carried)`, memoized."""
+    key = (n, q0, step)
+    if key not in _SWEEP_CACHE:
+        plays = []
+        for i in range(n):
+            random.seed(i)
+            anim = _make(quality=q0 + step * i)
+            thrown, carried = _run(anim)
+            plays.append((anim, thrown, carried))
+        _SWEEP_CACHE[key] = plays
+    return _SWEEP_CACHE[key]
+
+
 def test_an_infielder_who_fields_a_grounder_always_makes_a_play_on_it():
     """The reported bug: GROUNDOUT appearing the instant the fielder reached
     the ball, with no throw and nobody covering first.
@@ -315,10 +337,7 @@ def test_the_throw_is_drawn_on_a_ball_picked_up_off_the_ground():
     """The specific path that had none — asserted directly, so a regression
     cannot hide behind the in-flight intercepts in the sweep above."""
     found = None
-    for i in range(200):
-        random.seed(i)
-        anim = _make(quality=0.20 + 0.004 * i)
-        thrown, carried = _run(anim)
+    for anim, thrown, carried in _sweep():
         if _is_infield_play(anim) and not anim._secured_in_flight:
             found = (anim, thrown, carried)
             break
@@ -336,10 +355,7 @@ def test_the_runner_beating_the_throw_still_shows_the_throw():
     throw still plays, the runner just gets there first" — and it is the
     whole reason the play is worth watching."""
     seen = 0
-    for i in range(200):
-        random.seed(i)
-        anim = _make(quality=0.20 + 0.004 * i)
-        thrown, carried = _run(anim)
+    for anim, thrown, carried in _sweep():
         if _is_infield_play(anim) and anim.classified_outcome == "SINGLE":
             seen += 1
             assert thrown or carried, "an infield single with no play made"
@@ -349,10 +365,7 @@ def test_the_runner_beating_the_throw_still_shows_the_throw():
 def test_first_base_is_still_covered_when_the_ball_was_picked_up():
     """Standing the defense down before resolving the play sent the cover man
     home, so the throw arced to an empty bag. Order of operations."""
-    for i in range(200):
-        random.seed(i)
-        anim = _make(quality=0.20 + 0.004 * i)
-        _run(anim)
+    for anim, _thrown, _carried in _sweep():
         if (_is_infield_play(anim) and not anim._secured_in_flight
                 and anim._go_throw_start_ms is not None):
             assert anim._cover_role is not None, "throw to an empty bag"

@@ -420,10 +420,11 @@ def results_section(ctx, console):
             metrics.fmt_pct(100 * r["f_strike_pct"]),
             metrics.fmt_pct(100 * r["putaway_pct"]),
             metrics.fmt_avg(r["babip"]) if r["bip"] else "—",
+            metrics.fmt_pct(100 * r["roe_pct"]) if r["bip"] else "—",
         ] for _, r in df.iterrows()]
         console.print(_table(
             ["Pitcher", "TBF", "NP", "P/PA", "CSW%", "Whiff%", "Swing%", "Zone%",
-             "Chase%", "F-Str%", "PutAway%", "BABIP"], rows,
+             "Chase%", "F-Str%", "PutAway%", "BABIP", "ROE%"], rows,
             title="Plate Discipline"))
 
     prof = metrics.spray_profile(ctx)

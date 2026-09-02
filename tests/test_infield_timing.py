@@ -206,7 +206,7 @@ def test_the_components_account_for_the_whole_defensive_clock():
 
 
 def test_resolving_a_play_consumes_no_randomness():
-    """Timing is deterministic; only `roll_is_out` samples. That keeps the
+    """Timing is deterministic; only `roll_verdict` samples. That keeps the
     displayed numbers and the verdict derivable from the same inputs."""
     random.seed(1)
     before = random.random()
@@ -218,5 +218,5 @@ def test_resolving_a_play_consumes_no_randomness():
 def test_rolling_the_verdict_respects_the_probability():
     t = _play(ev_mph=45.0, ball_distance_ft=100.0)
     rng = random.Random(0)
-    outs = sum(it.roll_is_out(t, rng) for _ in range(4000))
+    outs = sum(it.roll_verdict(t, rng) == "OUT" for _ in range(4000))
     assert abs(outs / 4000 - t.p_out) < 0.03

@@ -128,26 +128,33 @@ def test_the_sampler_constants_have_not_drifted_from_the_shared_ones():
 # Cached objects are read-only here. Nothing in this file mutates a returned
 # animation, and nothing should start — see `_scratch` in test_defense.py for
 # what it costs when a test needs to poke one.
-_SAMPLE_CACHE = {}
+#
+# The seed must not be a function of `n`. Seeding on the sample size made
+# `_sample(200)`, `_sample(600)` and `_sample(800)` three *unrelated*
+# populations for the same batter, so 1000 plays were simulated to obtain a
+# sample the 800 already contained. It is pinned at the largest size asked for
+# here instead, which keeps the four `_sample(800)` tests — the MLB-anchored
+# infield-hit band among them — on exactly the sample they were calibrated
+# against, and makes the smaller sizes prefixes of it.
+#
+# The cache holds the *raw* plays rather than the fielded ones, because
+# `_sample(200)` means "the fielded subset of the first 200 plays". A prefix of
+# the filtered list would mean "the first 200 fielded plays", which is a
+# different and larger sample.
+_SEED_N = 800
+_RAW_CACHE = {}
 
 
 def _sample(n=600, hand="R", modifier=1.0):
     """Grounders that an infielder actually came up with."""
-    key = (n, hand, modifier)
-    if key not in _SAMPLE_CACHE:
-        _SAMPLE_CACHE[key] = _run_sample(n, hand, modifier)
-    return _SAMPLE_CACHE[key]
-
-
-def _run_sample(n, hand, modifier):
-    rng = random.Random(n * 7919 + len(hand) + int(modifier * 100))
-    fielded = []
-    for i in range(n):
-        anim = _play(i, _realistic_quality(rng), hand, modifier,
-                     spray_deg=_realistic_spray(rng))
-        if anim.play_timing is not None:
-            fielded.append(anim)
-    return fielded
+    key = (hand, modifier)
+    raw, rng = _RAW_CACHE.get(key) or ([], random.Random(
+        _SEED_N * 7919 + len(hand) + int(modifier * 100)))
+    for i in range(len(raw), n):
+        raw.append(_play(i, _realistic_quality(rng), hand, modifier,
+                         spray_deg=_realistic_spray(rng)))
+    _RAW_CACHE[key] = (raw, rng)
+    return [a for a in raw[:n] if a.play_timing is not None]
 
 
 # The batter reaching first, however they got there. An error is reaching:

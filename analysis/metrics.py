@@ -177,9 +177,11 @@ def _outcome_metrics(g):
     # Reached on error. Not a hit and not an out, so it needs no special case
     # in any of the rates below — it lands in `ab` and `bip` and stays out of
     # `h` and `tb` purely by not being in HIT_OUTCOMES, which is the standard
-    # scoring convention for a ROE. Counted here only so it is *visible*: a
+    # scoring convention for a ROE. Counted here so it is *visible*: a
     # defensive event that moves BABIP has to be reportable, or the defense
-    # setting has no readout anywhere.
+    # setting has no readout anywhere. Rendered as ROE% beside BABIP in the
+    # plate-discipline and slash-line tables, and in the terminal renderer —
+    # all three, because a metric with no readout is one nobody checks.
     roe = sum(counts.get(o, 0) for o in theme.REACH_OUTCOMES)
 
     h = s1 + d2 + t3 + hr

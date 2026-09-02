@@ -21,6 +21,7 @@ import math
 
 import pytest
 
+from strikefactor.gameplay import ball_flight
 from strikefactor.gameplay import hit_animation as ha
 from strikefactor.gameplay.hit_animation import HitAnimation
 
@@ -275,7 +276,7 @@ def test_the_ball_comes_down_off_the_wall_under_gravity():
         height_px, fall_ms = anim._wall_drop
         assert height_px == pytest.approx(frames[struck][0], abs=1e-6)
         expected = anim._anim_ms(
-            math.sqrt(2.0 * (height_px / ha.FT_TO_PX_Y) / 32.174))
+            math.sqrt(2.0 * (height_px / ha.FT_TO_PX_Y) / ball_flight.G_FT_S2))
         assert fall_ms == pytest.approx(expected, rel=1e-3)
         # Monotone down to the grass, never back up.
         lifts = [anim._current_bounce_lift(tau)

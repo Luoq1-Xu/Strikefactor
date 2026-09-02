@@ -144,8 +144,41 @@ near their maximum on a *typical* play. 0.045 therefore meant an 11% effective
 misplay rate: errors at 3.4% of balls in play against MLB's ~1.4%, and a
 ground-ball hit rate of 41%.
 
-**A modulated base is not a rate.** Re-derive it the same way whenever the gains
-or the contact distribution change.
+**A modulated base is not a rate.**
+
+### ...and the formula still only modelled one mechanism in three
+
+The correction above fixed the multiplier and left the *shape* of the formula
+wrong, which the calibration harness caught two revisions later (2026-09-02).
+`E[p_out_clean − p_out]` is the conversion rate of a **bobble** — the play where
+a race still ran and the misplay cost the out. It was read as though it were the
+conversion rate of every misplay. Measured at LEAGUE over 2500 balls in play:
+
+| mechanism | of those, become errors | share of BIP |
+|---|---|---|
+| BOBBLE | 39% | 0.28% |
+| THROUGH | **93%** | **1.56%** |
+| MUFF | 100% | 0.24% |
+
+A through-ball converts at 93% rather than 39% because **no race ran at all**:
+the batter has reached by construction, so the only question left is the
+counterfactual. The formula was calibrating the smallest of the three terms and
+being read as the total, so the dial carried ~1.4× too much: 2.08% of balls in
+play at LEAGUE against MLB's ~1.5%.
+
+Rescaled ×0.72 across the ladder, which lands the error rate at
+**3.84 / 2.48 / 1.56 / 0.72%**.
+
+**The general shape: the closed form could not have got this right.** Two of its
+inputs are invisible to it — the ~3.18× gain modulation, and how often a fielder
+reaches the ball at all. So `field_misplay_p` is now set by *measurement*:
+
+```bash
+python -m tools.calibrate_defense --n 2500     # read ERR% off the LEAGUE row
+```
+
+That harness is the thing this document assumed existed and that had never been
+committed; every number quoted here can now be re-derived rather than trusted.
 
 ### A "through-ball" that went through nobody
 
@@ -218,18 +251,26 @@ precisely so two files cannot hold drifting copies of them.
 
 ## 5. What is still off
 
-**Ground-ball hit rate is 32.5% at LEAGUE against ~24%, and BABIP .337 against
-.290.** Both are inherited rather than introduced — the pre-misplay build
-measured 29.3% and .332 under this same harness. The harness's batted-ball mix
+**Ground-ball hit rate is 29.8% at LEAGUE against ~24%, and BABIP .324 against
+.290** (n=2500, after the 2026-09-02 rescale; the infield-hit rate is in band at
+7.9% against MLB's 6-8%). Both are inherited rather than introduced — the
+pre-misplay build measured 29.3% and .332 under this same harness. The harness's batted-ball mix
 is the likely cause: it samples the game's own liner-heavy distribution, and
 liners have much the highest BABIP. Closing it means either the contact model
 producing fewer liners or the outfield alignment covering them better, and
 neither is a defense-strength question.
 
-**LEAGUE ROE sits at 1.40% but GOLD GLOVE only reaches 1.00%**, against a target
-nearer 0.6%. The rungs at the top are compressed because a large share of errors
-there come from through-balls on hard contact, where `hop_difficulty` dominates
+**The top of the ROE ladder is compressed.** After the rescale LEAGUE reads
+1.56% and GOLD GLOVE 0.72% — both close to target now, but the gap between them
+is narrower than the gap at the bottom, because a large share of errors up there
+come from through-balls on hard contact, where `hop_difficulty` dominates
 `body_block`.
+
+**`body_block` is the dial for the ground-ball gap, and it cannot be turned on
+its own.** Raising the block removes through-balls, and through-balls are also
+~75% of charged errors — so moving GB-hit% toward 24% pulls ERR% below target at
+the same time. It is a two-variable fit against both targets at once, not
+another single pass.
 
 **The ROE ladder is not monotone at small samples.** At n = 1100 SANDLOT read
 *below* MINORS; at n = 3000 it did not. Errors are rare enough that ±0.3% of

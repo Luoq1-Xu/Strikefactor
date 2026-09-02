@@ -115,11 +115,12 @@ def plate_discipline(ctx):
         metrics.fmt_pct(100 * r["f_strike_pct"]),
         metrics.fmt_num(r["go_ao"]),
         metrics.fmt_avg(r["babip"]) if r["bip"] else "—",
+        metrics.fmt_pct(100 * r["roe_pct"]) if r["bip"] else "—",
         metrics.fmt_avg(r["woba"]),
     ] for _, r in df.iterrows()]
     cols = ["Pitcher", "TBF", "NP", "P/PA", "K%", "BB%", "K-BB%", "K/BB",
             "CSW%", "Whiff%", "Swing%", "Zone%", "Chase%", "F-Strike%",
-            "GO/AO", "BABIP", "wOBA"]
+            "GO/AO", "BABIP", "ROE%", "wOBA"]
     styled_table(ax, rows, cols, fontsize=9)
     ax.set_title("Per-Pitcher Summary", fontweight="bold", pad=10)
 

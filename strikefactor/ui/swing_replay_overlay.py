@@ -252,7 +252,6 @@ class SwingReplayOverlay:
         # Per-swing phase boundaries, set by `_compute_phases` at `trigger`.
         # Defaulted so the clock methods are total even with no record open.
         self._replay_end_ms = _PHASE_INTRO_END
-        self._freeze_end_ms = _PHASE_INTRO_END + _FREEZE_HOLD_MS
         self._view = _VIEW_SIDE
         self._paused = False
         self._chip_hits = []
@@ -282,7 +281,7 @@ class SwingReplayOverlay:
         self._record = record
         self._swing = record.bat_swing()
         self._ghost = record.bat_state_at_ball_arrival()
-        self._replay_end_ms, self._freeze_end_ms = self._compute_phases()
+        self._replay_end_ms = self._compute_phases()
         self._depth_span = self._compute_depth_range()
         # Warmed here rather than on the first frame that draws the bands:
         # measuring them re-sweeps the swing about 26 times, which is a
@@ -390,7 +389,7 @@ class SwingReplayOverlay:
                 rec.clip_end_s + _REPLAY_TAIL_S)
 
     def _compute_phases(self):
-        """`(replay_end_ms, freeze_end_ms)` for the record now open.
+        """`replay_end_ms` for the record now open.
 
         The replay's wall-clock length is the window's length at one fixed
         slow-motion rate, so the bat sweeps at the same speed on every swing
@@ -405,9 +404,15 @@ class SwingReplayOverlay:
         it on every frame.
         """
         start, end = self._window_s()
-        replay = _PHASE_INTRO_END + round(max(0.0, end - start)
-                                          * _REPLAY_MS_PER_PITCH_S)
-        return replay, replay + _FREEZE_HOLD_MS
+        return _PHASE_INTRO_END + round(max(0.0, end - start)
+                                        * _REPLAY_MS_PER_PITCH_S)
+
+    @property
+    def _freeze_end_ms(self):
+        """When the held frame is done. Derived rather than stored: the hold
+        is a fixed length after the replay ends, and two fields with an
+        invariant between them are two chances to break it."""
+        return self._replay_end_ms + _FREEZE_HOLD_MS
 
     def _now_s(self):
         """Where the replay clock currently sits, in pitch seconds."""
@@ -796,7 +801,7 @@ class SwingReplayOverlay:
         if self._elapsed_ms < self._replay_end_ms:
             return
         fade = min(1.0, (self._elapsed_ms - self._replay_end_ms)
-                   / max(1, self._freeze_end_ms - self._replay_end_ms))
+                   / _FREEZE_HOLD_MS)
         shade = int(_lerp(0, 90, fade))
         if shade <= 2:
             return

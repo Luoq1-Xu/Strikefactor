@@ -43,6 +43,12 @@ include = ["strikefactor*", "analysis*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# The repository root, so `tools.sim` — the headless ball-in-play simulator
+# shared by the suite and `python -m tools.calibrate_defense` — imports the
+# same way from both. `tools` is deliberately not in `packages.find` above:
+# it is developer tooling and must not ship with the game, which means an
+# editable install's finder does not expose it and this has to.
+pythonpath = ["."]
 filterwarnings = ["ignore::DeprecationWarning"]
 # NOTE: SDL is forced to its dummy video/audio drivers in tests/conftest.py,
 # before pygame is imported, so the suite needs no display.

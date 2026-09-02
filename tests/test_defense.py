@@ -8,16 +8,17 @@ re-measuring every MLB-calibrated band in the suite.
 """
 
 import contextlib
+import dataclasses
 import random
 import subprocess
 import sys
 
-import conftest
 import pytest
 
 from strikefactor.gameplay import defense as d
 from strikefactor.gameplay import infield_timing as it
 from strikefactor.settings_manager import SettingsManager
+from tools import sim
 
 LADDER = [d.DefenseLevel.SANDLOT, d.DefenseLevel.MINORS,
           d.DefenseLevel.LEAGUE, d.DefenseLevel.GOLD_GLOVE]
@@ -108,7 +109,7 @@ def test_the_arm_ladder_tops_out_at_the_sourced_maximum():
 # ---- Monotonicity ---------------------------------------------------------
 
 RISING = ["sprint_fts", "throw_fts", "body_block"]
-FALLING = ["reaction_min_s", "reaction_max_s", "release_scale",
+FALLING = ["reaction_min_s", "reaction_max_s", "release_scale", "through_turn_s",
            "field_misplay_p", "catch_muff_p", "muff_recovery_s"]
 
 
@@ -171,10 +172,23 @@ def test_the_hop_does_not_apply_to_a_ball_caught_in_the_air():
 
 
 def test_misplay_probability_is_bounded():
-    """Even the worst play on the worst defense is mostly made."""
+    """Even the worst play on the worst defense is mostly made.
+
+    `MISPLAY_P_MAX` is a rail, not a working limit. Since `field_misplay_p`
+    was rescaled x0.72 (2026-09-02, see the sourcing note in defense.py) the
+    worst play available -- 500 ft of ranging, 130 mph, charging -- modulates
+    SANDLOT's base to ~0.28, under the 0.35 cap. The invariant that matters is
+    the bound, so that is what is asserted of the real levels; the cap itself
+    is still exercised, on a profile hot enough to reach it, rather than being
+    asserted somewhere it can no longer fire.
+    """
     worst = d.profile_for(d.DefenseLevel.SANDLOT)
     p = d.misplay_prob(worst, ranging_ft=500.0, ev_mph=130.0, is_charging=True)
-    assert p == d.MISPLAY_P_MAX
+    assert p < d.MISPLAY_P_MAX
+
+    hot = dataclasses.replace(worst, field_misplay_p=0.2)
+    assert d.misplay_prob(hot, ranging_ft=500.0, ev_mph=130.0,
+                          is_charging=True) == d.MISPLAY_P_MAX
     for lv in LADDER:
         for ranging in (0.0, 9.0, 18.0, 60.0):
             for ev in (None, 40.0, 75.0, 110.0):
@@ -322,14 +336,7 @@ def test_a_muffed_ball_dies_and_a_through_ball_does_not():
 
 # ---- Integration: the profile reaching the fielders -----------------------
 
-class _StubBatter:
-    def get_handedness(self):
-        return "R"
-
-
-class _StubGame:
-    def __init__(self):
-        self.batter = _StubBatter()
+_StubGame = sim.StubGame
 
 
 def _anim(level=None, **kw):
@@ -452,57 +459,21 @@ def test_the_settings_seam_is_total():
 
 # ---- The ladder actually does something, and neutral does nothing ---------
 
-def _ball_in_play(seed, quality, shape, spray_deg, profile):
-    from strikefactor.gameplay.hit_animation import HitAnimation
-    random.seed(seed)
-    anim = HitAnimation(_StubGame(), outcome="IN_PLAY", on_complete=lambda: None,
-                        quality=quality, batted_ball_type=shape,
-                        spray_deg=spray_deg, defense=profile)
-    t = 0
-    while not anim.finished and t < 14000:
-        t += 16
-        anim.update(t)
-    return anim
+_ball_in_play = sim.ball_in_play
 
 
 # ---- One sample, many assertions ------------------------------------------
 #
-# These sweeps are deterministic: `_ball_in_play` seeds the global RNG from
-# the play index and every draw comes from a locally seeded `random.Random`,
-# so the same arguments always produce the same plays. The tests below
-# deliberately assert *different* properties of the same sample — four of them
-# ask for `_misplayed(worst, 300, shape="GROUNDER")` verbatim and three for
-# `_sweep(worst, 200, seed=808)` — because a merged test that failed would
-# name six possible causes instead of one. Simulating once and handing the
-# result out keeps both: separate assertions, one run.
+# `tools.sim.sweep` owns the memoization and explains it. What matters here is
+# that the tests below deliberately assert *different* properties of the same
+# sample — four ask for `_misplayed(worst, 300, shape="GROUNDER")` verbatim and
+# three for `_sweep(worst, 200, seed=808)` — because a merged test that failed
+# would name six possible causes instead of one. One run, separate assertions.
 #
-# A longer sweep is a *superset* of a shorter one with the same
-# (profile, seed, shape): play `i` depends only on `i` and on the draws made
-# before it, so `_sweep(p, 400, seed)[:200] == _sweep(p, 200, seed)` exactly.
-# The cache serves those prefixes rather than re-simulating them, which is
-# what collapses the four 200/260/400-play sweeps at seed 808 into one.
-#
-# `shape` belongs in the key because passing one *skips* the batted-ball draw,
-# which shifts the whole downstream stream — a forced-GROUNDER run and a free
-# run are different samples, not the same one filtered.
-_PLAY_CACHE = {}
-
-
-def _plays(profile, n, seed, shape=None):
-    """`n` balls in play against one defense, memoized and prefix-served."""
-    key = (profile, seed, shape)
-    have = _PLAY_CACHE.get(key)
-    if have is not None and len(have) >= n:
-        return have[:n]
-    rng = random.Random(seed)
-    plays = []
-    for i in range(n):
-        q = conftest.realistic_quality(rng)
-        s = shape or conftest.realistic_batted_ball(rng)
-        deg = conftest.realistic_spray(rng)
-        plays.append(_ball_in_play(i, q, s, deg, profile))
-    _PLAY_CACHE[key] = plays
-    return plays
+# It is the same sweep the calibration harness runs, which is the point of it
+# living outside this file: a band asserted here and a number quoted in
+# docs/defense-strength.md are then measurements of one thing.
+_plays = sim.sweep
 
 
 @contextlib.contextmanager
@@ -562,8 +533,8 @@ def test_the_neutral_profile_changes_nothing_at_all():
 
 def test_a_better_defense_converts_more_balls_in_play():
     """The ladder has to be worth having. Measured end to end over the full
-    four levels at n=1200 this runs BABIP .435 / .383 / .332 / .290 -- a
-    145-point spread, comfortably wider than the ~60 points between the best
+    four levels at n=2500 this runs BABIP .428 / .364 / .324 / .281 -- a
+    147-point spread, comfortably wider than the ~60 points between the best
     and worst real defensive teams, which is the point of a setting.
 
     Only the two ends are swept here; the middle rungs are monotone by
@@ -667,11 +638,7 @@ def test_the_picture_and_the_record_cannot_disagree():
     this whole design is shaped to prevent. The label comes from the same
     branch as the fielding event, so a clean play can never carry it."""
     worst = d.profile_for(d.DefenseLevel.SANDLOT)
-    rng = random.Random(77)
-    for i in range(250):
-        anim = _ball_in_play(i, conftest.realistic_quality(rng),
-                             conftest.realistic_batted_ball(rng),
-                             conftest.realistic_spray(rng), worst)
+    for anim in _plays(worst, 250, seed=77):
         if anim.classified_outcome == "REACHED ON ERROR":
             assert anim.is_error
             assert anim._misplay_kind is not None
@@ -698,14 +665,11 @@ def test_a_bobble_lands_on_the_release_clock():
 
 
 def test_a_clean_play_has_an_empty_error_window():
-    """With no misplay, `roll_verdict` must be exactly `roll_is_out` — the
-    error window is [p_out, p_out_clean) and it has to be empty."""
+    """With no misplay, `roll_verdict` must be exactly a draw against
+    `p_out` — the error window is [p_out, p_out_clean) and has to be empty."""
     best = d.profile_for(d.DefenseLevel.GOLD_GLOVE)
-    rng = random.Random(9)
     seen = 0
-    for i in range(200):
-        anim = _ball_in_play(i, conftest.realistic_quality(rng), "GROUNDER",
-                             conftest.realistic_spray(rng), best)
+    for anim in _plays(best, 200, seed=9, shape="GROUNDER"):
         if anim._misplay_kind is None and anim.play_timing is not None:
             assert anim.play_timing.p_out_clean == anim.play_timing.p_out
             assert anim.play_timing.misplay_s == 0.0
@@ -714,9 +678,11 @@ def test_a_clean_play_has_an_empty_error_window():
 
 
 def test_a_worse_defense_commits_more_errors():
-    """Measured end to end at n=2500 the ladder runs 3.04% / 2.16% / 1.00% /
-    0.64% of balls in play. Only the ends are swept here; at the sample size
-    a test can afford, adjacent rungs are inside each other's noise."""
+    """Measured end to end at n=2500 the ladder runs 3.84% / 2.48% / 1.56% /
+    0.72% of balls in play, against MLB's ~1.5% at the LEAGUE rung -- rerun it
+    with `python -m tools.calibrate_defense --n 2500`. Only the ends are swept
+    here; at the sample size a test can afford, adjacent rungs are inside each
+    other's noise."""
     def error_rate(profile, n=260):
         plays = _sweep(profile, n, seed=808)
         live = [p for p in plays if p.classified_outcome is not None]

@@ -23,6 +23,7 @@ the tests drive them with plain fakes.
 
 import pygame
 
+from strikefactor.gameplay import defense
 from strikefactor.key_binding_manager import KeyAction
 from strikefactor.settings_manager import DifficultyLevel
 from strikefactor.ui import gameday_theme as gdt
@@ -240,7 +241,11 @@ class SettingsPanel(_RowPanel):
             on = bool(settings_manager.get_setting(self._BOOL_SETTING[key]))
             return ("ON" if on else "OFF"), not on
         if key == 'defense':
-            return settings_manager.get_defense_level().replace("_", " ").upper(), False
+            # The profile owns the display name, so the ladder has one
+            # naming authority rather than a storage key and a string
+            # transform that have to keep agreeing.
+            level = settings_manager.get_defense_level()
+            return defense.profile_for(level).label.upper(), False
         if key == 'hud':
             return settings_manager.get_hud_mode().upper(), False
         if key == 'display_fps':

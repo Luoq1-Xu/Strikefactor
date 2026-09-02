@@ -5,6 +5,7 @@ import pandas as pd
 import pygame
 import pygame.gfxdraw
 
+from strikefactor import outcomes
 from strikefactor.gameplay import bat_contact, bat_path, defense
 from strikefactor.helpers import EnhancedPitchRecord
 from strikefactor.utils.physics import collision
@@ -58,15 +59,13 @@ class PitchSimulation:
     # the play has already shown itself: the fielder wears a "!" at the
     # moment of the misplay (hit_animation._charge_error), so the banner
     # only has to name it.
-    _DISPLAY_NAMES = {
-        "REACHED ON ERROR": "ERROR",
-    }
+    _DISPLAY_NAMES = outcomes.DISPLAY_NAMES
 
     @staticmethod
     def _format_display_outcome(outcome):
         if not isinstance(outcome, str):
             return outcome
-        return PitchSimulation._DISPLAY_NAMES.get(outcome, outcome.replace("_", " "))
+        return outcomes.DISPLAY_NAMES.get(outcome, outcome.replace("_", " "))
 
     def __init__(self, game, release_point, pitchername, speed_mph, pfx_x, pfx_z,
                  target_x, target_y, pitchtype):
@@ -731,8 +730,8 @@ class PitchSimulation:
         # hit, and the old binary put it in the `else` — crediting the batter
         # a hit, incrementing `game.hits`, and feeding it to the batting
         # heatmap as though they had earned it.
-        is_out = classified in ("FLYOUT", "GROUNDOUT", "LINEOUT", "POP UP")
-        is_error = classified == "REACHED ON ERROR"
+        is_out = classified in outcomes.BATTED_OUT_OUTCOMES
+        is_error = classified in outcomes.REACH_OUTCOMES
         if is_out:
             self.is_hit = False
             self.game.currentouts += 1
@@ -748,12 +747,12 @@ class PitchSimulation:
         # fielded; track-mode keys off pitch[-1][3], so update it here.
         # _finish_pitch later propagates this color to any in-flight entries
         # sharing the same plate coordinates.
-        out_color = (119, 86, 179)
-        hit_color = (71, 204, 252)
-        error_color = (214, 158, 46)      # amber: reached, but not earned
-        new_trail_color = (out_color if is_out
-                           else error_color if is_error
-                           else hit_color)
+        # All three off the shared palette rather than as literal copies —
+        # the trail dot and the banner are the same fact drawn twice and have
+        # to be the same colour.
+        new_trail_color = (outcomes.OUT_COLOR if is_out
+                           else outcomes.ERROR_COLOR if is_error
+                           else outcomes.HIT_COLOR)
         if self.game.last_pitch_information:
             last_entry = self.game.last_pitch_information[-1]
             if len(last_entry) >= 5 and last_entry[4] == "hit":

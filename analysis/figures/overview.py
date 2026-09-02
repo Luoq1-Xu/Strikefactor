@@ -72,12 +72,13 @@ def _slash_line_panel(ax, ctx):
         metrics.fmt_avg(r["slg"]), metrics.fmt_avg(r["ops"]),
         metrics.fmt_pct(100 * r["k_pct"]), metrics.fmt_pct(100 * r["bb_pct"]),
         metrics.fmt_avg(r["babip"]) if r["bip"] else "—",
+        metrics.fmt_pct(100 * r["roe_pct"]) if r["bip"] else "—",
         metrics.fmt_avg(r["woba"]),
         metrics.fmt_pct(100 * r["csw_pct"]),
         metrics.fmt_pct(100 * r["whiff_pct"]),
     ] for _, r in df.iterrows()]
     cols = ["Pitcher", "PA", "H", "HR", "BB", "K", "AVG", "OBP", "SLG", "OPS",
-            "K%", "BB%", "BABIP", "wOBA", "CSW%", "Whiff%"]
+            "K%", "BB%", "BABIP", "ROE%", "wOBA", "CSW%", "Whiff%"]
     styled_table(ax, rows, cols, fontsize=9.5)
     ax.set_title("Batting Performance vs Each Pitcher", fontweight="bold", pad=10)
 

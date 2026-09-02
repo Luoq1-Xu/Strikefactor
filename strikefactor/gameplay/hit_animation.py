@@ -32,6 +32,7 @@ from dataclasses import dataclass
 
 import pygame
 
+from strikefactor import outcomes
 from strikefactor.engine import contact_audio
 from strikefactor.gameplay import (
     ball_flight,
@@ -721,10 +722,12 @@ ERROR_MARK_FADE_S       = 0.45
 ERROR_MARK_POP_S        = 0.16          # rise from the head, on appearance
 ERROR_MARK_RISE_PX      = 6.0
 ERROR_MARK_OFFSET_PX    = 17            # above the body's centre
-# The amber "reached, but not earned" wears everywhere else it is drawn:
-# the pitchviz trail dot (pitch_simulation._finalize_batted_ball), the
-# ScoreKeeper palette and analysis/theme.OUTCOME_COLORS.
-ERROR_MARK_COLOR        = (214, 158, 46)
+# The amber "reached, but not earned". Taken from the shared palette rather
+# than restated: it is also the pitchviz trail dot
+# (pitch_simulation._finalize_batted_ball) and the ScoreKeeper colour, and
+# this comment used to *list* those copies, which is how you can tell there
+# were four of them.
+ERROR_MARK_COLOR        = outcomes.ERROR_COLOR
 
 # How close to the fence a fielder may get, and the *only* thing that
 # stops them leaving the park: every target a defender is given is the
@@ -771,10 +774,9 @@ BALL_SHADOW_H_PX        = 3
 # friction guarantees the ball stops eventually, and the fielder converges
 # afterwards; we let the play run to a natural close rather than truncating.
 SECURE_RADIUS_PX        = 14
-# A ball goes past a fielder faster than they can reverse. Without this they
-# re-secure their own miss on the next frame, standing where the ball just
-# was, and the through-ball never reaches the outfield.
-THROUGH_TURN_S          = 0.45
+# How far in front of their home position a fielder has to have come before
+# the play counts as a charge rather than a set throw. See _play_geometry.
+CHARGING_MARGIN_FT      = 2.0
 
 # In-flight interception tuning. INTERCEPT_REACH_PX is the screen-space
 # distance from a fielder's body to the ball at which an in-flight catch
@@ -2146,6 +2148,29 @@ class HitAnimation:
         """How far `point` is from this fielder's home position, in feet."""
         return _ft_dist(point[0] - fielder.home_pos[0],
                         point[1] - fielder.home_pos[1])
+
+    def _play_geometry(self, fielder):
+        """Where the fielder took the ball, and how hard a play that made it.
+
+        One definition of "how hard was this play", for the same reason
+        `defense.RANGING_FULL_FT` imports `infield_timing.RELEASE_STRETCH_FT`
+        rather than restating it: the release clock, the misplay roll and the
+        clean-play counterfactual all grade the same play, and three copies
+        of the inputs are three chances for them to grade it differently.
+
+        Returns `(catch_ft, ball_distance_ft, ranging_ft, is_charging)`.
+        """
+        catch_ft = _to_field_ft(fielder.pos)
+        home_ft = _to_field_ft(fielder.home_pos)
+
+        # Charging = the fielder came up through the ball, toward the
+        # plate. That is the barehand play on a slow roller, and it is
+        # faster to release than a set throw, not slower.
+        is_charging = (math.hypot(*catch_ft)
+                       < math.hypot(*home_ft) - CHARGING_MARGIN_FT)
+
+        return (catch_ft, math.hypot(*catch_ft),
+                self._range_ft(fielder, fielder.pos), is_charging)
 
     def _range_limited_point(self, fielder, point):
         """`point` clamped to the fielder's in-flight ranging radius.
@@ -3629,9 +3654,9 @@ class HitAnimation:
                 # routing to it at all.
                 kind = self._roll_misplay(f, in_air=(self.shape != "GROUNDER"))
                 if kind == "THROUGH":
-                    self._trigger_through(role, (bx, by))
+                    self._trigger_through(role)
                 elif kind == "MUFF":
-                    self._trigger_muff(role, (bx, by))
+                    self._trigger_muff(role)
                 else:
                     self._trigger_in_flight_intercept(role, (bx, by))
                 return True
@@ -3656,15 +3681,8 @@ class HitAnimation:
         they see is the fielder come up with it, throw, and the runner
         beat it or not, which is the play either way.
         """
-        catch_ft = _to_field_ft(catcher.pos)
-        home_ft = _to_field_ft(catcher.home_pos)
-        ball_distance_ft = math.hypot(*catch_ft)
-        ranging_ft = math.dist(catch_ft, home_ft)
-
-        # Charging = the fielder came up through the ball, toward the
-        # plate. That is the barehand play on a slow roller, and it is
-        # faster to release than a set throw, not slower.
-        is_charging = math.hypot(*catch_ft) < math.hypot(*home_ft) - 2.0
+        catch_ft, ball_distance_ft, ranging_ft, is_charging = \
+            self._play_geometry(catcher)
 
         ev_mph = self.exit_velocity_mph
 
@@ -3709,7 +3727,7 @@ class HitAnimation:
             sprint_fts=self._runner_sprint_fts(),
             difficulty_offset_s=self._difficulty_time_offset_s(),
             effective_throw_fts=throw_fts,
-            release_scale=self.defense.release_scale,
+            defense=self.defense,
             # A bobble the roll at the reach already decided, in seconds.
             # It lands on the release clock because glove contact to release
             # is what a bobble delays, and because `defense_s` has to stay
@@ -3723,8 +3741,8 @@ class HitAnimation:
         # One draw, three outcomes. The window [p_out, p_out_clean) is exactly
         # the set of plays that would have been outs without the bobble and
         # were not with it — the official scorer's rule, arrived at rather
-        # than judged. With no bobble the window is empty and this is the old
-        # `roll_is_out`.
+        # than judged. With no bobble the window is empty and this is a plain
+        # draw against `p_out`.
         verdict = infield_timing.roll_verdict(timing)
         if verdict == "ERROR":
             # The bobble is what the window [p_out, p_out_clean) is made of,
@@ -3915,8 +3933,7 @@ class HitAnimation:
             sprint_fts=self._runner_sprint_fts(),
             difficulty_offset_s=self._difficulty_time_offset_s(),
             min_base=min_base,
-            effective_fts=self.defense.throw_fts,
-            release_scale=self.defense.release_scale,
+            defense=self.defense,
             rng=random,
         )
         if self.is_error:
@@ -3980,13 +3997,12 @@ class HitAnimation:
         if self._misplay_rolled:
             return None
         self._misplay_rolled = True
-        catch_ft = _to_field_ft(fielder.pos)
-        home_ft = _to_field_ft(fielder.home_pos)
+        _, _, ranging_ft, is_charging = self._play_geometry(fielder)
         kind = defense_model.roll_misplay(
             self.defense, random,
-            ranging_ft=math.dist(catch_ft, home_ft),
+            ranging_ft=ranging_ft,
             ev_mph=self.exit_velocity_mph,
-            is_charging=math.hypot(*catch_ft) < math.hypot(*home_ft) - 2.0,
+            is_charging=is_charging,
             in_air=in_air,
         )
         if kind is not None:
@@ -4023,24 +4039,23 @@ class HitAnimation:
         off — no play happened — so it is computed here from the same inputs
         the real race would have used, with no misplay on the clock.
         """
-        catch_ft = _to_field_ft(fielder.pos)
-        home_ft = _to_field_ft(fielder.home_pos)
+        catch_ft, ball_distance_ft, ranging_ft, is_charging = \
+            self._play_geometry(fielder)
         timing = infield_timing.resolve_infield_play(
             ev_mph=self.exit_velocity_mph,
             fielder_xy_ft=catch_ft,
-            ball_distance_ft=math.hypot(*catch_ft),
-            ranging_ft=math.dist(catch_ft, home_ft),
-            is_charging=math.hypot(*catch_ft) < math.hypot(*home_ft) - 2.0,
+            ball_distance_ft=ball_distance_ft,
+            ranging_ft=ranging_ft,
+            is_charging=is_charging,
             handedness=self._batter_handedness(),
             sprint_fts=self._runner_sprint_fts(),
             difficulty_offset_s=self._difficulty_time_offset_s(),
-            effective_throw_fts=self.defense.throw_fts,
-            release_scale=self.defense.release_scale,
+            defense=self.defense,
             rng=None,          # the counterfactual must not add its own noise
         )
         return timing.p_out
 
-    def _trigger_through(self, role, ball_pos):
+    def _trigger_through(self, role):
         """The ball goes through the fielder and on into the outfield.
 
         The third state, and until now the model had only two: a ball was
@@ -4081,9 +4096,7 @@ class HitAnimation:
         # than a new estimate, because that is the same curve the infield race
         # times the ball with: the ball that beats the shortstop has to be the
         # ball the verdict was computed against.
-        ev = self.exit_velocity_mph
-        live_fts = (ev * infield_timing.MPH_TO_FTS
-                    * infield_timing.ground_speed_retention(ev))
+        live_fts = infield_timing.ground_speed_fts(self.exit_velocity_mph)
         speed_px_ms = self._fts_to_px_ms(
             max(infield_timing.MIN_GROUND_SPEED_FTS, live_fts * retention))
         vx, vy = self._ball_v
@@ -4102,17 +4115,27 @@ class HitAnimation:
         # The ball is past them: they have to turn and go after it, and
         # cannot re-secure it on the very next frame just by standing there.
         self._misplay_recovered_at_ms = (
-            self._elapsed + self._anim_ms(THROUGH_TURN_S))
-        # Charged as an error exactly when the clean play would have been an
-        # out — the same rule `roll_verdict` applies to a bobble, written out
-        # here because no race ran. It gives the right baseball answer without
-        # being asked for: a ball through a diving fielder in the hole was a
-        # bang-bang play anyway and is scored a hit, while the same ball
-        # through a fielder standing still on a routine hop is an error.
-        if role in OUTFIELD_ROLES or random.random() < self._clean_play_p_out(f):
+            self._elapsed + self._anim_ms(self.defense.through_turn_s))
+        # The `p_out = 0` case of the scorer's rule: no race ran, so the batter
+        # reached, and the only question is whether the clean play would have
+        # been an out. Deferred to `infield_timing` rather than written out as
+        # a second draw here — it is the same rule a bobble is judged by, and
+        # two copies of it are two things to keep in step.
+        #
+        # It gives the right baseball answer without being asked for: a ball
+        # through a diving fielder in the hole was a bang-bang play anyway and
+        # is scored a hit, while the same ball through a fielder standing still
+        # on a routine hop is an error. That extends to the outfield on its
+        # own — `_clean_play_p_out` is ~0 at 250 ft, so a ball past an
+        # outfielder is a hit, and an outfielder who *drops* one is a MUFF,
+        # charged unconditionally. There used to be a `role in OUTFIELD_ROLES`
+        # short-circuit here asserting the opposite (always an error); it never
+        # fired in 5000 plays, because a through-ball only comes from
+        # `_check_in_flight_intercept` and outfielders do not reach that state.
+        if infield_timing.verdict_from(0.0, self._clean_play_p_out(f)) == "ERROR":
             self._charge_error(role)
 
-    def _trigger_muff(self, role, ball_pos):
+    def _trigger_muff(self, role):
         """Off the glove. The ball is on the grass at the fielder's feet.
 
         The play stays live: an error is a *fielding* event, and the races
