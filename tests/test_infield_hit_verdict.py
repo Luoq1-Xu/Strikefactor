@@ -80,7 +80,7 @@ def _play(seed, quality, hand="R", modifier=1.0, spray_deg=0.0):
 # Approximated here by its quantiles rather than read from the DB: a test
 # that needs strikefactor.db is a test that breaks on a fresh checkout.
 _QUALITY_QUANTILES = (
-    (0.10, 0.643), (0.25, 0.689), (0.50, 0.763), (0.75, 0.871), (0.90, 0.937),
+    (0.10, 0.649), (0.25, 0.720), (0.50, 0.807), (0.75, 0.883), (0.90, 0.941),
 )
 
 # **And spray is not uniform either.** This is the same trap one axis over, and
@@ -96,7 +96,7 @@ _QUALITY_QUANTILES = (
 # toward third. The mean came in from +4.4° when the location term in `spray`
 # was made to saturate — the opposite-field tail used to be fouled off past
 # the line, so the surviving fair population sat too far to the pull side.
-_SPRAY_MEAN_DEG, _SPRAY_SD_DEG = 1.8, 19.9
+_SPRAY_MEAN_DEG, _SPRAY_SD_DEG = 1.25, 21.2
 
 
 # Both samplers now live in conftest, because test_defense.py draws from the

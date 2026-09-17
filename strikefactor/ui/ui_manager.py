@@ -148,7 +148,7 @@ class UIManager:
             'view_pitches': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect(self._SHARED_SIDEBAR_POS['arcade']['view_pitches'],
                                           (sandbox_w, sandbox_h)),
-                text='PITCHVIZ', manager=manager,
+                text='REVIEW', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             # Session group
             'lap_stats': pygame_gui.elements.UIButton(
@@ -158,6 +158,10 @@ class UIManager:
             'view_laps': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((68, 362), (58, 28)),
                 text='LOG', manager=manager,
+                object_id=ObjectID(class_id='@broadcast_button')),
+            'fielding_replay': pygame_gui.elements.UIButton(
+                relative_rect=pygame.Rect((6, 458), (120, 28)),
+                text='FIELD REPLAY', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             # System group
             'toggle_ump_sound': pygame_gui.elements.UIButton(
@@ -719,7 +723,6 @@ class UIManager:
             self.buttons['continue_to_summary'].show()
             if self._is_legacy_hud():
                 self.buttons['visualise'].show()
-                self.buttons['view_pitches'].show()
                 self.buttons['strikezone'].show()
                 self.buttons['main_menu'].show()
                 self.buttons['lap_stats'].show()
@@ -870,6 +873,26 @@ class UIManager:
             self.scouting_panel.hide()
             self.scoreboard.hide()
             self.pitch_result.hide()
+
+        # Legacy widget IDs remain for callers/themes, but the player gets one
+        # entry point. R/F remain remappable deep links into that workspace;
+        # T is the standalone pitch-flight view and has no button.
+        # These two hides are unconditional and run last, so a `.show()` added
+        # in a branch above cannot put either button back — delete the widget
+        # instead if one is ever meant to return.
+        self.buttons['visualise'].hide()
+        self.buttons['fielding_replay'].hide()
+        review = self.buttons['view_pitches']
+        review.set_dimensions((self.SIDEBAR_W, self.SIDEBAR_H))
+        review.set_relative_position(self._SHARED_SIDEBAR_POS[self._sidebar_layout]['view_pitches'])
+        if state in ('gameday_transition', 'gameday_simulation', 'gameday_final'):
+            log = self.buttons['view_game_log'].rect
+            right = self.buttons['next_inning'].rect.right
+            review.set_dimensions((right - log.right - 10, log.height))
+            review.set_relative_position((log.right + 10, log.y))
+        if state in ('in_game', 'sandbox_gameplay',
+                     'gameday_transition', 'gameday_simulation', 'gameday_final'):
+            self.buttons['view_pitches'].show()
 
     def draw_typing_effect(self, message, counter, speed, position, use_big_font=False):
         """Draws text with a typing effect at the given position."""

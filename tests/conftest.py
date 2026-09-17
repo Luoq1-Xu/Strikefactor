@@ -33,6 +33,8 @@ def _pygame_session():
 # same thing if one definition produced both. CLAUDE.md records that drifting
 # copies of exactly these numbers have caused four separate miscalibrations.
 QUALITY_QUANTILES = sim.QUALITY_QUANTILES
+QUALITY_BY_SHAPE = sim.QUALITY_BY_SHAPE
+LAUNCH_ANGLE_QUANTILES = sim.LAUNCH_ANGLE_QUANTILES
 SPRAY_MEAN_DEG = sim.SPRAY_MEAN_DEG
 SPRAY_SD_DEG = sim.SPRAY_SD_DEG
 BATTED_BALL_MIX = sim.BATTED_BALL_MIX
@@ -40,3 +42,28 @@ BATTED_BALL_MIX = sim.BATTED_BALL_MIX
 realistic_quality = sim.realistic_quality
 realistic_spray = sim.realistic_spray
 realistic_batted_ball = sim.realistic_batted_ball
+realistic_launch_angle = sim.realistic_launch_angle
+realistic_contact = sim.realistic_contact
+
+
+# ---- Letting a ball reach the fence ---------------------------------------
+
+
+def uncaught(anim):
+    """Hold the defense off a ball in flight; returns the animation.
+
+    For tests about how something is *drawn* — the carom off the wall, the
+    fielding clip's event list — rather than about who caught it.
+
+    A ball that reaches the fence gets there below its 12 ft rim by definition
+    (anything higher cleared it and is a home run), so it arrives at glove
+    height and an outfielder standing there catches it, which is the whole
+    point of the wall-ball fix in `_update_hit`. Roughly one wall ball in six
+    still gets past everybody, but *which* one depends on where the defense
+    happened to be routed — and a rendering test that had to be threaded
+    through the defense would be pinning the calibration instead of the
+    picture. So the defense is held off explicitly, and the frames these tests
+    inspect are exactly the frames the balls that do beat it produce.
+    """
+    anim._check_in_flight_intercept = lambda: False
+    return anim

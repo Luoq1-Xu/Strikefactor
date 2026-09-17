@@ -1,8 +1,9 @@
 """Everything needed to replay one swing, captured at the end of the pitch.
 
-Built once per swing in `PitchSimulation.cleanup()` and parked on
-`Game.last_swing`, where the replay overlay picks it up. Pure data plus the
-derivations that follow from it — no pygame, no rendering, no game state.
+Built once per swing by `PitchSimulation._publish_review()` and attached to
+its pitch's `ReviewRecord`. Animated plays publish before Continue; other
+results publish at cleanup. `Game.last_swing` remains a compatibility alias.
+Pure data plus derivations — no pygame, no rendering, no game state.
 
 Two decisions in here are worth keeping.
 
@@ -41,6 +42,11 @@ readouts stay on `bat_arrival_s`, which is what they have always measured. A
 swing that missed names neither — there was no meeting — so `clip_end_s` runs
 the replay on to the plate rather than freezing it on a pitch still in the air.
 
+The scored contact is closest approach, which can contain deep overlap.
+`replay_contact` rewinds that resolved swing to surface entry; `clip_end_s`
+and the overlay's contact markers use this earlier pose. Scoring stays on
+`contact`, so the replay does not change quality or hit outcomes.
+
 One consequence to be aware of when reading the replay: depth is deliberately
 unclamped. `PitchTrajectory.time_at_depth` extrapolates past the plate, and it
 has to — a late swing meets a ball that is genuinely already by, and clamping
@@ -52,7 +58,7 @@ the two can be told apart.
 """
 
 from collections import namedtuple
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from functools import cached_property
 
 from strikefactor.gameplay import bat_contact, bat_path
@@ -116,6 +122,26 @@ class SwingRecord:
     # where the barrel merely arrived — on a mistimed swing those are feet
     # apart, which is the whole thing the view is for.
     contact: object = None
+    # Which way the ball actually left, pull-positive degrees, and **not
+    # `contact.spray_deg`** on a foul. The bat's bearing says where the ball
+    # was pointed; a glancing blow deflects it, and `spray.foul_departure_deg`
+    # is where it went. Carried rather than recomputed because the deflection
+    # needs the trajectory shape, which the engine resolved at contact.
+    #
+    # None when nothing was struck. Falls back to the bat's bearing for a
+    # record built without one, which is what every caller predating the
+    # deflection meant.
+    departure_deg: float = None
+    # The ground track the animation actually flew, in real field feet
+    # (`batted_ball_path.BattedBallPath`). Pure data, like the trajectory
+    # above. The replay draws it rather than a straight ray: a straight ray is
+    # this path's *tangent*, and on a bent flight those are two pictures.
+    # None on a whiff, a take, or a foul played with the animation switched off.
+    flight_path: object = None
+    # The exact plate-frame aim already resolved by the gameplay engine.  The
+    # record used to recompute it from the raw cursor. Carrying it keeps replay
+    # on the collision path without consulting mutable difficulty settings.
+    resolved_aim_ft: tuple = None
 
     # -- derived ----------------------------------------------------------
 
@@ -184,11 +210,47 @@ class SwingRecord:
             return self.bat_arrival_s
         return self.contact.pitch_t_s
 
+    @cached_property
+    def replay_contact(self):
+        """First surface touch on the resolved swing, before deepest overlap.
+
+        Keep gameplay's closest-approach scoring intact. Rewind the same
+        assisted swing and pitch, then bisect entry from the separated side.
+        """
+        contact = self.contact
+        if contact is None:
+            return None
+        swing = self.bat_swing()
+        start = self.swing_launch_s
+
+        def sample(t):
+            return bat_contact._gap_at(swing, self.trajectory, start, t)
+
+        hi = lo = contact.swing_t_s
+        while lo > 0.0:
+            lo = max(0.0, lo - bat_contact.COARSE_STEP_S)
+            if sample(lo)[0] > 0.0:
+                break
+            hi = lo
+        if sample(lo)[0] > 0.0:
+            for _ in range(32):
+                mid = (lo + hi) / 2.0
+                if sample(mid)[0] > 0.0:
+                    lo = mid
+                else:
+                    hi = mid
+        gap, along, state, ball = sample(lo)
+        axis_point, _ = bat_path.bat_solid_point(state, along)
+        return replace(contact, swing_t_s=lo, pitch_t_s=start + lo,
+                       ball_ft=ball, axis_point_ft=axis_point, along=along,
+                       gap_ft=gap, vertical_offset_ft=ball[2] - axis_point[2],
+                       knob_ft=state.knob_ft, barrel_ft=state.barrel_ft)
+
     @property
     def clip_end_s(self):
         """When a replay of this swing should stop, in seconds after release.
 
-        On contact this is `contact_time_s` and nothing else: the frozen frame
+        On contact this is the first surface touch: the frozen frame
         is the bat and the ball at the instant they met, and a tail past it
         drags the ball feet away from the mark that names it.
 
@@ -209,7 +271,7 @@ class SwingRecord:
         past the plate.
         """
         if self.contact is not None:
-            return self.contact_time_s
+            return self.replay_contact.pitch_t_s
         return max(self.bat_arrival_s, self.travel_time_s)
 
     @property
@@ -226,11 +288,12 @@ class SwingRecord:
 
     @property
     def contact_reach_ft(self):
-        """Daylight between the bat's surface and the ball's when they "met".
+        """Signed surface overlap between bat and ball at contact.
 
-        Negative on most contacts — the bat and the ball genuinely overlap —
-        and never more than `margin_ft`, since that is the only forgiveness
-        left with a distance in it. None when nothing was struck.
+        Non-positive on every contact — zero is touching and negative is real
+        overlap. None when nothing was struck. Spatial forgiveness is already
+        present in the replay as a rigidly moved swing, not hidden here as
+        extra collision reach.
 
         It used to run to *feet*, because the timing forgiveness was spent as a
         reach along the ball's flight line; see
@@ -256,6 +319,22 @@ class SwingRecord:
         if self.contact is None:
             return None
         return self.contact.spray_deg
+
+    @property
+    def departure_or_spray_deg(self):
+        """Where the ball went — the number anything *drawn* has to use.
+
+        `spray_deg` above is where the bat pointed, which is the swing model's
+        output and what the DB records. They differ on exactly one kind of
+        contact, and it is the common one: a foul. A tipped or topped ball
+        keeps a perfectly fair-looking bearing while the ball itself deflects
+        into foul ground, and drawing the first under a FOUL banner is the
+        defect this pair exists to separate — measured at a median of 40.7
+        degrees apart, with 45% of fouls drawn as fair.
+        """
+        if self.departure_deg is not None:
+            return self.departure_deg
+        return self.spray_deg
 
     @property
     def is_early(self):
@@ -434,9 +513,15 @@ class SwingRecord:
         pointed at; `bat_contact.aim_at_pitch` is what the engine turned that
         into before building the bat, because the barrel meets the ball a
         couple of feet out in front and the ball is not where the plate says
-        it is out there. Recomputed here from the same pure function rather
-        than carried on the record, so the replay's bat cannot drift away from
-        the one that was swept.
+        it is out there.
+
+        **It is the value the engine resolved, when there is one.**
+        `resolved_aim_ft` is stamped on the record at commit and preferred;
+        `aim_at_pitch` is re-run only for a record that predates it (or a
+        test that builds one by hand). That way round because the stored
+        value *is* the one that was swept, so the replay's bat cannot drift
+        away from it — whereas a recompute can, if anything upstream of
+        `aim_at_pitch` changes between the swing and the replay.
 
         `aim_assist` is *carried*, not re-read, and that is what keeps the
         recompute honest: it is a difficulty setting, and a player who changes
@@ -453,68 +538,23 @@ class SwingRecord:
         A frozen record's aim cannot change, and resolving it runs
         `aim_at_pitch`'s fixed point — three `bat_path.swing` builds — so
         every reader downstream of it used to pay again for the same answer.
+        The stored `resolved_aim_ft` short-circuits even that; the recompute
+        is the fallback for records without one.
         """
+        if self.resolved_aim_ft is not None:
+            return self.resolved_aim_ft
         return bat_contact.aim_at_pitch(self.aim_ft, self.trajectory,
                                         self.handedness,
                                         assist=self.aim_assist)
 
     def _nominal_swing(self):
-        """The swing as the engine built it, at the resolved aim.
-
-        Built only to read its own contact depth back off, which `bat_swing`
-        then needs in order to work out how high to draw the bat. The final
-        swing uses an aim a few inches different in `z`, which moves the
-        barrel's depth by well under an inch — the aim's distance from the
-        hands barely changes when only its height does.
-        """
+        """The unshifted swing the engine built at the resolved aim."""
         return self._nominal
 
     @cached_property
     def _nominal(self):
         """`_nominal_swing()`, worked out once — see `_resolved_aim`."""
         return bat_path.swing(self.swing_aim_ft(), self.handedness)
-
-    def _drawn_aim_ft(self, depth_ft):
-        """The aim point to draw the bat at, for a barrel arriving at `depth_ft`.
-
-        Not simply `aim_ft`, and the reason is worth stating. `aim_ft` is the
-        cursor resolved to world feet *at the plate*, because that is the only
-        depth `screen_to_world_at_plate` knows about. But the barrel meets the
-        ball out in front of the plate, and the ball is meaningfully higher
-        there — 6.4 inches higher at a contact point 5.6 ft out front, since it
-        has that much less time to drop. Drawing the bat at its plate height
-        against a ball at its true contact height therefore showed the bat
-        half a foot *under* a ball the stats panel simultaneously reported it
-        was 1.4 inches *over*. A replay whose picture contradicts its own
-        numbers is worse than useless.
-
-        So the bat is placed by the relationship the engine actually measured
-        — `vertical_offset` is bat minus ball, in pygame's y-down screen
-        convention, hence the sign flip into world feet — carried out to the
-        depth where the *barrel* is. That is the plane the ball passes
-        through, so it is the only place the two heights can honestly be
-        compared. Timing (depth) and alignment (offset) are both then exactly
-        what the engine judged, and the only thing given up is the bat's
-        absolute height above the ground, which no player can perceive and
-        nothing in the game reports.
-
-        The offset has to be applied *at* that depth and then turned back into
-        a plate-frame aim, not applied to the plate-frame aim directly: a
-        cursor is a ray, so `bat_path` spreads whatever it is handed by 7% on
-        the way out to the barrel, and 7% of a plate-frame offset is not the
-        offset that was measured.
-
-        When no offset was measured at all — a mistimed whiff never reaches
-        the geometry test — there is nothing to align to and the plate-height
-        aim is used unchanged.
-        """
-        aim = self.swing_aim_ft()
-        offset_ft = self.vertical_offset_ft
-        if offset_ft is None:
-            return aim
-        ball_z = self.trajectory.position_at(self._time_at_depth(depth_ft))[2]
-        target = bat_path.to_plate_frame((0.0, ball_z + offset_ft), depth_ft)
-        return (aim[0], target[1])
 
     def _time_at_depth(self, depth_ft):
         """When the ball was `depth_ft` in front of the plate."""
@@ -523,35 +563,17 @@ class SwingRecord:
     def bat_swing(self):
         """The bat that made this swing.
 
-        Built from the aim and the batter's handedness alone. Nothing about
-        the pitch reaches `bat_path` — that prohibition is the whole shape of
-        this refactor, and `_drawn_aim_ft`'s few inches of vertical placement
-        is the one concession, made so the picture agrees with the numbers
-        printed under it.
-
-        Iterated to a fixed point because that concession feeds back: nudging
-        the aim's height moves it slightly along the cursor's ray, which moves
-        the barrel's depth by about half an inch, which moves where the ball
-        is when it gets there. Three passes settle it below a thousandth of an
-        inch. `barrel_depth_ft` deliberately does *not* follow the iteration —
-        it reports the depth the engine's own bat reached, from the raw cursor.
+        The difficulty correction is replayed as the same rigid x/z movement
+        used by the physical sweep. It does not rebuild the swing from a
+        reported offset or rotate its contact pose.
         """
-        return self._drawn_swing
+        return self._contact_swing
 
     @cached_property
-    def _drawn_swing(self):
-        """`bat_swing()`, worked out once — see `_resolved_aim`.
-
-        The replay reads this every frame, which is why the overlay had grown
-        a cache of its own.
-        """
-        swing = self._nominal_swing()
-        for _ in range(3):
-            swing = bat_path.swing(
-                aim_ft=self._drawn_aim_ft(swing.contact_depth_ft),
-                handedness=self.handedness,
-            )
-        return swing
+    def _contact_swing(self):
+        shift = ((0.0, 0.0) if self.contact is None
+                 else self.contact.spatial_shift_ft)
+        return bat_path.translated_swing(self._nominal_swing(), shift)
 
     def bat_state_at_ball_arrival(self):
         """Where the bat was when the ball reached the barrel's own depth.
@@ -594,9 +616,16 @@ def from_simulation(sim):
     # them by design and their real numbers live in the foul-specific fields.
     quality = sim.contact_quality
     offset = sim.vertical_offset_in
+    shape = sim.batted_ball_type
     if sim.made_contact == "fouled":
         quality = sim._foul_quality
         offset = sim._foul_vertical_offset
+        # `batted_ball_type` is only ever set on a ball in play — widening it
+        # would change what every aggregate over the DB column means — so the
+        # foul's shape lives on its own field. The replay wants it all the
+        # same: it is what decided whether the ball was popped up behind the
+        # plate or sprayed past a pole.
+        shape = getattr(sim, "_foul_shape", None)
 
     return SwingRecord(
         trajectory=sim.trajectory,
@@ -607,7 +636,8 @@ def from_simulation(sim):
         zone_size_mult=sim.zone_size_mult,
         timing_window_mult=sim.timing_window_mult,
         aim_ft=DEFAULT_CAMERA.screen_to_world_at_plate(*aim_screen),
-        handedness=sim.game.batter.get_handedness(),
+        handedness=(sim._review_handedness if hasattr(sim, '_review_handedness')
+                    else sim.game.batter.get_handedness()),
         swing_type=sim.swing_type,
         on_time=sim.on_time,
         made_contact=sim.made_contact,
@@ -617,7 +647,15 @@ def from_simulation(sim):
         contact_quality=quality,
         vertical_offset_px=offset,
         exit_velocity_mph=sim.exit_velocity_mph,
-        batted_ball_type=sim.batted_ball_type,
+        batted_ball_type=shape,
         ball_screen_at_contact=sim.ball_screen_at_contact,
         contact=sim.contact,
+        departure_deg=getattr(sim, "departure_deg", None),
+        # Mirrored off the animation once it has run, the same way
+        # `_finalize_batted_ball` mirrors `fielder_role` and `play_margin_s`.
+        # `cleanup()` is downstream of the animation finishing, so the track is
+        # settled by the time this is built.
+        flight_path=getattr(getattr(sim, "hit_animation", None),
+                            "flight_path", None),
+        resolved_aim_ft=sim.swing_aim_ft,
     )

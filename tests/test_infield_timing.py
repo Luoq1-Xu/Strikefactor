@@ -113,6 +113,18 @@ def test_effective_throw_speed_is_not_release_velocity():
     assert 100.0 <= it.THROW_EFFECTIVE_FTS <= 118.0
 
 
+def test_first_base_soft_toss_is_slower_than_a_routine_infield_throw():
+    """A short 3-1 feed is an easy toss, not a max-effort throw compressed
+    into a fraction of a second just because the first baseman is nearby."""
+    first_baseman = (55.0, 78.0)  # about 17 ft from the bag
+    routine = it.throw_time_s(first_baseman, it.THROW_EFFECTIVE_FTS)
+    soft_toss = it.throw_time_s(first_baseman, it.FIRST_BASE_SOFT_TOSS_FTS)
+
+    toss_mph = it.FIRST_BASE_SOFT_TOSS_FTS / it.MPH_TO_FTS
+    assert 30.0 <= toss_mph <= 45.0
+    assert soft_toss > routine * 1.8
+
+
 # ---- Release --------------------------------------------------------------
 
 def test_charging_a_slow_roller_is_faster_than_a_set_throw():

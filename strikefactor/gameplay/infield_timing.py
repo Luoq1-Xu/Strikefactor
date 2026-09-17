@@ -152,6 +152,12 @@ HARD_PLAY_COST_S = (0.25, 1.40)         # uniform: a hitch at one end, a fumble 
 # release across 130 ft arrives near 72 and averages about 80.
 THROW_EFFECTIVE_FTS = 110.0             # routine throw across the diamond
 THROW_EFFECTIVE_FTS_RANGE = (100.0, 118.0)
+# A first baseman feeding the pitcher on a 3-1 does not make a max-effort
+# infield throw over 15-35 ft.  It is normally an underhand flip or an easy
+# overhand toss, with an effective flight speed of about 37.5 mph.  Keeping
+# this separate from THROW_EFFECTIVE_FTS matters most at short range: using
+# the across-the-diamond figure turns a 20 ft feed into a 0.18 s bullet.
+FIRST_BASE_SOFT_TOSS_FTS = 55.0
 UNASSISTED_MAX_FT = 12.0                # close enough to step on the bag
 
 

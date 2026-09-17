@@ -77,16 +77,43 @@ EV_CEIL_MPH = 116.0
 # `contact_quality` straight out of the pitch DB. Both describe the swings
 # players actually make. A `range(0, 1)` sweep does not, and four separate
 # constants in this codebase have been miscalibrated by assuming it does.
+# Re-measured 2026-09-10 through the same seam and the same player model
+# (aim scatter 0.75 ft/axis, timing N(+19, 48) ms — the model whose whiff/foul/
+# fair split of 30/31/39 is the one CLAUDE.md documents), over 5,170 fair balls
+# in play. The **tails were already right** — p10 0.646 against the old 0.643
+# and p99 0.988 against 0.988 — which is what identifies this as a genuine
+# drift in the middle of the distribution rather than a different player model
+# being swept: p25 0.689 -> 0.720, p50 0.763 -> 0.807, p75 0.871 -> 0.883.
+#
+# Left unmoved, the median batted ball read about 95 mph against the 91 this
+# table means to pin it at.
+#
+# **The top three rows came in 1.5-4 mph on 2026-09-16, and the reason is the
+# home run, not the sound.** They stood at 101 / 106 / 112 for p75 / p90 / p99
+# against Statcast's ~98-99 / ~104 / ~110, and CLAUDE.md had already measured
+# the consequence one module downstream: the batter's line drives ran ~100 mph
+# against MLB's ~94. That is the one lever that reaches which balls leave the
+# park without touching the ones that should. It was made necessary by
+# `ball_flight.height_at_distance_ft` becoming the right shape: the vacuum
+# parabola had been reading 1.6-2.7x low at the fence, which suppressed home
+# runs, and the 12 ft fence and this table's hot top end were both sitting on
+# that. With the arc physical, the fence would have had to go past 12 ft to
+# hold the rate, or a flat EV shift would have slowed every grounder too;
+# compressing only the top of the curve (x0.75 above 95 mph, which these rows
+# are) holds the home-run share at **4.8%** of fair contact and takes the
+# line-drive share of home runs 22% -> 15%, against MLB's ~25-30%. The 105+
+# mph line drive that does leave a real park still leaves this one; there are
+# just fewer of them, which is the fact about MLB the old rows disagreed with.
 EV_CALIBRATION = (
     (0.000,  52.0),
     (0.300,  62.0),
     (0.450,  68.0),
-    (0.643,  74.0),   # observed p10
-    (0.689,  82.0),   # observed p25
-    (0.763,  91.0),   # observed p50
-    (0.871, 101.0),   # observed p75
-    (0.937, 106.0),   # observed p90
-    (0.988, 112.0),   # observed p99
+    (0.649,  74.0),   # observed p10
+    (0.720,  82.0),   # observed p25
+    (0.807,  91.0),   # observed p50
+    (0.883,  99.5),   # observed p75
+    (0.941, 103.0),   # observed p90
+    (0.988, 108.0),   # observed p99
     (1.000, EV_CEIL_MPH),
 )
 
@@ -159,37 +186,55 @@ CONTACT_LADDER = (
 HOMERUN_MIN_EV_MPH = 103.0
 CRUSHED_SAMPLE = "contact_crushed"
 
-# ── Home runs ────────────────────────────────────────────────────────────
-# A home run's EV comes from the distance the player is about to *see*,
-# not from contact quality. The two disagree badly otherwise: the HR carry
-# model in hit_animation rolls a largely random `bias` for distance, so a
-# mediocre-quality contact can legitimately land 460 ft away — and then a
-# soft "medium" crack plays under a no-doubter. Reading the distance back
-# makes what you hear and what you see the same event.
+# ── Home runs ────────────────────────────────────────────────
+# **A home run gets no exit velocity of its own**, and the one it used to get
+# is worth recording. `contact_sound_for` took an `hr_distance_ft` that won
+# over the caller's `ev_mph`, read an EV back out of the carry the player was
+# about to see through a six-row distance->EV table, and `PitchSimulation`
+# then wrote that value over the one it had drawn. That was right while it
+# lasted: `hit_animation`'s carry model rolled its own random `bias`, so
+# quality and distance genuinely disagreed and the distance was the better
+# measurement of the two.
 #
-# Statcast reference points: a wall-scraper at ~330 ft leaves the bat
-# around 95-98 mph, a routine 400 ft homer ~104, 450 ft ~110, and the
-# 480 ft moonshots ~114.
-HR_DISTANCE_TO_EV = (
-    (330.0,  96.0),
-    (370.0, 101.0),
-    (400.0, 104.0),
-    (430.0, 108.0),
-    (460.0, 112.0),
-    (490.0, EV_CEIL_MPH),
-)
+# `ball_flight.carry_distance_ft(launch_deg, ev_mph)` is a pure function now
+# (`tests/test_hr_distance.py` pins the landing to it), so there is nothing
+# left to measure. The round trip `ev -> carry -> table -> ev'` was a lossy
+# re-reading of the number it started from, through a table with **no
+# launch-angle term** against a carry that depends on the angle strongly:
+# 112 mph at 20 deg carries 412 ft and read back 105.6, while 95 mph at
+# 40 deg carries 370 ft and read back 101.0. A deterministic +/-6 mph
+# distortion decided by the launch angle alone, applied to the DB column and
+# to the swing replay's EXIT VELO -- larger than the 3.5 mph sd the one-draw
+# refactor was written to remove. It was already visible: the two live
+# readouts of one home run showed two different numbers, because
+# `swing_replay_overlay` reads the overwritten `sim.exit_velocity_mph` while
+# `review_views` reads the animation's, which was never overwritten.
+#
+# What survives is the floor on the *rung*, which was always a separate
+# question from what EV gets recorded.
 
-# Floor on the *rung*, independent of the EV maths above. Even the
-# cheapest wall-scraper is solid contact — nobody hits a home run off the
-# end of the bat — so the two quietest samples are never valid under one.
+# Even the cheapest wall-scraper is solid contact -- nobody hits a home run
+# off the end of the bat -- so the two quietest samples are never valid under
+# one.
+#
+# **It is not near-redundant, which is worth measuring rather than assuming.**
+# The reasoning that says it is goes: the softest ball that can clear the
+# shallowest fence leaves at 89.5 mph, `contact_solid` is centred at 95 with a
+# width of 11, so it is the natural pick anyway. But the ladder is a *weighted
+# draw*, not a nearest-centre lookup, and the quiet rungs keep real weight well
+# past their centres. Measured over 4,000 draws at each EV, the share that
+# would play `contact_weak` or `contact_medium` with no floor:
+#
+#     89.5 mph (a wall-scraper)   47.0%
+#     95.0                        32.1%
+#     100.0                       23.0%
+#     105.0                       10.9%
+#
+# Against the ~52% CLAUDE.md records as the original defect. The floor is
+# doing four fifths of the job the distance lookup was added for, and it is
+# the half of that feature that was never about the exit velocity.
 HOMERUN_MIN_SAMPLE = "contact_solid"
 
-
-def exit_velocity_for_hr_distance(distance_ft):
-    """EV implied by a home run's landing distance."""
-    if distance_ft is None:
-        return None
-    return _interpolate(float(distance_ft), HR_DISTANCE_TO_EV)
 
 # Gain curve. Quiet enough that a tapper is genuinely soft, without
 # making it inaudible on small speakers.
@@ -265,21 +310,23 @@ def pick_contact_sound(ev, available=None, rng=random, min_sample=None):
 
 
 def contact_sound_for(quality, swing_type="contact", available=None, rng=random,
-                      hr_distance_ft=None):
+                      ev_mph=None, is_home_run=False):
     """Convenience: quality -> (sample_name, gain, ev). One call per contact.
 
-    Pass `hr_distance_ft` when the contact is a home run whose landing
-    distance is already known. EV is then taken from that distance rather
-    than from quality, and the selection is floored at HOMERUN_MIN_SAMPLE,
-    so the crack matches the number on screen.
-    """
-    if hr_distance_ft is not None:
-        ev = exit_velocity_for_hr_distance(hr_distance_ft)
-        min_sample = HOMERUN_MIN_SAMPLE
-    else:
-        ev = exit_velocity_mph(quality, swing_type, rng=rng)
-        min_sample = None
+    Pass `ev_mph` when the caller has **already drawn this ball's exit
+    velocity** -- which it always should, because `exit_velocity_mph` jitters
+    and a batted ball has exactly one. Drawing a second one here is what put
+    the sound, the DB and the swing replay's readout on a different number
+    from the one the ball was flown at.
 
+    `is_home_run` floors the *selection* at `HOMERUN_MIN_SAMPLE`. It
+    deliberately does not touch the EV. It used to be an `hr_distance_ft`
+    that both floored the rung and supplied an exit velocity of its own,
+    outranking `ev_mph` -- the round trip described above the constant.
+    """
+    ev = ev_mph if ev_mph is not None else exit_velocity_mph(
+        quality, swing_type, rng=rng)
     name, gain = pick_contact_sound(
-        ev, available=available, rng=rng, min_sample=min_sample)
+        ev, available=available, rng=rng,
+        min_sample=HOMERUN_MIN_SAMPLE if is_home_run else None)
     return name, gain, ev

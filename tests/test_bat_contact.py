@@ -71,7 +71,7 @@ def test_a_squared_up_swing_hits_the_ball_on_the_sweet_spot():
     tr = pitch()
     got = swing_at(tr, squared_up(tr), 0.0)
     assert got is not None
-    assert got.along == pytest.approx(bp.SWEET_SPOT_FRAC, abs=0.05)
+    assert got.along == pytest.approx(bp.CONTACT_SWEET_SPOT_FRAC, abs=0.05)
     assert abs(got.vertical_offset_ft * 12.0) < 0.5, "squared up, in inches"
     assert got.quality > 0.95
     assert not got.is_foul()
@@ -190,7 +190,7 @@ def test_contact_depth_moves_with_timing():
     tr = pitch()
     ref = squared_up(tr)
     depths = []
-    for ms in (-20, -10, 0, 15, 30):
+    for ms in (-15, -10, 0, 15, 30):
         got = swing_at(tr, ref, ms, **TIGHT)
         assert got is not None, f"{ms} ms should still find the ball"
         depths.append(got.depth_ft)
@@ -215,16 +215,17 @@ def test_early_meets_the_ball_off_the_end_and_late_on_the_handle():
     the thing quality is mostly made of."""
     tr = pitch()
     ref = squared_up(tr)
-    early = swing_at(tr, ref, -20.0, **TIGHT)
+    early = swing_at(tr, ref, -15.0, **TIGHT)
     late = swing_at(tr, ref, 20.0, **TIGHT)
-    assert early.along > bp.SWEET_SPOT_FRAC
-    assert late.along < bp.SWEET_SPOT_FRAC
+    assert early.along > bp.CONTACT_SWEET_SPOT_FRAC
+    assert late.along < bp.CONTACT_SWEET_SPOT_FRAC
 
     # And at a difficulty that covers 20 ms, both are slid onto the sweet spot.
     # The assist is meant to be visible here: this is what it buys.
     for ms in (-20.0, 20.0):
         helped = swing_at(tr, ref, ms)
-        assert helped.along == pytest.approx(bp.SWEET_SPOT_FRAC, abs=0.01)
+        assert helped.along == pytest.approx(
+            bp.CONTACT_SWEET_SPOT_FRAC, abs=0.01)
         assert helped.shift_s == pytest.approx(-ms / 1000.0, abs=1e-4)
 
 
@@ -252,7 +253,7 @@ def test_quality_peaks_at_dead_on_and_falls_off_both_sides():
         assert all(b <= a + 0.02 for a, b in zip(run, run[1:])), "not monotone"
 
 
-def test_quality_is_the_geometric_mean_of_the_three_ways_to_be_off():
+def test_quality_preserves_the_geometric_mean_and_charges_spatial_help():
     """Along the bat, across it, and how much of the clock the swing had to be
     given — deliberately the same shape `_compute_contact_quality` used, which
     is what keeps `contact_audio.EV_CALIBRATION`'s distribution recognisable
@@ -270,7 +271,8 @@ def test_quality_is_the_geometric_mean_of_the_three_ways_to_be_off():
     assert got.shift_s > 0.0, "an early swing is slid later"
     assert got.timing_score < 1.0, "and charged for it"
     assert got.quality == pytest.approx(
-        (got.sweet_spot_score * got.centre_score * got.timing_score) ** (1 / 3))
+        (got.sweet_spot_score * got.centre_score * got.timing_score
+         ) ** (1 / 3) * got.spatial_score)
 
 
 def test_a_swing_that_needed_no_help_is_charged_nothing():
@@ -300,23 +302,14 @@ def test_the_slide_never_exceeds_the_budget_and_never_overshoots():
                 assert got.shift_s * ms <= 0.0, "slid toward on-time"
 
 
-def test_the_reachable_offset_is_inside_the_quality_sigma():
-    """The ball's centre cannot be further from the bat's axis than the two
-    radii and the margin sum to. A sigma wider than that scores every contact
-    1.0 — which is what the old 4 in sigma, inherited from a screen-pixel
-    model, would have done here.
-
-    The bound is the *margin's*, and that is the point of stating it. Under the
-    anisotropic model the offset was bounded by nothing meaningful: it picked
-    up the ball's descent over feet of along-flight reach and ran past 5 in on
-    a swing whose aim was fine.
-    """
-    solid_in = (bp.bat_radius_ft(bp.SWEET_SPOT_FRAC) + bc.BALL_RADIUS_FT) * 12.0
+def test_the_physical_contact_and_spatial_assist_are_real_sized():
+    """The physical solid stays a bat and ball; difficulty moves that bat."""
+    solid_in = (bp.bat_radius_ft(bp.CONTACT_SWEET_SPOT_FRAC)
+                + bc.BALL_RADIUS_FT) * 12.0
     assert 2.4 < solid_in < 3.1, "a bat and a ball, in inches"
-    for mult in (1.4, 1.0, 0.7):
-        reach_in = solid_in + bc.margin_ft(mult) * 12.0
-        assert bc.CENTRE_SIGMA_FT * 12.0 < reach_in
-        assert reach_in < 7.0, "the tolerance is inches, not feet"
+    assists = [bc.spatial_assist_ft(mult) for mult in (1.4, 1.0, 0.7)]
+    assert assists == sorted(assists, reverse=True)
+    assert all(0.0 < value < 0.5 for value in assists)
 
 
 # ---- Difficulty -------------------------------------------------------------
@@ -420,7 +413,9 @@ def test_the_contact_instant_is_stable_under_refinement():
     refinement, not from the nearest sample."""
     tr = pitch()
     ref = squared_up(tr)
-    got = swing_at(tr, ref, -6.0)
+    # Outside the timing assist, so the authored 150 ms contact pose is not
+    # the true minimum and the refinement has a non-integral instant to find.
+    got = swing_at(tr, ref, -27.0)
     ms = got.swing_t_s * 1000.0
     assert abs(ms - round(ms)) > 1e-6, "landed exactly on a coarse sample"
     # And the ball reported is the ball at the instant reported.
@@ -507,16 +502,13 @@ def test_the_sweep_is_cheap_enough_to_run_on_an_input_frame():
 
 # ---- The in-swing aim assist ------------------------------------------------
 #
-# A different kind of thing from the tolerances above, and the tests are
-# separated for the same reason the code is. `margin_ft` and `cushion_s` widen
-# the bat; the assist *moves* it, pulling a difficulty-scaled fraction of the
-# player's own aim error out before the swing is built. So it lifts contact
-# quality rather than only the hit-or-miss verdict, which is what lets it reach
-# getting hits.
+# The pre-build aim assist pulls a difficulty-scaled fraction of the player's
+# own aim error out before the swing is built. It is tested separately from the
+# bounded rigid correction applied to a near miss during contact resolution.
 #
 # It exists because contact was measurably out of reach. Recorded play on the
 # build before it — 222 swings at AMATEUR — whiffed 79% of the time against
-# MLB's 24%, and the cause was a vertical cliff: `margin_ft(1.0)` was exactly
+# MLB's 24%, and the cause was a vertical cliff: the old margin at 1.0 was
 # 0.0, so the player had to place a mouse cursor inside the real 2.75 in a bat
 # and a ball are between them.
 
@@ -631,7 +623,7 @@ def test_no_assist_is_the_default_everywhere():
 def test_amateur_has_real_vertical_tolerance():
     """The regression pin for what made contact unreachable.
 
-    `margin_ft` was `(zone_size_mult - 1.0) * K`, which is exactly 0.0 at
+    The old margin was `(zone_size_mult - 1.0) * K`, which is exactly 0.0 at
     AMATEUR and *negative* above it — so the default difficulty gave the bat no
     tolerance beyond its own surface, and asked the player to place a mouse
     cursor inside the 2.75 in a bat and a ball are between them. That is 22 px
@@ -646,16 +638,42 @@ def test_amateur_has_real_vertical_tolerance():
         assert got.quality > floor
 
 
-def test_the_zone_multiplier_scales_the_margin_rather_than_offsetting_it():
-    """Every difficulty gets *some* tolerance, and it is ordered.
+def test_the_zone_multiplier_scales_a_visible_assist_not_the_bat():
+    """Every difficulty gets an ordered movement budget, never a fat hitbox."""
+    assists = [bc.spatial_assist_ft(z) for _, z, _ in DIFFICULTIES]
+    assert all(a > 0.0 for a in assists), assists
+    assert assists == sorted(assists, reverse=True)
 
-    Written as an offset from Amateur the margin was zero at the default and
-    negative at three of the five settings, which is a bat thinner than a bat.
-    """
-    margins = [bc.margin_ft(z) for _, z, _ in DIFFICULTIES]
-    assert all(m > 0.0 for m in margins), margins
-    assert margins == sorted(margins, reverse=True)
-    assert bc.margin_ft(1.0) * 12.0 == pytest.approx(bc.BASE_MARGIN_FT * 12.0)
+
+def test_a_near_miss_is_moved_within_budget_then_swept_strictly():
+    tr = pitch()
+    cursor = aim_off_by(tr, 4.0)
+    swing = bp.swing(bc.aim_at_pitch(cursor, tr, "R"), "R")
+    start = (tr.time_at_depth(swing.contact_depth_ft)
+             - bp.SWING_DURATION_S)
+    got = bc.resolve_contact(swing, tr, start)
+
+    assert got is not None
+    moved = math.hypot(*got.spatial_shift_ft)
+    assert 0.0 < moved <= bc.spatial_assist_ft(1.0)
+    assert got.spatial_score < 1.0
+
+    corrected = bp.translated_swing(swing, got.spatial_shift_ft)
+    gap, _, _, _ = bc._gap_at(
+        corrected, tr, start + got.shift_s, got.swing_t_s)
+    assert gap <= 0.0
+
+
+@pytest.mark.parametrize("zone,window", [(1.4, 1.5), (1.0, 1.0), (0.7, 0.4)])
+@pytest.mark.parametrize("timing_ms", [-35.0, -15.0, 0.0, 20.0, 45.0])
+def test_every_returned_contact_is_a_physical_intersection(zone, window,
+                                                            timing_ms):
+    tr = pitch()
+    got = swing_at(tr, squared_up(tr), timing_ms,
+                   zone_size_mult=zone, timing_window_mult=window)
+    if got is not None:
+        assert got.gap_ft <= 0.0
+        assert got.surface_gap_ft <= 1e-9
 
 
 def test_the_ladder_matches_the_difficulty_table():

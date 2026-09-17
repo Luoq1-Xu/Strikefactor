@@ -6,7 +6,8 @@ import pygame
 import pygame.gfxdraw
 
 from strikefactor import outcomes
-from strikefactor.gameplay import bat_contact, bat_path, defense
+from strikefactor.engine import contact_audio
+from strikefactor.gameplay import bat_contact, bat_path, defense, spray
 from strikefactor.helpers import EnhancedPitchRecord
 from strikefactor.utils.physics import collision
 from strikefactor.utils.pitch_physics import DEFAULT_CAMERA, PitchTrajectory, UmpireCamera
@@ -193,7 +194,38 @@ class PitchSimulation:
         self.ball_screen_at_contact = None
         self.contact_quality = None       # mirrored from HitOutcomeManager.last_quality
         self.vertical_offset_in = None    # mirrored from HitOutcomeManager.last_vertical_offset
-        self.exit_velocity_mph = None     # modelled at contact; drives the contact SFX
+        # This batted ball's exit velocity, drawn **once** and shared by
+        # everything that needs one: the flight physics (carry, hang time,
+        # wall candidacy, the infield verdict), the contact sound, the DB and
+        # the swing replay's readout. It used to be drawn twice — once inside
+        # `HitAnimation` for the physics and again inside the sound, which is
+        # the draw that reached the DB and the player. The two differed by
+        # 3.5 mph sd on a contact swing, and on a power swing the animation's
+        # call took the default `swing_type="contact"`, so the E key's
+        # `EV_POWER_BONUS_MPH` reached the crack and the readout and never
+        # once reached the ball.
+        #
+        # **"Once" means once, with no exception.** A home run kept one until
+        # the carry model became deterministic: the sound was handed the
+        # landing distance, read an EV back out of it and this attribute was
+        # reassigned to the result. That was a defensible measurement while
+        # `hit_animation` rolled its own distance bias, and a lossy round trip
+        # the moment it stopped — it is assigned exactly once now, in
+        # `_evaluate_contact`, and never again.
+        self.exit_velocity_mph = None
+        # This batted ball's launch angle, in degrees above horizontal. Drawn
+        # **once**, here, for exactly the reason `exit_velocity_mph` above is:
+        # `ball_flight.launch_angle_deg` carries a bounded jitter, so asking
+        # for it twice gives one ball two flights.
+        #
+        # It used to be drawn inside `_classify_batted_ball_type` and discarded
+        # the instant the Statcast band was read off it — and then the carry
+        # and the hang time looked the band's *centre* up in a table, so every
+        # airborne ball in the game flew at exactly 14, 32 or 68 degrees. At
+        # 100 mph that put a cliff at each band edge worth 116 ft of carry and
+        # 2.25 s of hang time, crossed by a fifth of an inch of bat position.
+        # Now the angle is the quantity and the band is just its name.
+        self.launch_angle_deg = None
         # Batted-ball record, mirrored off the animation once it resolves (see
         # _finalize_batted_ball). Type is classified at contact, upstream of
         # any fielding decision, which is what makes it usable as an
@@ -207,11 +239,33 @@ class PitchSimulation:
         # often *why* it was a foul — and left None on a whiff, where there is
         # no ball to have a direction. Same shape as `exit_velocity_mph`.
         self.spray_angle_deg = None
+        # Which way the ball **actually left**, pull-positive degrees, and not
+        # the same question as `spray_angle_deg` above. On fair contact they
+        # are the same number. On a foul they are not: a glancing blow
+        # deflects the ball, so the bat's bearing is where it was *pointed*
+        # and this is where it *went* (`spray.foul_departure_deg`).
+        #
+        # Resolved here, once, for the reason `_defense_profile` gives — the
+        # animation gets a value, not a model to run — and because it has to
+        # reach two consumers that must agree: `HitAnimation` flies it and the
+        # swing replay draws it. It stays off the DB deliberately;
+        # `spray_angle_deg` is a column about the *swing* and
+        # `analysis.metrics.spray_vs_timing` reads it as one.
+        self.departure_deg = None
         # Foul contact metrics, computed in _handle_foul_ball. Fouls never
         # run the hit pipeline, so last_quality is stale for them — these
         # are the foul's own numbers, shared by the sound and the animation.
         self._foul_quality = None
         self._foul_vertical_offset = None
+        # And the foul's trajectory shape, drawn once here rather than left to
+        # `hit_animation._pick_shape`'s fallback: that re-rolls
+        # `ball_flight.launch_angle_deg`'s jitter inside the animation, so the
+        # shape a foul animated as could not be reproduced afterwards — and
+        # the shape decides whether the ball is popped up behind the plate or
+        # sprayed past a pole. Kept off `batted_ball_type` (and so off the DB),
+        # which is only ever set on a ball in play; widening it would silently
+        # change what every existing aggregate over that column means.
+        self._foul_shape = None
         self.ai_umpire_strike = None      # set in _make_ball_strike_call (taken pitches only)
         self.truth_strike = None          # set in _make_ball_strike_call (taken pitches only)
         self.abs_challenged = False       # toggled by ABS challenge wiring (see _challenge bookkeeping)
@@ -223,6 +277,7 @@ class PitchSimulation:
         # follow-through and defers the outcome banner until it finishes.
         # Player presses any key to advance once the banner is up.
         self.hit_animation = None
+        self._fielding_recorder = None
 
         self.new_entry = {
             'Pitcher': self.pitchername, 'PitchType': self.pitchtype, 'FirstX': 0, 'FirstY': 0,
@@ -243,6 +298,19 @@ class PitchSimulation:
         self.last_time = self.starttime
         self.windup = self.game.current_pitcher.get_windup()
         self.arrival_time = self.starttime + self.windup + self.traveltime
+
+        # Stable identity exists before any result/record is published. Review
+        # capture is separate from cleanup's AI, statistics and database writes.
+        from strikefactor.gameplay.review_record import scope_for
+        store = getattr(game, 'review_store', None)
+        self.review_id = store.allocate_id() if store is not None else None
+        self._review_scope = scope_for(game)
+        self._review_handedness = self.new_data_entry['Handedness']
+        self._review_count = (self.new_data_entry['Balls'], self.new_data_entry['Strikes'],
+                              self.new_data_entry['Outs'])
+        self._review_bases = tuple(game.scoreKeeper.get_bases())
+        self._review_sample_times = []
+        self._ball_sample_ms = 0.0
 
         # Get engine FPS setting for physics calculations
         self.engine_fps = self.game.settings_manager.get_engine_fps()
@@ -312,7 +380,7 @@ class PitchSimulation:
                 proj_radius = self.camera.project_radius(ball_y_world)
                 trail_size = max(4, min(11, int(proj_radius * 1.2)))
                 entry = [self.game.ball[0], self.game.ball[1], trail_size, (255,255,255), ""]
-            self.game.last_pitch_information.append(entry)
+            self._append_pitch_trace(entry)
 
         # Record trajectory points
         if self.recording_state == 0 and self.windup < (current_time - self.starttime) < self.windup + 200:
@@ -323,6 +391,23 @@ class PitchSimulation:
             self.recording_state += 1
             self.new_entry['SecondX'] = self.game.ball[0]
             self.new_entry['SecondY'] = self.game.ball[1]
+
+    def _append_pitch_trace(self, entry):
+        self.game.last_pitch_information.append(entry)
+        if hasattr(self, '_review_sample_times'):
+            self._review_sample_times.append(self._ball_sample_ms)
+
+    def _publish_review(self):
+        """Publish once when values settle, without committing a pitch again."""
+        store = getattr(self.game, 'review_store', None)
+        if store is None or getattr(self, 'review_id', None) is None:
+            return
+        if store.get(self.review_id) is None:
+            from strikefactor.gameplay.review_record import from_simulation
+            record = from_simulation(self)
+            store.publish(record)
+            if record.swing is not None:
+                self.game.last_swing = record.swing  # compatibility, never used to join views
 
     def _get_world_y(self, current_time):
         """Get the ball's real-world y coordinate (distance from plate) at current time."""
@@ -526,18 +611,20 @@ class PitchSimulation:
         if (current_time > self.contact_time and self.soundplayed == 0 and self.pitch_results_done):
             swing_type = "power" if self.swing_type == 2 else "contact"
             if self.on_time == 1:
-                self.exit_velocity_mph = self.game.sound_manager.play_contact(
-                    self._foul_quality, swing_type)
+                self.game.sound_manager.play_contact(
+                    self._foul_quality, swing_type,
+                    ev_mph=self.exit_velocity_mph)
                 self.soundplayed += 1
             elif self.on_time == 2:
-                # On a home run the animation already exists (it is built in
-                # _evaluate_contact, above) and has fixed the carry distance.
-                # Hand that to the sound so the crack matches the FT readout
-                # the player is about to see — the carry model's randomness
-                # means quality alone can put a soft crack under a 460-footer.
-                hr_distance = getattr(self.hit_animation, "hr_distance_ft", None)
-                self.exit_velocity_mph = self.game.hit_outcome_manager.play_hit_sound(
-                    swing_type, hr_distance_ft=hr_distance)
+                # A home run reaches the sound as a *rung floor* and nothing
+                # else. This used to hand over the animation's carry distance
+                # instead, take an exit velocity back out of it, and write
+                # that over `self.exit_velocity_mph` — the last place in the
+                # game where a batted ball got a second EV. See the note above
+                # `contact_audio.HOMERUN_MIN_SAMPLE`.
+                self.game.hit_outcome_manager.play_hit_sound(
+                    swing_type, ev_mph=self.exit_velocity_mph,
+                    is_home_run=True)
                 self.soundplayed += 1
 
     def _evaluate_contact(self):
@@ -548,7 +635,34 @@ class PitchSimulation:
         frame where that result becomes visible.
         """
         if self.contact is not None:
+            # The bat's own bearing, for the DB. Where the ball actually went
+            # is `self.departure_deg`, set on each of the two contact paths
+            # below — the same number on fair contact, and the deflected one
+            # on a foul.
             self.spray_angle_deg = self.contact.spray_deg
+            # The GameDay hot streak, before the draw rather than after the
+            # outcome. It used to multiply a home-run probability; it is an
+            # exit-velocity bonus now, so a hitter who is seeing it well
+            # squares the ball up better and that reaches the carry, the hang
+            # time, the crack and the recorded EV through one channel instead
+            # of a second model of the outcome. Set here because the draw
+            # below is downstream of it — `_handle_successful_hit` used to set
+            # it, which is after.
+            self.game.hit_outcome_manager.momentum_bonus = (
+                self.game.gameday_manager.get_player_momentum_bonus()
+                if self.game.in_gameday_mode and self.game.gameday_manager
+                else 0.0)
+            # One draw, with the swing type that was actually used, before
+            # anything is built from it. See `self.exit_velocity_mph`.
+            self.exit_velocity_mph = (
+                contact_audio.exit_velocity_mph(
+                    self.game.hit_outcome_manager.contact_metrics(self.contact)[0],
+                    "power" if self.swing_type == 2 else "contact")
+                + self.game.hit_outcome_manager.hot_streak_ev_bonus_mph())
+            # And the vertical direction, drawn once beside it. Both are
+            # inputs to the same flight, so they are settled in the same place.
+            self.launch_angle_deg = (
+                self.game.hit_outcome_manager.launch_angle_deg(self.contact))
 
         if self.contact is None:
             self.made_contact = "swung_and_miss"
@@ -581,6 +695,18 @@ class PitchSimulation:
 
         self._foul_quality = quality
         self._foul_vertical_offset = vertical_offset
+        # The shape, and then the deflection — in that order, because a ball
+        # popped almost straight up comes down behind the plate rather than
+        # out past a pole. Both drawn once, here, so the animation and the
+        # swing replay are shown one foul rather than two.
+        #
+        # Through the classifier a ball in play uses, not a second copy of it:
+        # `hit_animation._shape_from_offset` is the same model again, and
+        # asking it inside the animation is what left the shape unreproducible.
+        self._foul_shape = self.game.hit_outcome_manager._classify_batted_ball_type(
+            self.launch_angle_deg)
+        self.departure_deg = spray.foul_departure_deg(
+            self.contact.spray_deg, quality, self._foul_shape)
 
     def _handle_foul_ball(self):
         """Handle foul ball outcome."""
@@ -609,18 +735,20 @@ class PitchSimulation:
         # Track score BEFORE hit for gameday mode (MUST be before calling hit_outcome_manager)
         score_before = self.game.scoreKeeper.get_score() if self.game.in_gameday_mode else 0
 
-        # Apply momentum bonus in gameday mode
-        if self.game.in_gameday_mode and self.game.gameday_manager:
-            self.game.hit_outcome_manager.momentum_bonus = self.game.gameday_manager.get_player_momentum_bonus()
-        else:
-            self.game.hit_outcome_manager.momentum_bonus = 0.0
-
-        if self.swing_type == 1:
-            hit_string = self.game.hit_outcome_manager.get_contact_hit_outcome(
-                self.contact)
-        elif self.swing_type == 2:
-            hit_string = self.game.hit_outcome_manager.get_power_hit_outcome(
-                self.contact)
+        # The momentum bonus was applied to this ball's exit velocity back in
+        # `_evaluate_contact`, which is where the draw happens.
+        #
+        # One call for both swing types. They used to be two methods differing
+        # only in a `swing_type` that fed the home-run roll's power bonus; with
+        # the fence deciding home runs, the E key reaches it the way it has
+        # always claimed to — through `EV_POWER_BONUS_MPH` on the exit velocity
+        # drawn above, with the real swing type.
+        hit_string = self.game.hit_outcome_manager.hit_outcome(
+            self.contact,
+            launch_deg=self.launch_angle_deg,
+            ev_mph=self.exit_velocity_mph,
+            handedness=self.game.batter.get_handedness(),
+        )
 
         # Snapshot contact metrics for the hit animation (shape + HR distance).
         contact_quality = self.game.hit_outcome_manager.last_quality
@@ -634,6 +762,10 @@ class PitchSimulation:
         # runs too — those never reach _finalize_batted_ball, and a GB/FB
         # split that silently omitted every HR would be worse than none.
         self.batted_ball_type = self.game.hit_outcome_manager.last_batted_ball_type
+        # A fair ball goes where the bat pointed it — there is no deflection
+        # to apply, so the two bearings coincide. Set explicitly rather than
+        # left to a default so both contact paths name it.
+        self.departure_deg = self.contact.spray_deg
 
         # Unified contact result. HOME RUN is decided at contact (the ball
         # is aimed past the wall); everything else is deferred to the
@@ -891,6 +1023,8 @@ class PitchSimulation:
                 speed_mph=self.speed_mph,
                 snapshot=snapshot,
             )
+            if getattr(self.game, 'pending_challenge', None) is not None:
+                self.game.pending_challenge['review_id'] = getattr(self, 'review_id', None)
 
     def _handle_ball_call(self):
         """Handle ball call."""
@@ -1025,6 +1159,7 @@ class PitchSimulation:
         if proj:
             screen_x, screen_y, depth = proj
 
+            self._ball_sample_ms = t * 1000.0
             self.game.ball[0] = screen_x
             self.game.ball[1] = screen_y
             self.game.ball[2] = max(0, y)  # world-y in feet for ball renderer
@@ -1074,7 +1209,7 @@ class PitchSimulation:
         # uses the generic "in-play" hit color; the visualizer treats both
         # the same.
         trail_color, trail_label = (71, 204, 252), "hit"
-        self.game.last_pitch_information.append([
+        self._append_pitch_trace([
             self.game.ball[0], self.game.ball[1],
             self.game.fourseamballsize, trail_color, trail_label,
         ])
@@ -1086,10 +1221,15 @@ class PitchSimulation:
             vertical_offset=vertical_offset,
             quality=quality,
             batted_ball_type=self.game.hit_outcome_manager.last_batted_ball_type,
-            # Off the contact itself, like the foul path: `last_spray_deg` is
-            # a snapshot of this same number, and one source cannot go stale.
-            spray_deg=self.contact.spray_deg,
+            # Where the ball actually left, resolved once in
+            # `_evaluate_contact`. On fair contact this is the bat's own
+            # bearing; the foul path is where the two come apart.
+            spray_deg=self.departure_deg,
             defense=self._defense_profile(),
+            timing_turn_deg=(self.contact.attack_deg
+                             - self.contact.pose_attack_deg),
+            ev_mph=self.exit_velocity_mph,
+            launch_deg=self.launch_angle_deg,
         )
 
     def _defense_profile(self):
@@ -1117,18 +1257,14 @@ class PitchSimulation:
         display until it ends.
 
         Deliberately does not go through _start_hit_animation: that path
-        reads stale last_batted_ball_type / last_spray_deg from the previous
-        hit (fouls never run the hit outcome pipeline) and writes a blue "hit"
+        reads a stale last_batted_ball_type from the previous hit (fouls
+        never run the hit outcome pipeline) and writes a blue "hit"
         trail marker where track mode expects the foul's red strike entry.
         """
         from strikefactor.gameplay.hit_animation import HitAnimation
 
         quality = self._foul_quality
         vertical_offset = self._foul_vertical_offset
-        # Off the contact itself rather than the manager's `last_*`, for the
-        # reason in the docstring above: this path never ran the hit pipeline,
-        # so those fields still describe the previous ball in play.
-        spray_deg = self.contact.spray_deg
 
         def on_complete():
             self.game._display_pitch_results("FOUL", self.pitchtype, self.speed_mph)
@@ -1139,7 +1275,7 @@ class PitchSimulation:
         # "strike" marker) — the trajectory tracker stops running once the
         # animation owns the frame, so track mode would otherwise lose the
         # foul's contact-point marker.
-        self.game.last_pitch_information.append([
+        self._append_pitch_trace([
             self.game.ball[0], self.game.ball[1],
             self.game.fourseamballsize, (227, 75, 80), "strike",
         ])
@@ -1150,9 +1286,18 @@ class PitchSimulation:
             on_complete=on_complete,
             vertical_offset=vertical_offset,
             quality=quality,
-            batted_ball_type=None,
-            spray_deg=spray_deg,
+            # Both resolved in `_compute_foul_contact_metrics`, which runs on
+            # every foul rather than only the animated ones. Passing the type
+            # rather than None keeps the animation from re-rolling the launch
+            # angle's jitter, and `departure_deg` is where the ball went as
+            # opposed to where the bat pointed it — see `spray`.
+            batted_ball_type=self._foul_shape,
+            spray_deg=self.departure_deg,
             defense=self._defense_profile(),
+            timing_turn_deg=(self.contact.attack_deg
+                             - self.contact.pose_attack_deg),
+            ev_mph=self.exit_velocity_mph,
+            launch_deg=self.launch_angle_deg,
         )
 
     def _handle_hit_animation_phase(self, current_time, time_delta):
@@ -1162,20 +1307,56 @@ class PitchSimulation:
         swing key from before contact resolved) are silently dropped. Once
         the banner has fired, the next key or click advances the play.
         """
+        from strikefactor.gameplay.fielding_record import FieldingRecorder
+
+        if self._fielding_recorder is None:
+            self.game._fielding_play_number += 1
+            label = f"PLAY {self.game._fielding_play_number} / {self.pitchtype} {self.speed_mph:.0f} MPH"
+            self._fielding_recorder = FieldingRecorder(self.hit_animation, label, self.game.screen.get_size())
         self.hit_animation.update(current_time)
+        self._fielding_recorder.capture(self.hit_animation)
         self.hit_animation.draw(self.game.screen)
 
         if self.hit_animation.finished and not self.hit_animation.banner_fired:
             self.hit_animation.on_complete()
             self.hit_animation.banner_fired = True
+            # None deliberately clears a stale clip if this recording overflowed.
+            self.game.last_fielding_play = self._fielding_recorder.record
+            self._publish_review()
 
         self.game.ui_manager.update(time_delta)
         self.game.ui_manager.draw()
         self.game.flip_display()
 
+        from strikefactor.key_binding_manager import KeyAction
+        from strikefactor.ui.review_overlay import view_for_key
         for event in pygame.event.get():
-            if (self.hit_animation.banner_fired
-                    and event.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN)):
+            if event.type == pygame.QUIT:
+                self.running = False
+                pygame.event.post(event)
+                return
+            if event.type in (pygame.VIDEORESIZE, pygame.WINDOWRESIZED):
+                self.game._update_scaling()
+                continue
+            if event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
+                self.game.toggle_fullscreen()
+                continue
+            if not self.hit_animation.banner_fired:
+                continue
+            review_view = (view_for_key(self.game.key_binding_manager, event.key)
+                           if event.type == pygame.KEYDOWN else None)
+            if review_view:
+                if hasattr(self.game, 'request_review'):
+                    self.game.request_review(view=review_view,
+                                             record_id=self.review_id, simulation=self)
+                    self.game._review_returned = False  # this loop owns the consumed batch
+                elif event.key == self.game.key_binding_manager.get_key_for_action(
+                        KeyAction.FIELDING_REPLAY):
+                    self.game.request_fielding_replay(simulation=self)
+                # Drop remaining events from this batch; they belong to the
+                # original continue screen, not a new request to advance.
+                return
+            if event.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN):
                 self._finish_pitch()
                 return
 
@@ -1303,14 +1484,9 @@ class PitchSimulation:
         self.abs_challenged = bool(getattr(self.game, '_last_pitch_abs_challenged', False))
         self.abs_overturned = bool(getattr(self.game, '_last_pitch_abs_overturned', False))
 
-        # Park the swing where the replay overlay can find it. Built here
-        # because _finalize_batted_ball has already mirrored the animation by
-        # now, so every field is settled. A taken pitch returns None and
-        # deliberately leaves the previous swing in place.
-        from strikefactor.gameplay import swing_record
-        record = swing_record.from_simulation(self)
-        if record is not None:
-            self.game.last_swing = record
+        # Non-animated results publish here. Animated plays already published
+        # before Continue; this is idempotent and never builds a second swing.
+        self._publish_review()
 
         # Record pitch to SQLite database
         from strikefactor.data.pitch_database import PitchDatabaseService

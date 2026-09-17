@@ -85,3 +85,25 @@ def test_sandbox_layout_moves_pitchviz_off_the_pitcher_column(ui):
     # And it must go back when Arcade comes round again.
     ui.set_button_visibility('in_game', force_show=True)
     assert ui.buttons['view_pitches'].rect.topleft == arcade_pos
+
+
+@pytest.mark.parametrize('state', ['in_game', 'sandbox_gameplay',
+                                    'gameday_transition', 'gameday_simulation', 'gameday_final'])
+def test_one_review_entry_and_results_use_footer_not_sidebar(ui, state):
+    ui.set_button_visibility('in_game', force_show=True)
+    sidebar = ui.buttons['view_pitches'].rect.copy()
+    ui.set_button_visibility(state, force_show=True)
+    review = ui.buttons['view_pitches']
+    assert review.visible and review.text == 'REVIEW'
+    assert not ui.buttons['visualise'].visible
+    assert not ui.buttons['fielding_replay'].visible
+    if state not in ('in_game', 'sandbox_gameplay'):
+        assert review.rect.y >= 600
+    ui.set_button_visibility('in_game', force_show=True)
+    assert review.rect == sidebar
+
+
+@pytest.mark.parametrize('state', ['inning_end', 'summary'])
+def test_inning_end_and_summary_have_no_review_button(ui, state):
+    ui.set_button_visibility(state, force_show=True)
+    assert not ui.buttons['view_pitches'].visible

@@ -179,7 +179,21 @@ def _bat_profile_segments():
 
 
 _BAT_SEGMENTS = _bat_profile_segments()
-_BAT_TIP_RADIUS_FT = BAT_PROFILE_IN[-1][1] / 12.0
+BAT_KNOB_RADIUS_FT = BAT_PROFILE_IN[0][1] / 12.0
+BAT_TIP_RADIUS_FT = BAT_PROFILE_IN[-1][1] / 12.0
+
+# The profile describes a bat whose declared length includes its rounded
+# ends.  The centres of the two end spheres therefore sit one radius in from
+# `BatState.knob_ft` / `barrel_ft`; using the endpoints as sphere centres makes
+# the collision bat longer than the bat drawn on screen by both end radii.
+BAT_SOLID_SPAN_FT = BAT_LENGTH_FT - BAT_KNOB_RADIUS_FT - BAT_TIP_RADIUS_FT
+
+# `Contact.along` is measured over the solid's centre span.  Keep the quality
+# peak at the authored sweet spot rather than silently moving it inward when
+# the end centres are inset.
+CONTACT_SWEET_SPOT_FRAC = (
+    (HANDS_TO_SWEET_SPOT_FT - BAT_KNOB_RADIUS_FT) / BAT_SOLID_SPAN_FT
+)
 
 
 def bat_radius_ft(frac):
@@ -188,7 +202,35 @@ def bat_radius_ft(frac):
     for x_hi, lo_ft, slope, x_lo in _BAT_SEGMENTS:
         if f <= x_hi:
             return lo_ft + slope * (f - x_lo)
-    return _BAT_TIP_RADIUS_FT
+    return BAT_TIP_RADIUS_FT
+
+
+def bat_solid_axis(state):
+    """Return the centreline endpoints of the physical swept-sphere bat.
+
+    `BatState.knob_ft` and `barrel_ft` are the outside ends of a 33.5-inch
+    bat.  A sphere centred directly on either point extends the collision
+    solid beyond that length.  Insetting the centres by their radii gives the
+    collision solver and renderer one explicit, shared endpoint convention.
+    """
+    axis = tuple(state.barrel_ft[i] - state.knob_ft[i] for i in range(3))
+    length = math.sqrt(sum(v * v for v in axis))
+    if length <= 1e-12:
+        return state.knob_ft, state.barrel_ft
+    unit = tuple(v / length for v in axis)
+    lo = tuple(state.knob_ft[i] + unit[i] * BAT_KNOB_RADIUS_FT
+               for i in range(3))
+    hi = tuple(state.barrel_ft[i] - unit[i] * BAT_TIP_RADIUS_FT
+               for i in range(3))
+    return lo, hi
+
+
+def bat_solid_point(state, frac):
+    """Centre and radius of the bat solid at profile fraction ``frac``."""
+    f = max(0.0, min(1.0, frac))
+    lo, hi = bat_solid_axis(state)
+    centre = tuple(lo[i] + (hi[i] - lo[i]) * f for i in range(3))
+    return centre, bat_radius_ft(f)
 
 
 # --- The body ------------------------------------------------------------
@@ -517,7 +559,30 @@ class BatState:
         return self._speed_mph
 
 
-class BatSwing:
+class _SwingTracks:
+    """The two sampling helpers shared by a swing and its translated form.
+
+    Both are written purely in terms of `state_at`, so a subclass gets the
+    right states by defining that alone. They lived as byte-identical copies
+    in each class, which meant a new track helper silently missed the
+    translated variant — and that variant is the *assisted* path, so the gap
+    only showed at non-zero difficulty assist.
+    """
+
+    def barrel_track(self, n=48):
+        """`n` states evenly spaced from initiation to contact."""
+        if n < 2:
+            n = 2
+        return [self.state_at(SWING_DURATION_S * i / (n - 1)) for i in range(n)]
+
+    def full_track(self, n=64):
+        """`n` states over the whole swing, follow-through included."""
+        if n < 2:
+            n = 2
+        return [self.state_at(TOTAL_DURATION_S * i / (n - 1)) for i in range(n)]
+
+
+class BatSwing(_SwingTracks):
     """A swing, sampleable at any time from initiation through the finish.
 
     Built from the player's aim and handedness and nothing else. Hands-first:
@@ -715,17 +780,53 @@ class BatSwing:
         pa, pb = self._sweet_at(a), self._sweet_at(b)
         return math.dist(pa, pb) / dt * MPH_PER_FT_S
 
-    def barrel_track(self, n=48):
-        """`n` states evenly spaced from initiation to contact."""
-        if n < 2:
-            n = 2
-        return [self.state_at(SWING_DURATION_S * i / (n - 1)) for i in range(n)]
+class TranslatedBatSwing(_SwingTracks):
+    """A swing moved rigidly in x/z by a bounded contact assist.
 
-    def full_track(self, n=64):
-        """`n` states over the whole swing, follow-through included."""
-        if n < 2:
-            n = 2
-        return [self.state_at(TOTAL_DURATION_S * i / (n - 1)) for i in range(n)]
+    Difficulty forgiveness must be visible without changing what kind of
+    swing the player made. Rebuilding from a shifted aim changes the contact
+    pose's bearing and therefore the batted-ball direction; translating the
+    existing kinematic chain preserves its attitude, speed and timing while
+    putting the physical bat where the collision solver placed it.
+    """
+
+    def __init__(self, base, shift_ft):
+        self.base = base
+        self.spatial_shift_ft = tuple(shift_ft)
+        self.aim_ft = base.aim_ft
+        self.handedness = base.handedness
+        self.spin = base.spin
+        self.contact_axis = base.contact_axis
+        self.contact_depth_ft = base.contact_depth_ft
+        self.contact_ft = self._shift_point(base.contact_ft)
+
+    def _shift_point(self, point):
+        dx, dz = self.spatial_shift_ft
+        return point[0] + dx, point[1], point[2] + dz
+
+    def state_at(self, t_s):
+        state = self.base.state_at(t_s)
+        return BatState(
+            knob_ft=self._shift_point(state.knob_ft),
+            barrel_ft=self._shift_point(state.barrel_ft),
+            sweet_spot_ft=self._shift_point(state.sweet_spot_ft),
+            swing=self,
+            u=state._u,
+        )
+
+    def _speed_at(self, u):
+        return self.base._speed_at(u)
+
+
+def translated_swing(base, shift_ft):
+    """Return `base` visibly displaced by `(x, z)` feet.
+
+    A zero shift returns the original object so unassisted swings do not pay
+    for a wrapper or acquire a second identity.
+    """
+    if math.hypot(*shift_ft) <= 1e-12:
+        return base
+    return TranslatedBatSwing(base, shift_ft)
 
 
 def swing(aim_ft, handedness):

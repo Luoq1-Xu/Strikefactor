@@ -14,8 +14,9 @@ import math
 import pygame
 import pytest
 
-from strikefactor.gameplay import bat_contact, bat_path
+from strikefactor.gameplay import bat_contact, bat_path, spray
 from strikefactor.gameplay.swing_record import SwingRecord
+from strikefactor.ui import swing_replay_overlay as sro
 from strikefactor.ui.swing_replay_overlay import SwingReplayOverlay
 from strikefactor.utils.pitch_physics import DEFAULT_CAMERA, PitchTrajectory
 
@@ -331,13 +332,17 @@ def struck_record(timing_ms, speed_mph=93.0, zone=1.4, window=1.5,
     # assist marker would read the contact's ROOKIE slide while the budget
     # ticks drew an AMATEUR budget.
     return make_record(timing_ms, aim_ft=cursor, contact=contact,
+                       resolved_aim_ft=aim,
+                       contact_quality=contact.quality,
+                       vertical_offset_px=(contact.vertical_offset_ft
+                                           / DEFAULT_CAMERA.ft_per_px_z),
                        zone_size_mult=zone, timing_window_mult=window,
                        bat_arrival_s=start + bat_path.SWING_DURATION_S), contact
 
 
 def _axis_gap_ft(state, ball):
     """Feet from the ball's centre to the nearest point on the bat's axis."""
-    knob, tip = state.knob_ft, state.barrel_ft
+    knob, tip = bat_path.bat_solid_axis(state)
     axis = [tip[i] - knob[i] for i in range(3)]
     rel = [ball[i] - knob[i] for i in range(3)]
     dd = sum(v * v for v in axis)
@@ -407,7 +412,7 @@ def test_a_struck_swing_still_ends_at_contact(ms):
     frozen frame is the two of them touching, and a tail past it drags the
     ball away from the mark that names it."""
     rec, contact = struck_record(ms)
-    assert rec.clip_end_s == pytest.approx(contact.pitch_t_s)
+    assert rec.clip_end_s == pytest.approx(rec.replay_contact.pitch_t_s)
 
 
 @pytest.mark.parametrize("ms", [-40.0, -20.0, 20.0, 40.0])
@@ -467,17 +472,12 @@ def test_the_bat_and_the_ball_actually_touch(ms):
     that started this read `REACH 2.6 FT` under a FOUL banner, and 63% of
     recorded contacts had visible daylight.
 
-    The forgiveness is spent in time now, so the only distance left in the
-    model is `margin_ft`, and that is what bounds the daylight. Asserting
-    against the margin rather than a constant is deliberate: it is the one dial
-    that may legitimately open this gap, so a regression that reintroduces
-    daylight from anywhere *else* fails here.
+    Difficulty forgiveness now moves the swing and the final sweep is strict,
+    so the physical surface gap itself is the invariant.
     """
     rec, contact = struck_record(ms)
     assert contact.gap_ft <= 0.0
-    margin = bat_contact.margin_ft(1.0)
-    assert contact.surface_gap_ft <= margin + 1e-9
-    assert margin < 0.25, "the tolerance is inches; feet is the bug"
+    assert contact.surface_gap_ft <= 1e-9
     assert rec.contact_reach_ft == pytest.approx(contact.surface_gap_ft)
 
     squared, dead_on = struck_record(0.0)
@@ -602,7 +602,7 @@ def test_the_screenshot_no_longer_reads_on_time_over_a_foul():
     TIME — and `test_on_time_means_exactly_that_the_swing_squared_it_up` pins
     it across the whole ladder without depending on any particular aim error.
     """
-    rec, contact = struck_record(40.0, aim_high_in=2.6)
+    rec, contact = struck_record(40.0, aim_high_in=3.0)
     threshold = bat_contact.foul_threshold(rec.timing_window_mult)
     assert contact.is_foul(threshold), "the model scores this a foul"
     assert rec.timing_label == "LATE", "so the panel must not call it on time"
@@ -686,17 +686,25 @@ def test_the_bat_is_the_same_bat_however_the_swing_was_timed(ms):
 
 @pytest.mark.parametrize("ms", [-45.0, -15.0, 0.0, 30.0])
 def test_the_drawn_bat_and_the_reported_offset_agree(ms):
-    """The picture must not contradict the numbers. `aim_ft` is the cursor
-    resolved at the *plate*, but the ball is 6.4 inches higher at a contact
-    point 5.6 ft out front — so drawing the bat at its plate height put it
-    half a foot under a ball the panel said it was 1.4 inches over."""
-    rec = make_record(ms)
-    swing = rec.bat_swing()
-    contact = swing.state_at(bat_path.SWING_DURATION_S).sweet_spot_ft
-    ball_z = rec.ball_at(rec._time_at_depth(swing.contact_depth_ft))[2]
-    drawn_offset_in = (contact[2] - ball_z) * 12.0
-    # Reported offset is bat-below-ball positive; drawn is z-up.
-    assert drawn_offset_in == pytest.approx(-rec.vertical_offset_inches, abs=1e-6)
+    """The replay samples the exact bat axis that produced the offset."""
+    rec, contact = struck_record(ms)
+    state = rec.bat_swing().state_at(contact.swing_t_s)
+    axis_point, _ = bat_path.bat_solid_point(state, contact.along)
+    assert axis_point == pytest.approx(contact.axis_point_ft, abs=1e-9)
+    drawn_offset_in = (axis_point[2] - contact.ball_ft[2]) * 12.0
+    # Reported offset is bat-below-ball positive; world z is up.
+    assert drawn_offset_in == pytest.approx(-rec.vertical_offset_inches,
+                                             abs=1e-6)
+
+
+def test_the_replay_uses_the_engine_resolved_aim_without_rebuilding_it():
+    rec, contact = struck_record(-40.0, aim_high_in=3.0)
+    assert rec.bat_swing().aim_ft == pytest.approx(contact.resolved_aim_ft)
+    assert rec.bat_swing().spatial_shift_ft == pytest.approx(
+        contact.spatial_shift_ft)
+    state = rec.bat_swing().state_at(contact.swing_t_s)
+    assert state.knob_ft == pytest.approx(contact.knob_ft, abs=1e-9)
+    assert state.barrel_ft == pytest.approx(contact.barrel_ft, abs=1e-9)
 
 
 def test_a_swing_with_no_measured_offset_falls_back_to_the_aim_point():
@@ -807,8 +815,8 @@ def test_the_clip_runs_to_contact_and_holds_there(overlay, ms):
     rec, contact = struck_record(ms)
     _run(overlay, rec)
     assert overlay._replay_progress() == pytest.approx(1.0)
-    assert overlay._now_s() == pytest.approx(contact.pitch_t_s)
-    assert overlay._swing_t(overlay._now_s()) == pytest.approx(contact.swing_t_s)
+    assert overlay._now_s() == pytest.approx(rec.replay_contact.pitch_t_s)
+    assert overlay._swing_t(overlay._now_s()) == pytest.approx(rec.replay_contact.swing_t_s)
 
 
 @pytest.mark.parametrize("ms", [-90.0, -60.0, -30.0])
@@ -1034,101 +1042,63 @@ def test_the_batter_stands_on_their_own_side_of_the_plate(overlay, hand, expect_
 
 # ---- The bat is drawn as a bat ----------------------------------------------
 
-class _Bat:
-    """The two attributes `_bat_silhouette` reads off a `BatState`."""
-
-    def __init__(self, knob_ft, barrel_ft):
-        self.knob_ft = knob_ft
-        self.barrel_ft = barrel_ft
-
-
-def _half_widths(polygon):
-    """Half-width in pixels at each profile station, out of the silhouette.
-
-    The polygon is the near edge followed by the far edge reversed, so the
-    two points a station apart are `i` and `-1 - i`.
-    """
-    n = len(polygon) // 2
-    return [math.dist(polygon[i], polygon[-1 - i]) / 2.0 for i in range(n)]
-
-
 @pytest.mark.parametrize("view", [0, 1])
-def test_the_drawn_bat_spans_exactly_the_projected_bat_length(overlay, view):
-    """Caps are inset by their own radii, so the silhouette ends where the
-    model's knob and barrel project to. Drawn without the inset the bat grows
-    by an end cap at each end every time it is drawn — three inches of bat
-    the collision geometry does not have."""
+def test_collision_and_rendering_share_the_same_bat_stations(overlay, view):
     rec = make_record(-21.0)
     overlay.trigger(record=rec)
     overlay._view = view
     state = rec.bat_swing().state_at(bat_path.SWING_DURATION_S * 0.6)
-    polygon, ((lo, r_lo), (hi, r_hi)) = overlay._bat_silhouette(state)
-    assert polygon is not None
-    projected = math.dist(overlay._project(state.knob_ft),
-                          overlay._project(state.barrel_ft))
-    assert math.dist(lo, hi) + r_lo + r_hi == pytest.approx(projected, abs=0.5)
+    ellipses = overlay._bat_ellipses(state, (0.0, 1.0))
+    centres = [centre for centre, _ in ellipses]
+    lo, hi = bat_path.bat_solid_axis(state)
+    assert overlay._project(lo) in centres
+    assert overlay._project(hi) in centres
 
 
 @pytest.mark.parametrize("view", [0, 1])
-def test_the_silhouette_is_a_bat_and_not_a_cone(overlay, view):
-    """The shape's whole signature: a knob flare, a thin handle held a third
-    of the way out, and a barrel two and a half times the handle. Recovered
-    as real inches from the drawn pixels, so it pins the profile *and* the
-    scaling — a fixed pixel width would pass a ratio test but report a
-    different real bat in each view."""
+def test_projected_bat_radii_follow_each_view_axis(overlay, view):
     rec = make_record(-21.0)
     overlay.trigger(record=rec)
     overlay._view = view
-    state = rec.bat_swing().state_at(bat_path.SWING_DURATION_S * 0.6)
-    polygon, _ = overlay._bat_silhouette(state)
-    inches = [2.0 * hw / overlay._bat_scale() * 12.0
-              for hw in _half_widths(polygon)]
-
-    knob, handle, barrel = inches[0], min(inches), max(inches)
-    assert 2.0 < knob < 2.3            # ~2.1 in across the knob
-    assert 0.9 < handle < 1.15         # ~1 in through the handle
-    assert 2.5 < barrel <= 2.61        # the MLB maximum, and not over it
-    assert inches[-1] == pytest.approx(barrel, abs=0.05), "tip must be barrel"
-    # Concave, not conical: still thin at a third of the way out, and
-    # essentially parallel-sided over the last fifth.
-    assert inches[3] < 1.2 * handle
-    assert inches[-1] - inches[-2] < 0.1
+    sx, sy = overlay._px_per_ft()
+    radius = bat_path.BAT_TIP_RADIUS_FT
+    rx, ry = overlay._projected_radius(radius)
+    assert rx == pytest.approx(radius * sx)
+    assert ry == pytest.approx(radius * sy)
+    assert rx / ry == pytest.approx(sx / sy)
 
 
-def test_the_bat_keeps_one_thickness_as_it_turns(overlay):
-    """What the single `_bat_scale` buys. Projected honestly, thickness is a
-    function of which way the bat points — 12 px across the screen against 5
-    px down it in the OVERHEAD view — so the bat would swell and thin through
-    the swing, which no real bat does."""
-    rec = make_record(-21.0)
+def test_a_bat_pointed_at_the_camera_still_draws(overlay):
+    """Dense projected spheres need no end-on special case."""
+    rec = make_record()
     overlay.trigger(record=rec)
-    overlay._view = 1
-    swing = rec.bat_swing()
-    widest = []
-    for i in range(1, 12):
-        polygon, _ = overlay._bat_silhouette(
-            swing.state_at(bat_path.SWING_DURATION_S * i / 12.0))
-        if polygon is not None:
-            widest.append(max(_half_widths(polygon)))
-    assert len(widest) > 6
-    assert max(widest) == pytest.approx(min(widest), abs=0.01)
-
-
-def test_a_bat_pointed_at_the_camera_draws_as_its_end_caps(overlay):
-    """The SIDE view looks down x and a bat at contact points largely along
-    it, so end-on is ordinary rather than exceptional. There is no length to
-    taper along and the insets would cross over, so the caps are the whole
-    picture — and drawing must not fall over or invert the polygon."""
-    overlay.trigger(record=make_record())
     overlay._view = 0
-    polygon, caps = overlay._bat_silhouette(
-        _Bat((1.4, 0.0, 3.0), (1.4 - bat_path.BAT_LENGTH_FT, 0.0, 3.0)))
-    assert polygon is None
-    assert len(caps) == 2
     surface = pygame.Surface(SCREEN)
-    overlay._draw_bat(surface, 0.0, state=_Bat((1.4, 0.0, 3.0),
-                                               (1.4 - bat_path.BAT_LENGTH_FT,
-                                                0.0, 3.0)))
+    overlay._draw_bat(surface, rec.contact_time_s)
+    assert surface.get_bounding_rect().width > 0
+
+
+@pytest.mark.parametrize("view", [0, 1])
+@pytest.mark.parametrize("ms", [-40.0, -20.0, 0.0, 20.0, 40.0])
+def test_first_touch_has_adjacent_bat_and_ball_pixels(overlay, view, ms):
+    """The screenshot-level invariant: a hit cannot render as a whiff."""
+    rec, contact = struck_record(ms)
+    overlay.trigger(record=rec)
+    overlay._view = view
+    overlay._elapsed_ms = overlay._replay_end_ms
+
+    bat = pygame.Surface(SCREEN, pygame.SRCALPHA)
+    ball = pygame.Surface(SCREEN, pygame.SRCALPHA)
+    overlay._draw_bat(bat, rec.clip_end_s)
+    overlay._draw_ball(ball, rec.clip_end_s)
+    overlap = pygame.mask.from_surface(bat).overlap(
+        pygame.mask.from_surface(ball), (0, 0))
+    # Raster rounding can leave one pixel between tangent silhouettes.
+    if overlap is None:
+        bat_mask = pygame.mask.from_surface(bat)
+        ball_mask = pygame.mask.from_surface(ball)
+        assert any(bat_mask.overlap(ball_mask, (dx, dy)) is not None
+                   for dx in (-1, 0, 1) for dy in (-1, 0, 1))
 
 
 # ---- Drawing stays inside the panel -----------------------------------------
@@ -1171,3 +1141,351 @@ def test_nothing_is_drawn_outside_the_panel(overlay, ms, view):
     lit = _lit_bounds(surface)
     assert lit is not None, "the overlay drew nothing"
     assert overlay._panel_rect().contains(lit), f"{lit} escaped {overlay._panel_rect()}"
+
+
+# ---- One scale per view -----------------------------------------------------
+
+@pytest.mark.parametrize("view", [0, 1])
+@pytest.mark.parametrize("ms", [-40.0, 0.0, 40.0])
+def test_a_foot_is_a_foot_along_both_axes(overlay, view, ms):
+    """OVERHEAD used to fit 11 ft of width into 1072 px and 14 ft of depth
+    into 340 — a 4:1 squash that drew the swing's round arc as a flattened
+    ellipse and looked, in the words of the report, "very weird". One scale
+    per view now: the axis with less room per foot sets it and the other is
+    widened to match. Checked off the projection itself, not only the number
+    it reports."""
+    rec, _ = struck_record(ms)
+    overlay.trigger(record=rec)
+    overlay._view = view
+    sx, sy = overlay._px_per_ft()
+    assert sx == pytest.approx(sy)
+    origin = overlay._project((0.0, 0.0, 1.0))
+    if view == 0:
+        across = overlay._project((0.0, 1.0, 1.0))
+        up = overlay._project((0.0, 0.0, 2.0))
+    else:
+        across = overlay._project((1.0, 0.0, 1.0))
+        up = overlay._project((0.0, 1.0, 1.0))
+    assert math.dist(origin, across) == pytest.approx(sx)
+    assert math.dist(origin, up) == pytest.approx(sx)
+
+
+def test_a_bat_across_the_plate_is_as_long_as_one_pointing_at_the_mound(overlay):
+    """The defect stated directly: the same bat laid along x and then along y
+    has to come out the same length on screen. It came out four times longer
+    one way than the other, which is why the frozen frame's bat read as a
+    needle lying across the view."""
+    overlay.trigger(record=make_record())
+    overlay._view = 1
+    length = bat_path.BAT_LENGTH_FT
+    across = bat_path.BatState((0.0, 1.0, 3.0), (length, 1.0, 3.0),
+                               (0.8 * length, 1.0, 3.0))
+    along = bat_path.BatState((0.0, 1.0, 3.0), (0.0, 1.0 + length, 3.0),
+                              (0.0, 1.0 + 0.8 * length, 3.0))
+
+    def drawn(state):
+        return math.dist(overlay._project(state.knob_ft),
+                         overlay._project(state.barrel_ft))
+
+    assert drawn(across) == pytest.approx(drawn(along))
+    assert drawn(across) == pytest.approx(length * overlay._px_per_ft()[0])
+
+
+@pytest.mark.parametrize("view", [0, 1])
+def test_isotropy_is_bought_with_field_of_view_not_by_shrinking(overlay, view):
+    """Along the binding axis the window is exactly the range the view has to
+    hold, and the other axis only ever comes back wider. A fit that shrank
+    the required range to make the scales agree would clip the swing."""
+    rec, _ = struck_record(0.0)
+    overlay.trigger(record=rec)
+    overlay._view = view
+    (h_lo, h_hi), (v_lo, v_hi) = overlay._frame_ft()
+    lo, hi = overlay._depth_range()
+    if view == 1:
+        assert (v_lo, v_hi) == pytest.approx((lo, hi))
+        assert h_hi - h_lo >= sro._OVER_X_RANGE[1] - sro._OVER_X_RANGE[0]
+    else:
+        assert (v_lo, v_hi) == pytest.approx(sro._SIDE_Z_RANGE)
+        assert h_hi - h_lo >= hi - lo
+
+
+@pytest.mark.parametrize("ms", [-63.0, -21.0, 0.0, 40.0])
+def test_the_overhead_frame_holds_the_whole_swing(overlay, ms):
+    """Depth stands on OVERHEAD's short axis and sets its scale, so the
+    window is framed on the swing's own path — the load pose puts the barrel
+    nearly 4 ft behind the plate — rather than on its end points plus a
+    margin wide enough to catch the arc by accident. Every sample of the bat
+    the clip draws, and the plate, land inside the rect."""
+    rec = make_record(ms)
+    overlay.trigger(record=rec)
+    overlay._view = 1
+    rect = overlay._view_rect()
+    t_end = overlay._swing_t(rec.clip_end_s)
+    for i in range(41):
+        state = overlay._swing.state_at(t_end * i / 40)
+        for point in (state.knob_ft, state.barrel_ft):
+            assert rect.collidepoint(overlay._project(point))
+    for point in ((0.0, 0.0, 0.0), (0.0, -sro._PLATE_DEPTH_FT, 0.0)):
+        assert rect.collidepoint(overlay._project(point))
+
+
+def test_the_spray_label_lands_inside_the_view(overlay, monkeypatch):
+    """The ray is drawn long enough to leave the frame from anywhere inside
+    it, and its label was anchored at the far end — outside the clip, so in
+    the whole life of the feature it had never once appeared on screen. It
+    sits where the ray leaves the view now."""
+    rec, contact = struck_record(0.0)
+    assert contact is not None
+    placed = []
+    real = sro.gdt.blit_text
+
+    def spy(screen, text, font, pos, color, align='left'):
+        rect = real(screen, text, font, pos, color, align)
+        placed.append((text, rect))
+        return rect
+
+    monkeypatch.setattr(sro.gdt, "blit_text", spy)
+    overlay.trigger(record=rec)
+    overlay._view = 1
+    _run(overlay, rec)
+    labels = [r for text, r in placed
+              if text.startswith(("PULL", "OPPO", "FOUL"))]
+    assert labels, "no spray label was drawn"
+    view = overlay._view_rect()
+    assert all(view.contains(r) for r in labels), labels[-1]
+
+
+# ---- The nested loop that runs the overlay ---------------------------------
+# `Game` can't be constructed headlessly, so the loop is bound to a stub that
+# carries only what it touches — the same shape as
+# tests/test_exit_to_menu_routing.py.
+
+
+class _StubOverlay:
+    """Active for a fixed number of frames, then done."""
+
+    def __init__(self, frames=3):
+        self._left = frames
+        self.rendered = 0
+
+    def is_active(self):
+        return self._left > 0
+
+    def update(self, dt_ms):
+        self._left -= 1
+
+    def render(self, surface):
+        self.rendered += 1
+
+    def handle_event(self, event):
+        return True
+
+    def dismiss(self):
+        self._left = 0
+
+
+class _StubUIManager:
+    def __init__(self):
+        self.draws = 0
+
+    def draw(self):
+        self.draws += 1
+
+
+class _StubReplayGame:
+    from strikefactor.main import Game as _G
+    _run_swing_replay_loop = _G._run_swing_replay_loop
+    del _G
+
+    def __init__(self):
+        self.clock = pygame.time.Clock()
+        self.screen = pygame.Surface(SCREEN)
+        self.state_manager = type("_SM", (), {"current_state": None})()
+        self.swing_replay_overlay = _StubOverlay()
+        self.ui_manager = _StubUIManager()
+        self.huds = 0
+        self.flips = 0
+
+    def _draw_active_hud(self, screen):
+        self.huds += 1
+
+    def flip_display(self):
+        self.flips += 1
+
+
+def test_the_replay_loop_draws_no_gui_over_the_panel():
+    """pygame_gui draws over everything, so the sidebar buttons used to sit on
+    top of the replay panel at full brightness — the field and the HUD are
+    dimmed by the overlay's scrim, but anything drawn after it is not. The
+    loop simply does not draw the gui while the overlay is up; the buttons'
+    own shown/hidden state is untouched, so the main loop restores them."""
+    g = _StubReplayGame()
+    g._run_swing_replay_loop()
+    assert g.swing_replay_overlay.rendered == 3
+    assert g.huds == 3, "the HUD is still drawn — it is behind the scrim"
+    assert g.ui_manager.draws == 0
+
+
+class _AnimStubGame:
+    """The whole of the game a `HitAnimation` reads. Same shape as
+    `tools.sim.StubGame`, restated here rather than imported so this file
+    keeps working without the harness on the path."""
+
+    def __init__(self, hand="R"):
+        self.batter = type("B", (), {"get_handedness": lambda self: hand})()
+
+
+# ---- The picture and the flight are one ball --------------------------------
+#
+# `_draw_spray`'s docstring has always claimed the ray is "the same number the
+# animation flies it along, so the picture and the outcome cannot disagree".
+# Nothing tested it, and for fouls it was false: the replay drew the *bat's*
+# bearing while `_setup_foul` invented its own out of `random`. Measured over
+# 600 recorded fouls the two were a median of 40.7 degrees apart, 271 of them
+# drawn as a fair ray under a FOUL banner. These are the pins that claim now
+# has.
+
+def _foul_contact(hand="R", timing_ms=30.0, aim=(0.0, 2.5)):
+    """A real mistimed swing, swept by the real engine, that came out foul."""
+    traj = make_trajectory()
+    swing = bat_path.swing(bat_contact.aim_at_pitch(aim, traj, hand), hand)
+    due = traj.time_at_depth(swing.contact_depth_ft)
+    return bat_contact.resolve_contact(
+        swing, traj, due - bat_path.SWING_DURATION_S + timing_ms / 1000.0,
+        timing_window_mult=0.2)
+
+
+def _animated_bearing_deg(anim, hand):
+    """The bearing the animation actually put the ball on, pull-positive."""
+    from strikefactor.gameplay import hit_animation as ha
+    fx, fy = ha._to_field_ft(anim._hit_end)
+    field = math.degrees(math.atan2(fy, fx))
+    return (field - 90.0) / spray.spin_for(hand)
+
+
+@pytest.mark.parametrize("hand", ["R", "L"])
+@pytest.mark.parametrize("timing_ms", [-40.0, -15.0, 15.0, 40.0])
+def test_the_replay_ray_is_the_bearing_the_animation_flew(hand, timing_ms):
+    """The seam. One contact, resolved once the way `PitchSimulation` resolves
+    it, then handed to both consumers — and they have to agree.
+
+    Both hands, because a sign error here mirrors the batter in the one view
+    whose whole job is showing which way the ball went.
+    """
+    from strikefactor.gameplay import hit_animation as ha
+    from strikefactor.gameplay.hit_outcome_manager import HitOutcomeManager
+
+    contact = _foul_contact(hand, timing_ms)
+    if contact is None:
+        pytest.skip("no contact at this timing")
+    quality, offset_px = HitOutcomeManager.contact_metrics(contact)
+    foul = contact.is_foul(bat_contact.foul_threshold(0.2))
+
+    mgr = HitOutcomeManager.__new__(HitOutcomeManager)
+    shape = mgr._classify_batted_ball_type(mgr.launch_angle_deg(contact))
+    departure = (spray.foul_departure_deg(contact.spray_deg, quality, shape)
+                 if foul else contact.spray_deg)
+
+    anim = ha.HitAnimation(
+        _AnimStubGame(hand), outcome="FOUL" if foul else "IN_PLAY",
+        on_complete=lambda: None, vertical_offset=offset_px, quality=quality,
+        batted_ball_type=shape, spray_deg=departure)
+
+    rec = make_record(hand=hand, contact=contact, departure_deg=departure,
+                      made_contact="fouled" if foul else "hit",
+                      outcome="foul" if foul else "SINGLE")
+    # What the replay draws is what the record hands it.
+    assert rec.departure_or_spray_deg == pytest.approx(departure)
+
+    got = _animated_bearing_deg(anim, hand)
+    # The residual is `batted_ball_path`'s bend between departure and landing,
+    # which the replay draws too (`_spray_track_ft` samples the same path).
+    assert abs(((got - departure) + 180.0) % 360.0 - 180.0) < 15.0, (
+        f"replay draws {departure:+.1f} deg, animation flew {got:+.1f}")
+
+
+@pytest.mark.parametrize("hand", ["R", "L"])
+def test_a_ball_the_banner_calls_foul_is_never_drawn_fair(hand):
+    """The reported bug, stated as a property. A ball fouled straight back was
+    drawn as a forward ray in the *fair* colour with no FOUL label, because
+    the ray asked `spray.is_foul(bat bearing)` while the panel asked
+    `Contact.is_foul(quality)` — two predicates for one verdict, eight inches
+    apart on the same panel."""
+    from strikefactor.gameplay.hit_outcome_manager import HitOutcomeManager
+    for timing_ms in (-45.0, -30.0, -10.0, 10.0, 30.0, 45.0):
+        contact = _foul_contact(hand, timing_ms)
+        if contact is None or not contact.is_foul(bat_contact.foul_threshold(0.2)):
+            continue
+        quality, offset_px = HitOutcomeManager.contact_metrics(contact)
+        mgr = HitOutcomeManager.__new__(HitOutcomeManager)
+        shape = mgr._classify_batted_ball_type(mgr.launch_angle_deg(contact))
+        departure = spray.foul_departure_deg(contact.spray_deg, quality, shape)
+        assert spray.is_foul(departure), (
+            f"{hand}HB at {timing_ms:+.0f} ms fouled, but the ray would draw "
+            f"{departure:+.1f} deg — inside the lines")
+
+
+def test_the_replay_draws_the_track_the_ball_actually_flew():
+    """Not a ray reconstructed from a bearing: `SwingRecord.flight_path` is the
+    animation's own `BattedBallPath`, so the two are the same object and a
+    second flight model cannot grow here."""
+    from strikefactor.gameplay import hit_animation as ha
+    anim = ha.HitAnimation(_AnimStubGame("R"), outcome="IN_PLAY",
+                           on_complete=lambda: None, quality=0.8,
+                           batted_ball_type="LINER", spray_deg=12.0,
+                           timing_turn_deg=9.0)
+    assert anim.flight_path is not None
+    rec = make_record(flight_path=anim.flight_path, departure_deg=12.0,
+                      contact=_foul_contact("R", 0.0))
+    pygame.display.init()
+    pygame.font.init()
+    view = SwingReplayOverlay(FakeGame())
+    view.trigger(record=rec)
+    view._view = sro._VIEW_OVERHEAD
+    track = view._spray_track_ft(12.0)
+    assert len(track) > 2, "a curved track needs more than a start and an end"
+    # Every drawn point is on the animation's own path, converted once
+    # (field_x = -world_x) and translated onto the contact point.
+    start = rec.replay_contact.ball_ft
+    for i, point in enumerate(track):
+        fx, fy = anim.flight_path.point_ft(
+            min(1.0, sro._SPRAY_RAY_FT / anim.flight_path.carry_ft)
+            * i / sro._SPRAY_TRACK_SAMPLES)
+        assert point[0] == pytest.approx(start[0] - fx)
+        assert point[1] == pytest.approx(start[1] + fy)
+
+
+def test_a_batted_ball_has_exactly_one_exit_velocity():
+    """`contact_audio.exit_velocity_mph` jitters, so it has to be drawn once
+    per ball — and "once" means once across the whole pitch, not once inside
+    the animation. The sound drew its own, and *that* draw is what reached the
+    DB and this panel's EXIT VELO, so the number the player was shown was not
+    the number the ball was flown at."""
+    from strikefactor.engine import contact_audio
+    from strikefactor.gameplay import hit_animation as ha
+
+    ev = 97.5
+    anim = ha.HitAnimation(_AnimStubGame("R"), outcome="IN_PLAY",
+                           on_complete=lambda: None, quality=0.8,
+                           batted_ball_type="LINER", spray_deg=5.0, ev_mph=ev)
+    assert anim.exit_velocity_mph == ev
+    # And the sound takes the same number rather than drawing a second one.
+    _, _, sound_ev = contact_audio.contact_sound_for(0.8, "power", ev_mph=ev)
+    assert sound_ev == ev
+
+
+@pytest.mark.parametrize("ms", [-40.0, 0.0, 40.0])
+@pytest.mark.parametrize("aim_high_in", [-2.0, 0.0, 2.0])
+def test_replay_stops_at_surface_entry_without_changing_scored_contact(ms, aim_high_in):
+    rec, scored = struck_record(ms, aim_high_in=aim_high_in)
+    touch = rec.replay_contact
+    assert rec.contact is scored
+    assert touch.pitch_t_s < scored.pitch_t_s
+    assert touch.surface_gap_ft == pytest.approx(0.0, abs=1e-7)
+    swing = rec.bat_swing()
+    before = bat_contact._gap_at(swing, rec.trajectory, rec.swing_launch_s,
+                                 touch.swing_t_s - 1e-5)[0]
+    after = bat_contact._gap_at(swing, rec.trajectory, rec.swing_launch_s,
+                                touch.swing_t_s + 1e-5)[0]
+    assert before > 0.0
+    assert after < 0.0

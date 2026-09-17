@@ -35,11 +35,24 @@ _FONT_SIZES = {
 }
 
 
+_FONT_CACHE: dict = {}
+
+
 def load_fonts() -> dict:
-    """Build the pixel font set used across GameDay screens."""
-    base = resource_path(get_path(_FONT_PATH))
-    return {name: pygame.font.Font(base, size)
-            for name, size in _FONT_SIZES.items()}
+    """The pixel font set used across GameDay screens.
+
+    Memoised, because every overlay and panel calls this to get the same
+    seven fonts and each call opens the TTF seven times. Sharing is safe
+    precisely because nothing in this codebase mutates a font object —
+    no `bold`/`italic`/`underline` is ever assigned, so a `Font` here is
+    a read-only renderer, unlike the `Sound` objects in `contact_audio`
+    whose volume genuinely had to stay per-playback.
+    """
+    if not _FONT_CACHE:
+        base = resource_path(get_path(_FONT_PATH))
+        _FONT_CACHE.update({name: pygame.font.Font(base, size)
+                            for name, size in _FONT_SIZES.items()})
+    return _FONT_CACHE
 
 
 def blit_text(screen, text, font, pos, color, align='left'):

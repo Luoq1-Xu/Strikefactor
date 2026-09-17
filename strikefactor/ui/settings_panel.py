@@ -370,6 +370,7 @@ class KeyBindingsPanel(_RowPanel):
         KeyAction.TOGGLE_HUD_MODE,
         KeyAction.CHALLENGE,
         KeyAction.SWING_REPLAY,
+        KeyAction.FIELDING_REPLAY,
         KeyAction.MAIN_MENU,
     ]
 
@@ -401,6 +402,6 @@ class KeyBindingsPanel(_RowPanel):
         # for the same reason the difficulty description does.
         if error:
             gdt.blit_text(screen, error.upper(), f['small'],
-                          (gdt.MARGIN_X, y + 14), gdt.FG)
+                          (gdt.MARGIN_X, y + 4), gdt.FG)
 
         self._draw_footer(screen)

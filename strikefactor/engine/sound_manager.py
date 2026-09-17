@@ -126,7 +126,8 @@ class SoundManager:
             channel.set_volume(gain)
         return channel
 
-    def play_contact(self, quality, swing_type="contact", hr_distance_ft=None):
+    def play_contact(self, quality, swing_type="contact", ev_mph=None,
+                     is_home_run=False):
         """Play the bat-contact sound for a swing of the given quality.
 
         Single entry point for every bat-on-ball event — fouls, in-play
@@ -134,17 +135,21 @@ class SoundManager:
         the modelled exit velocity, so the sample is a consequence of how
         hard the ball was struck rather than of which outcome was rolled.
 
-        `hr_distance_ft` is the one exception, and it is not an outcome
-        cue: on a home run the distance the player is about to see is a
-        *better measurement* of how hard the ball was hit than quality is,
-        because the carry model rolls its own randomness. Passing it keeps
-        the crack and the 460 FT readout describing the same swing.
+        `ev_mph` is this ball's already-drawn exit velocity. Pass it whenever
+        there is one — the alternative is a second independent draw, and the
+        sound then describes a slightly different ball from the one in flight.
 
-        Returns the modelled EV so callers can record it.
+        `is_home_run` floors *which sample plays* at `HOMERUN_MIN_SAMPLE` and
+        nothing else. It replaced an `hr_distance_ft` that also supplied an
+        exit velocity, outranking `ev_mph`; see the note above that constant
+        for why a home run no longer gets an EV of its own.
+
+        Returns the EV the sound was chosen at. That is an *echo* of `ev_mph`
+        when one was passed, not a source — nothing should record it.
         """
         name, gain, ev = contact_sound_for(
             quality, swing_type=swing_type, available=self.sounds,
-            hr_distance_ft=hr_distance_ft)
+            ev_mph=ev_mph, is_home_run=is_home_run)
         self.play(name, volume=gain)
         return ev
 

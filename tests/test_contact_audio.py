@@ -12,6 +12,7 @@ The model is pure, so these run without a mixer.
 
 import random
 
+import conftest
 import pytest
 
 from strikefactor.engine.contact_audio import (
@@ -21,7 +22,6 @@ from strikefactor.engine.contact_audio import (
     HOMERUN_MIN_EV_MPH,
     contact_gain,
     contact_sound_for,
-    exit_velocity_for_hr_distance,
     exit_velocity_mph,
     pick_contact_sound,
 )
@@ -79,21 +79,16 @@ def test_calibration_reproduces_mlb_exit_velocity_quantiles():
     whole distribution goes soft and every ball in play is a little weaker
     than the swing that produced it.
 
-    The quantiles below were last re-derived when the location term in `spray`
-    was made to saturate, which released a population of *well-struck* balls
-    (the inside-out reach on an outside pitch) back into fair territory from
-    an automatic -59 deg foul. The bottom tail lifted and the top barely
-    moved. Do not restate them from a uniform sweep of quality: see the
-    warning over EV_CALIBRATION.
+    The quantiles below are `conftest.QUALITY_QUANTILES`, read from the shared
+    batter rather than restated — a private copy is how this and the sampler
+    came to describe two different hitters before. Do not derive them from a
+    uniform sweep of quality: see the warning over EV_CALIBRATION.
     """
     # (observed quality quantile, expected MLB EV, tolerance)
-    checks = [
-        (0.643, 74.0, 4.0),    # p10
-        (0.689, 82.0, 4.0),    # p25
-        (0.763, 91.0, 4.0),    # p50
-        (0.871, 101.0, 4.0),   # p75
-        (0.937, 106.0, 4.0),   # p90
-    ]
+    expected_mph = {0.10: 74.0, 0.25: 82.0, 0.50: 91.0, 0.75: 99.5,
+                    0.90: 103.0}
+    checks = [(quality, expected_mph[p], 4.0)
+              for p, quality in conftest.QUALITY_QUANTILES]
     for quality, expected, tol in checks:
         mean_ev = sum(exit_velocity_mph(quality, "contact", rng=_fixed_rng(s))
                       for s in range(300)) / 300
@@ -163,46 +158,68 @@ def test_home_runs_never_play_the_two_quietest_samples():
     """Nobody hits a home run off the end of the bat.
 
     Reported symptom: a soft "medium" crack under a ball that then showed
-    460 FT on screen.
+    460 FT on screen. The floor is keyed on the outcome now rather than on
+    the landing distance, but it guards the same thing.
     """
     quiet = {"contact_weak", "contact_medium"}
-    for distance in range(320, 500, 10):
+    for ev in range(90, 118, 2):
         for quality in (0.0, 0.3, 0.5, 0.7, 1.0):
             picks = {contact_sound_for(quality, "power", ALL_SAMPLES,
-                                       rng=_fixed_rng(s),
-                                       hr_distance_ft=distance)[0]
+                                       rng=_fixed_rng(s), ev_mph=float(ev),
+                                       is_home_run=True)[0]
                      for s in range(20)}
             leaked = picks & quiet
-            assert not leaked, f"{distance} ft HR played {leaked}"
+            assert not leaked, f"{ev} mph HR played {leaked}"
 
 
-def test_hr_exit_velocity_follows_the_distance_not_the_quality():
-    """The fix: distance drives the sound, so what you hear matches the FT."""
-    # Same mediocre quality, wildly different carry.
-    _, _, short_ev = contact_sound_for(0.5, "power", ALL_SAMPLES,
-                                       rng=_fixed_rng(0), hr_distance_ft=335)
-    _, _, long_ev = contact_sound_for(0.5, "power", ALL_SAMPLES,
-                                      rng=_fixed_rng(0), hr_distance_ft=465)
-    assert long_ev > short_ev + 10.0
+def test_a_home_run_does_not_get_an_exit_velocity_of_its_own():
+    """The round trip, removed. `hr_distance_ft` used to outrank `ev_mph`,
+    read an EV back out of the carry through a table with no launch-angle
+    term, and hand it to the caller to record — so a 112 mph ball at 20 deg
+    was written down as 105.6 and a 95 mph ball at 40 deg as 101.0. The
+    swing drew this number; nothing downstream may redraw it.
+    """
+    for ev in (91.0, 104.0, 116.0):
+        for quality in (0.2, 0.6, 1.0):
+            _, _, got = contact_sound_for(quality, "power", ALL_SAMPLES,
+                                          rng=_fixed_rng(3), ev_mph=ev,
+                                          is_home_run=True)
+            assert got == ev, (ev, quality, got)
 
 
-def test_hr_distance_to_ev_is_monotonic_and_bounded():
-    evs = [exit_velocity_for_hr_distance(d) for d in range(300, 520, 10)]
-    assert evs == sorted(evs)
-    assert all(90.0 <= ev <= EV_CEIL_MPH for ev in evs)
-    assert exit_velocity_for_hr_distance(None) is None
+def test_the_home_run_flag_reaches_the_sample_and_not_the_velocity():
+    """Both halves of the same call, so neither can quietly take the other's
+    job: the flag changes which sample plays and leaves the EV alone."""
+    quiet = {"contact_weak", "contact_medium"}
+    plain, homer = [], []
+    for seed in range(200):
+        p_name, _, p_ev = contact_sound_for(0.5, "power", ALL_SAMPLES,
+                                            rng=_fixed_rng(seed), ev_mph=88.0)
+        h_name, _, h_ev = contact_sound_for(0.5, "power", ALL_SAMPLES,
+                                            rng=_fixed_rng(seed), ev_mph=88.0,
+                                            is_home_run=True)
+        assert p_ev == h_ev == 88.0
+        plain.append(p_name)
+        homer.append(h_name)
+    # The ladder is a weighted draw, so the flag has to be read across the
+    # distribution rather than off one pick: at 88 mph the quiet rungs carry
+    # real weight, and the floor is what removes them.
+    assert quiet & set(plain)
+    assert not (quiet & set(homer))
 
 
 def test_a_moonshot_sounds_crushed():
     picks = [contact_sound_for(0.5, "power", ALL_SAMPLES, rng=_fixed_rng(s),
-                               hr_distance_ft=470)[0] for s in range(200)]
+                               ev_mph=112.0, is_home_run=True)[0]
+             for s in range(200)]
     assert picks.count("contact_crushed") / len(picks) > 0.4
 
 
 def test_a_wall_scraper_does_not_sound_crushed():
     """The floor must not collapse into 'home runs are always loudest'."""
     picks = [contact_sound_for(0.9, "power", ALL_SAMPLES, rng=_fixed_rng(s),
-                               hr_distance_ft=335)[0] for s in range(200)]
+                               ev_mph=93.0, is_home_run=True)[0]
+             for s in range(200)]
     assert picks.count("contact_crushed") == 0
     assert "contact_solid" in picks
 
@@ -245,3 +262,57 @@ def test_gain_is_monotonic_and_bounded():
     assert all(0.0 < g <= 1.0 for g in gains)
     # Soft contact must be audibly quieter than a barrel.
     assert contact_gain(60.0) < contact_gain(110.0) - 0.3
+
+
+def test_a_supplied_exit_velocity_is_used_rather_than_a_second_draw():
+    """A batted ball has exactly one exit velocity, and "once" has to mean
+    once across the whole pitch. `HitAnimation` drew one for the physics and
+    this function drew another for the sound — and the second is what reached
+    the DB and the swing replay's readout, so the number the player saw was
+    not the number the ball was flown at (3.5 mph sd on a contact swing).
+    """
+    for ev in (61.0, 88.0, 104.5):
+        for swing in ("contact", "power"):
+            _, _, got = contact_sound_for(0.4, swing, ALL_SAMPLES,
+                                          rng=_fixed_rng(1), ev_mph=ev)
+            assert got == ev
+
+
+def test_a_supplied_velocity_is_never_outranked():
+    """The precedence, reversed. `hr_distance_ft` used to win over `ev_mph`
+    on the argument that the carry was a measurement and the draw only a
+    model — true while `hit_animation` rolled its own distance bias, and
+    false since `ball_flight.carry_distance_ft` became a pure function of
+    the launch angle and this very number. There is nothing left that may
+    outrank the swing.
+    """
+    for ev in (70.0, 95.0, 112.0):
+        for home_run in (False, True):
+            _, _, got = contact_sound_for(0.4, "contact", ALL_SAMPLES,
+                                          rng=_fixed_rng(1), ev_mph=ev,
+                                          is_home_run=home_run)
+            assert got == ev, (ev, home_run, got)
+
+
+def test_the_home_run_distance_round_trip_is_gone():
+    """A home run's exit velocity came back out of its carry distance, three
+    kwargs deep, and the caller wrote it over the one the swing drew. The
+    carry is a pure function of the launch angle and that very number now, so
+    there was nothing left to measure — only a lossy re-reading through a
+    table with no launch-angle term.
+    """
+    import inspect
+
+    from strikefactor.engine import contact_audio, sound_manager
+    from strikefactor.gameplay import hit_outcome_manager
+
+    assert not hasattr(contact_audio, "HR_DISTANCE_TO_EV")
+    assert not hasattr(contact_audio, "exit_velocity_for_hr_distance")
+    # The kwarg was three levels deep, and any one of them left behind would
+    # let the round trip be rebuilt by a caller that still knew the name.
+    for fn in (contact_sound_for,
+               sound_manager.SoundManager.play_contact,
+               hit_outcome_manager.HitOutcomeManager.play_hit_sound):
+        params = inspect.signature(fn).parameters
+        assert "hr_distance_ft" not in params, fn
+        assert "is_home_run" in params, fn

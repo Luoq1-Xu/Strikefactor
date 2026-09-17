@@ -81,11 +81,38 @@ Each pitcher has a pre-trained Q-learning AI model that adapts pitch selection b
 | **Z** | Cycle Strikezone Modes |
 | **M** | Toggle Umpire Sound |
 | **B** | Toggle Batter Visibility |
-| **V** | View Pitches (review pitch locations) |
-| **T** | Toggle Track/Analytics Display |
+| **V** | Review — PitchViz history and trajectory comparison |
+| **T** | Review — gameplay-camera pitch flight |
+| **R** | Review — latest swing, side/overhead analysis |
+| **F** | Review — latest recorded ball/fielding play |
 | **ESC** | Return to Main Menu |
 
 All key bindings (except swing controls) can be customized in the settings menu.
+
+**Unified Review:** click **REVIEW**, or use V/T/R/F to enter the same workspace
+at a specific view. It is available between pitches, on completed-play screens,
+and from inning/game results. Escape closes it without advancing the game.
+
+- Click a history **row** to focus a pitch; use its **checkbox** to include it
+  in PitchViz/Pitch Flight comparisons. Type and inning/session filters affect
+  the list; Select Filtered adds those pitches, while Clear clears all comparisons.
+- V/T/R/F switch views without changing the focused pitch. Outside Review,
+  R/F find the latest eligible swing/play—even after a subsequent take or miss.
+  A missing swing or recording is explained rather than replaced by another pitch.
+- Space plays/pauses or restarts at the end; Left/Right scrub; Home/End seek;
+  Up/Down select pitches. Use the timeline and event buttons to inspect contact,
+  catches, misplays, wall impacts and throws. Hide History for a larger view.
+- Tab or the camera button toggles Swing's side/overhead views. PitchViz and
+  Pitch Flight default to 0.25×; Swing defaults to 1/12×. In these views, 1× is
+  real pitch time: a 0.41-second pitch takes 1.64 seconds at 0.25×.
+  Fielding defaults to 0.5× the **original animation**.
+  1/2/3 select the displayed speeds. Loop and Restart are available in every view.
+- History is session-local, including earlier GameDay innings. Fielding clips
+  use a bounded cache (up to eight clips / 14,400 captured frames); the latest
+  complete clip is retained. Expired clips keep their pitch metadata. No saved
+  replay or audio playback is included.
+
+See [docs/unified-review.md](docs/unified-review.md) for the data and playback contracts.
 
 ## ⚙️ Settings
 

@@ -21,8 +21,8 @@ AIRBORNE = ("LINER", "FLY", "POP_UP")
 
 
 def _landing(shape, ev_mph):
-    dist = ball_flight.carry_distance_ft(shape, ev_mph)
-    hang = ball_flight.hang_time_s(shape, dist)
+    dist = ball_flight.carry_distance_ft(ball_flight.launch_angle_for_shape(shape), ev_mph)
+    hang = ball_flight.hang_time_s(ball_flight.launch_angle_for_shape(shape), dist)
     return dist, ground_roll.landing_speed_fts(shape, ev_mph, dist, hang)
 
 
@@ -57,7 +57,7 @@ def test_landing_speed_is_a_large_fraction_of_the_flight_speed():
     of its speed in the frame it touches the grass."""
     for shape in AIRBORNE:
         dist, horizontal = _landing(shape, 95)
-        average = dist / ball_flight.hang_time_s(shape, dist)
+        average = dist / ball_flight.hang_time_s(ball_flight.launch_angle_for_shape(shape), dist)
         assert horizontal / average >= 0.60, (
             f"{shape} keeps only {horizontal / average:.0%} of its flight speed")
 

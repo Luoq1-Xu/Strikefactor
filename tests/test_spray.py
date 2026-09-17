@@ -78,7 +78,7 @@ def test_early_pulls_and_late_goes_the_other_way(hand):
     tr = pitch()
     sw = squared_up(tr, hand)
     sprays = []
-    for ms in (-20.0, -10.0, 0.0, 10.0, 20.0):
+    for ms in (-15.0, -10.0, 0.0, 10.0, 20.0):
         got = swing_at(tr, sw, ms, **TIGHT)
         assert got is not None, f"no contact at {ms:+.0f} ms"
         sprays.append(got.spray_deg)
@@ -482,18 +482,37 @@ def test_a_ball_that_reaches_the_wall_keeps_its_direction(hand):
     over.
     """
     from strikefactor.gameplay import hit_animation as ha
+    from strikefactor.gameplay import park
     sides = []
-    # A fly ball, because only a fly carries far enough to be a wall candidate:
-    # `WALL_REACH_FT` is 380 ft and the hardest line drive the exit-velocity
-    # model produces carries about 300.
+    # A ball off the wall is one whose carry *reaches* the fence without
+    # clearing it (`park.fence_verdict`), and that window is narrow — a
+    # max-quality fly carries past the fence and is a home run. So the exit
+    # velocity is solved for rather than assumed: this test is about which way
+    # the ball went, not about how hard it was hit.
+    launch = 30.0
     for spray_deg in (+35.0, -35.0):
+        field_rad = spray.field_angle_rad(spray_deg, spray.spin_for(hand))
+
+        def first_ev(reached, field_rad=field_rad):
+            lo, hi = 40.0, 160.0
+            for _ in range(60):
+                mid = 0.5 * (lo + hi)
+                if reached(park.fence_verdict(launch, mid, field_rad)):
+                    hi = mid
+                else:
+                    lo = mid
+            return hi
+
+        ev = 0.5 * (first_ev(lambda v: v != park.SHORT_OF_WALL)
+                    + first_ev(lambda v: v == park.OUT_OF_PARK))
         angles = []
         for seed in range(12):
             random.seed(seed)
             anim = ha.HitAnimation(_StubGame(hand), outcome="IN_PLAY",
                                    on_complete=lambda: None, quality=0.95,
                                    batted_ball_type="FLY",
-                                   spray_deg=spray_deg)
+                                   spray_deg=spray_deg,
+                                   launch_deg=launch, ev_mph=ev)
             if not anim._is_wall_candidate:
                 continue
             angles.append(anim._hit_end[0] - ha.HOME[0])
@@ -522,3 +541,95 @@ def test_a_foul_goes_out_on_the_side_it_was_pointed(hand):
         assert field > 135.0 or field < 45.0, f"{field:.0f}° is not foul"
         assert (field > 90.0) == expect_left, (
             f"{hand}HB spray {spray_deg:+.0f} landed at {field:.0f}°")
+
+
+# ---- Where a foul actually went --------------------------------------------
+#
+# `spray_deg` is where the bat *pointed*. On a foul that is not where the ball
+# *went*, and for half of all fouls it is nowhere near: a tipped or topped ball
+# keeps a perfectly fair-looking bearing and deflects into foul ground. Nothing
+# modelled that, so `hit_animation._setup_foul` invented it out of `random` —
+# and the swing replay, drawing `spray_deg`, disagreed with the picture by a
+# median of 40.7 degrees over 600 recorded fouls.
+
+@pytest.mark.parametrize("shape", ["GROUNDER", "LINER", "FLY", "POP_UP"])
+def test_a_ball_ruled_foul_leaves_in_foul_ground(shape):
+    """The property the whole thing rests on: whatever draws this number draws
+    a ball outside the lines, so the picture and the verdict cannot disagree.
+
+    Swept over the bearings a bat really produces and the full quality range a
+    foul can be graded at.
+
+    No `hand` parameter, and that is the claim rather than an omission: like
+    `spray_angle_deg` and `is_foul`, this is stated pull-positive and is
+    therefore handedness-free. The flip happens once, downstream, in
+    `field_angle_deg` — see `test_a_foul_goes_out_on_the_side_it_was_pointed`
+    for the end-to-end mirror.
+    """
+    for bat_deg in range(-170, 171, 5):
+        for q in (0.0, 0.15, 0.4, 0.58, 0.9, 1.0):
+            got = spray.foul_departure_deg(float(bat_deg), q, shape)
+            assert spray.is_foul(got), (
+                f"{shape} at bat {bat_deg:+d} deg, q={q} departs at "
+                f"{got:+.1f} deg, which is fair")
+
+
+def test_a_foul_leaves_on_the_side_the_bat_pointed_it():
+    """A deflection changes how far foul, never which pole."""
+    for bat_deg in (0.5, 12.0, 44.0, 46.0, 90.0, 150.0):
+        for q in (0.1, 0.5, 0.95):
+            for shape in ("GROUNDER", "LINER", "FLY"):
+                pull = spray.foul_departure_deg(bat_deg, q, shape)
+                oppo = spray.foul_departure_deg(-bat_deg, q, shape)
+                assert pull > 0 > oppo, (bat_deg, q, shape, pull, oppo)
+
+
+def test_the_two_ways_to_foul_a_ball_meet_at_the_line():
+    """A ball hooked a degree past the pole was struck cleanly and is only just
+    foul, so it has to draw a degree past the pole — the deflection is what a
+    *glancing* blow adds, and a barrelled ball has nothing to add.
+
+    Continuity here is what makes the direction limb and the quality limb one
+    model rather than two: at q = 1 the departure is the bat's own bearing.
+    """
+    for bat_deg in (50.0, 60.0, 75.0, 100.0):
+        got = spray.foul_departure_deg(bat_deg, 1.0, "LINER")
+        assert got == pytest.approx(bat_deg, abs=1e-9), (bat_deg, got)
+
+
+def test_a_deflection_only_ever_pushes_the_ball_further_foul():
+    """It cannot straighten a ball out. The animation used to cap the bearing
+    at 90 deg, so a swing the bat genuinely sent 128 deg round — behind the
+    plate, opposite field — was drawn 38 deg away from where the bat put it."""
+    for bat_deg in (46.0, 70.0, 128.0, 165.0):
+        for q in (0.0, 0.3, 0.7, 1.0):
+            got = spray.foul_departure_deg(bat_deg, q, "LINER")
+            assert got >= bat_deg - 1e-9, (bat_deg, q, got)
+
+
+def test_a_glancing_blow_goes_further_foul_than_a_squared_up_one():
+    """The whole content of the quality limb: `severity`. A ball off the end or
+    on the handle sprays sharply foul however it was pointed."""
+    got = [spray.foul_departure_deg(3.0, q, "LINER")
+           for q in (1.0, 0.8, 0.6, 0.4, 0.2, 0.0)]
+    assert got == sorted(got), got
+    assert got[-1] - got[0] > 30.0, got
+
+
+def test_a_pop_up_comes_down_behind_the_plate():
+    """A ball hit almost straight up does not travel out past a pole — it
+    comes down near where it was struck, which is the catcher's. It is also
+    the single most ordinary foul there is, and the shape the reported bug
+    was: `spray_deg -0.7 deg` drawn forward, animated 154 deg behind."""
+    for bat_deg in (-30.0, 0.0, 30.0):
+        got = spray.foul_departure_deg(bat_deg, 0.2, "POP_UP")
+        assert abs(got) > 90.0, (bat_deg, got)
+
+
+def test_the_deflection_is_deterministic():
+    """`spray` promises a bearing that is a function of the swing and nothing
+    else. The model this replaced broke that promise: one identical contact
+    animated at eight different bearings across eight plays, so no replay
+    could have drawn what the player was shown."""
+    assert len({spray.foul_departure_deg(4.0, 0.35, "LINER")
+                for _ in range(50)}) == 1

@@ -36,17 +36,26 @@ from strikefactor import outcomes
 from strikefactor.engine import contact_audio
 from strikefactor.gameplay import (
     ball_flight,
+    batted_ball_path,
     extra_bases,
     ground_roll,
     infield_timing,
+    park,
     spray,
 )
 
 # Aliased because `defense` is also the name of this class's constructor
 # argument, which would shadow the module inside __init__.
 from strikefactor.gameplay import defense as defense_model
+from strikefactor.utils.pitch_physics import DEFAULT_CAMERA
 
 HOME = (640, 670)
+
+# Screen pixels to real inches on the vertical axis, for the one thing in this
+# module stated in the contact's units rather than the field's: `vertical_offset`
+# arrives in pixels (the scale the DB column speaks) and the launch model in
+# `ball_flight` is stated in inches.
+_OFFSET_PX_TO_IN = DEFAULT_CAMERA.ft_per_px_z * 12.0
 
 # How many animated seconds one real second is shown over. This is the
 # *only* place presentation pacing is allowed to diverge from physics:
@@ -93,8 +102,8 @@ def _to_field_ft(screen_pos):
     The timing model in `infield_timing` reasons entirely in feet and
     seconds, so anything handed to it has to come back through here
     first. Going the other way — doing the physics in pixels — is what
-    makes the anisotropic projection leak into the numbers, which is the
-    same mistake `_px_per_ft_at` exists to prevent for HR carry.
+    makes the anisotropic projection leak into the numbers — the same
+    mistake `_ft_dist` and `_landing_px_per_ft` exist to prevent.
     """
     return ((screen_pos[0] - HOME[0]) / FT_TO_PX_X,
             (HOME[1] - screen_pos[1]) / FT_TO_PX_Y)
@@ -111,7 +120,7 @@ def _ft_dist(dx_px, dy_px):
     ball ran faster than any human has, and infielders moving laterally
     ran slower than a jog. Converting the displacement to feet first is
     what makes one honest ft/s speed mean one honest speed in every
-    direction. Same reasoning as `_px_per_ft_at` for home-run carry.
+    direction. Same reasoning as `_landing_px_per_ft` for the roll.
     """
     return math.hypot(dx_px / FT_TO_PX_X, dy_px / FT_TO_PX_Y)
 
@@ -182,18 +191,29 @@ OUTFIELD_ROLES = ["LF", "CF", "RF"]
 # just inside the 1280 px frame. The polar render radius at screen-angle θ
 # (from +x axis) is r(θ) = a·b / √((b·cosθ)² + (a·sinθ)²), evaluated against
 # the rendered semi-axes below.
-WALL_FT_X = 330.0
-WALL_FT_Y = 400.0
+# The two semi-axes live in `park` now, in real feet, because the fence had to
+# stop being a rendering detail: `park.fence_verdict` decides home runs off it,
+# so the wall the verdict is computed against and the wall that gets drawn have
+# to be one wall. Scaling an ellipse along its own axes leaves it that ellipse,
+# so the polar radius below and `park.wall_distance_ft` agree at every bearing
+# by construction.
+WALL_FT_X = park.FOUL_LINE_SEMI_FT
+WALL_FT_Y = park.CENTRE_FIELD_FT
 WALL_SEMI_X = WALL_FT_X * FT_TO_PX_X   # ≈ 611 px
 WALL_SEMI_Y = WALL_FT_Y * FT_TO_PX_Y   # ≈ 440 px
 
-# Visible "depth" of the outfield wall in pygame pixels. The wall is drawn as
-# a thin elliptical band rather than a single line so the field reads as a 3D
-# structure under the camera-tilt projection. The strip between the outer
-# (camera-far / top of wall) and inner (camera-near / wall meets field) arcs
-# is the visible wall face. Tuned to roughly match how a 10–12 ft real wall
-# would project under our y-foreshortening.
-WALL_FACE_HEIGHT_PX = 11
+# How high the fence is, and so how tall its face is drawn. **It is the
+# verdict's fence**, `park.FENCE_HEIGHT_FT`, raised by the same vertical scale
+# a ball's lift is drawn with (`_ball_behind_wall`, GLOVE_REACH_FT). It used to
+# be a separate 10 ft here and a hand-tuned 11 px face, against the 8 ft
+# `park.fence_verdict` decides home runs by — so a ball clearing the real fence
+# by a foot could be drawn passing *through* the drawn one.
+WALL_HEIGHT_FT = park.FENCE_HEIGHT_FT
+# The fence face is the band between where it meets the grass — **the
+# ellipse**, `park.wall_distance_ft` — and its top, this many pixels up the
+# screen. See `_wall_geometry` for why it stands on the ellipse rather than
+# hanging in front of it.
+WALL_FACE_HEIGHT_PX = WALL_HEIGHT_FT * FT_TO_PX_Y
 
 # Foul pole vertical pixel height above the wall corner. Bright accent
 # against the dark field — reads unambiguously as "foul pole."
@@ -203,13 +223,12 @@ FOUL_POLE_HEIGHT_PX = 28
 # register the play rather than for realism.
 FLYOUT_CATCH_HOLD      =  500
 
-# Flight duration. HOME RUN keeps its own value (calibrated against real
-# 4–6 s HR hang times). Generic HIT uses a base value that's quality-scaled
-# in _setup_hit. Tuned higher than a screamer's "instant" feel — at q=1
-# we end up around 2.6 s, at q=0 around 4 s — so balls don't rocket through
-# the air faster than the fielders can read.
-HIT_BASE_DURATION_MS = 3300
-HR_DURATION_MS = 5000
+# `HIT_BASE_DURATION_MS` and `HR_DURATION_MS` are **gone**. The first was the
+# quality-scaled duration `ball_flight` replaced; the second was the home run's
+# exemption from it — a scripted 5 s hang time that also, because
+# `flight_time_s` was then set to `HR_DURATION_MS / 1000`, put an *animated*
+# duration into a field whose contract is real seconds. Every flight in this
+# class is `ball_flight.flight_time_s` on the one presentation clock now.
 
 # HR distance readout, measured from the landing (`duration_ms`). The
 # number is the payoff of the play, and showing it mid-flight answers
@@ -227,10 +246,12 @@ HR_DURATION_MS = 5000
 HR_DISTANCE_REVEAL_DELAY_MS = 350
 HR_DISTANCE_FADE_MS         = 220
 
-# Fly-arc peak (px) for HOME RUN. HIT shapes derive their peak from
-# LINER_PEAK_RANGE / quality-scaled FLY peak / POPUP_PEAK_RANGE.
-HR_PEAK_H = 200
-FLY_HIT_PEAK_RANGE = (60, 130)   # quality-scaled inside _setup_hit
+# **How high an airborne ball goes is not a constant here any more.**
+# `HR_PEAK_H = 200`, `FLY_HIT_PEAK_RANGE = (60, 130)` lerped on quality, and
+# `random.uniform` over `LINER_PEAK_RANGE = (25, 40)` / `POPUP_PEAK_RANGE =
+# (270, 320)` were a per-shape arc peak in *pixels*, tied to neither the
+# launch angle nor the carry, drawn as `peak * sin(pi * phase)`. See
+# `HitAnimation._flight_height_ft`, which is the one model now.
 
 # Per-shape landing-distance ranges (ft) for the unified IN_PLAY outcome,
 # parameterized by quality. Quality maps the random sample inside the
@@ -243,11 +264,15 @@ FLY_HIT_PEAK_RANGE = (60, 130)   # quality-scaled inside _setup_hit
 # shallow OF (~215 ft); LINER from short flares to wall liners; FLY from
 # shallow OF blooper through to warning-track shots; POP_UP stays shallow
 # regardless of quality.
+# **Only the ground ball still has one.** The airborne entries — LINER
+# (130, 295), FLY (165, 365) and POP_UP (80, 160) — are gone: an airborne ball
+# lands at `ball_flight.carry_distance_ft`, so a range here would be a second
+# model of its depth, and the FLY cap in particular was truncating balls at
+# 365 ft that physically reached a 400 ft fence. A grounder is not a projectile
+# — where it stops is friction and whether anybody cut it off — so it keeps a
+# range, indexed on exit velocity by `ball_flight.ground_depth_fraction`.
 IN_PLAY_LANDING_FT = {
     "GROUNDER": (45, 215),
-    "LINER":    (130, 295),
-    "FLY":      (165, 365),
-    "POP_UP":   (80, 160),
 }
 # `IN_PLAY_ANGLE_MIN` / `IN_PLAY_ANGLE_MAX` are **gone**. They were a 50°–130°
 # cone that a ball in play was drawn *uniformly* across, and its own comment
@@ -269,7 +294,7 @@ FAIR_DRAW_MARGIN_RAD = math.radians(0.5)
 # CRITICAL: these are the *actual* foul lines, per coordinate space — NOT
 # the 50°/130° IN_PLAY fair cone, which is a conservative fair subset. In
 # real-field feet (the _polar_point_ft space) the foul lines sit at 45°/135°.
-# In screen space (the _polar_point space) the anisotropic projection
+# In screen space (what `_to_screen` produces) the anisotropic projection
 # flattens them to atan2(FT_TO_PX_Y, ±FT_TO_PX_X) ≈ 30.7°/149.3°. Aiming
 # "just past 130°" in either space lands well inside rendered fair
 # territory — a ball that looks like a fair home run but reads FOUL.
@@ -279,8 +304,12 @@ FOUL_LINE_SCREEN_RIGHT_RAD = math.atan2(FT_TO_PX_Y, FT_TO_PX_X)   # ≈ 30.7°
 FOUL_LINE_SCREEN_LEFT_RAD  = math.pi - FOUL_LINE_SCREEN_RIGHT_RAD  # ≈ 149.3°
 # `FOUL_OFF_MIN_RAD` is gone: it was the floor of a severity ramp that started
 # at "barely mistimed", and a ball hooked a degree past the pole has to be able
-# to draw a degree past the pole.
-FOUL_OFF_MAX_RAD = math.radians(45)
+# to draw a degree past the pole. `FOUL_OFF_MAX_RAD` and `FOUL_HR_OFF_RAD` are
+# gone too, with the whole off-the-line ramp: which way a foul left is
+# `spray.foul_departure_deg` now, resolved before this file is reached, so
+# there is no angle here to bound. `spray.FOUL_OFF_MAX_DEG` is the survivor,
+# and `_setup_foul` reads severity back off the bearing rather than restating
+# the ramp.
 FOUL_LANDING_FT = {
     "GROUNDER": (25, 110),
     "LINER":    (90, 260),
@@ -299,13 +328,12 @@ FOUL_HOLD_MS = 700              # dead-ball beat after the foul lands
 # distance overlay reused for the tease.
 FOUL_HR_QUALITY_MIN   = 0.75
 FOUL_HR_MAX_SEVERITY  = 0.5
-FOUL_HR_OFF_RAD = (math.radians(2), math.radians(9))
 
 # Legacy alias retained for the fallback branch in _pick_hit_landing —
 # callers that don't pass IN_PLAY (or HOME RUN) drop through here.
 HIT_LANDING_FT = {
-    "LINER": IN_PLAY_LANDING_FT["LINER"],
-    "FLY":   IN_PLAY_LANDING_FT["FLY"],
+    "LINER": (130, 295),
+    "FLY":   (165, 365),
 }
 
 # SINGLE / DOUBLE / TRIPLE used to be four retrieve-time thresholds here —
@@ -376,7 +404,13 @@ FORECAST_MAX_STEPS = 90
 # and reflect their radial-outward velocity component on contact, with
 # restitution < 1 so the carom loses energy.
 LANDING_WALL_MARGIN_PX  = 25
-BALL_WALL_MARGIN_PX     = 8
+# How far in front of the fence a live ball's centre is held: the drawn
+# ball's radius (BALL_RADIUS_PX), so the ball is drawn *touching* the face.
+# It was 8 px when the fence's base was drawn 11 px in front of the
+# ellipse, which put the holding line on the drawn face; with the fence
+# standing on the ellipse, 8 px would carom the ball off empty grass a few
+# feet short of the wall.
+BALL_WALL_MARGIN_PX     = 3
 # The ball's margin in normalized-ellipse units — √((dx/a)² + (dy/b)²),
 # which is 1 on the wall — since that is the form the containment step
 # works in. This is the line a live ball is *held* at, and every place
@@ -393,12 +427,8 @@ BALL_WALL_MARGIN_PX     = 8
 BALL_WALL_LIMIT_NORM    = 1.0 - BALL_WALL_MARGIN_PX / min(WALL_SEMI_X,
                                                           WALL_SEMI_Y)
 # Fielder containment lives with the fielder constants
-# (FIELDER_WALL_MARGIN_PX, below BODY_RADIUS_PX).
-#
-# Real fence height. A ball beyond the wall is hidden from a camera on
-# this side of it only while it is below the top of the fence — see
-# `_ball_behind_wall`.
-WALL_HEIGHT_FT          = 10.0
+# (FIELDER_WALL_MARGIN_PX, below BODY_RADIUS_PX). The fence's height is
+# WALL_HEIGHT_FT, beside the wall's semi-axes.
 # Coefficient of restitution for wall contact during the rolling phase.
 # Real ball-on-padded-wall COR is ~0.45–0.55; we run a bit under that
 # (0.45) so a screamer still loses meaningful energy on impact but
@@ -432,23 +462,29 @@ WALL_BOUNCE_RESTITUTION = 0.45
 # `WALL_HIT_QUALITY_THRESHOLD = 0.50` / `WALL_HIT_PROB_MAX = 0.22` used to
 # decide this by a roll on contact quality. See _setup_hit for why that
 # was over-firing.
-WALL_REACH_FT              = 380.0
-# Carry past the wall (ft) for wall-candidate landings — picks where the
-# ball *would have* landed if the wall weren't there. The arc is computed
-# all the way to that point, but in-flight detection (see
-# _maybe_trigger_in_flight_wall_impact) ends the flight when the shadow
-# crosses the wall ellipse. Squared bias keeps most carries small (impact
-# low on the wall face) with the occasional deep one (impact higher up).
-WALL_HIT_CARRY_FT_MIN    = 5.0
-WALL_HIT_CARRY_FT_MAX    = 35.0
-WALL_HIT_CARRY_BIAS_EXP  = 2.0
-# How far up the fence face a ball off the wall may strike it, as a
-# fraction of the fence's own height. A **bound that is solved for**, not
-# a shape parameter: `_wall_impact_peak_cap` inverts the arc for the peak
-# that puts the ball exactly here at the moment its ground point reaches
-# the fence, and caps the shape's own peak at that.
+# `WALL_REACH_FT = 380.0` is **gone**, and so are `WALL_HIT_CARRY_FT_MIN` /
+# `_MAX` / `_BIAS_EXP`. The first was a single distance tested against a wall
+# that runs 360 ft down the lines to 400 to centre, so a fly carrying 365 ft
+# toward the corner — which clears that fence — was not even a wall candidate
+# and got clamped into `IN_PLAY_LANDING_FT`'s 365 ft cap. The other three drew
+# a random carry *past* the fence, discarding the carry the exit velocity had
+# just been asked for.
 #
-# It replaced `WALL_HIT_FLY_PEAK_SCALE = 0.60`, a scale on the FLY peak
+# Both questions are `park.fence_verdict` now, at the ball's own bearing: it
+# clears the fence, strikes the face, or lands in front. The wall-candidate
+# arc is aimed at the ball's real carry, which is past the fence by
+# construction for anything the verdict calls a wall ball, and in-flight
+# detection (`_maybe_trigger_in_flight_wall_impact`) still ends the flight
+# where the shadow crosses the line a live ball is held at.
+# How far up the fence face a ball off the wall strikes it is **not solved
+# for any more** — it is `_flight_height_ft` at the fence, which is the number
+# `park.fence_verdict` already compared with the fence to call it a wall ball.
+# What survives is the drawn ball's own radius: WALL_IMPACT_MAX_LIFT_PX and its
+# home-run mirror HR_FENCE_MIN_LIFT_PX, defined beside BALL_RADIUS_PX because
+# they are stated in terms of the sprite rather than the flight.
+#
+# Three generations reached that: `WALL_HIT_FLY_PEAK_SCALE = 0.60`, a scale on
+# the FLY peak
 # meant to do this same job, which could not: how high the ball is when it
 # reaches the fence is a consequence of where the arc was *aimed* and how
 # the flight is *paced*, and a scale on the peak can see neither. Measured
@@ -462,11 +498,20 @@ WALL_HIT_CARRY_BIAS_EXP  = 2.0
 # the last 10% of the flight *time*, and the arc's height is keyed to the
 # time, not the path.
 #
+# **That fix measured against the wrong fence, and the artifact survived
+# it.** It bounded the lift at the moment the shadow reached the ellipse,
+# but the ellipse was drawn as the fence's *top* edge, with the face hanging
+# 11 px in front of it — so any lift at all put the ball above the drawn
+# rim. Measured against the drawing, 98% of wall balls were still drawn a
+# median 9 px over the top of the fence at impact, and jumped 9 px in one
+# frame to the containment line. The fence now stands on the ellipse (see
+# `_wall_geometry`), and `tests/test_wall_containment.py` measures the ball
+# against `_wall_geometry()` itself rather than against a restatement of it.
+#
 # The cap is written shape-independent. `_is_wall_candidate` admits FLY
 # and LINER, but `ball_flight` caps a liner's carry at ~320 ft against
 # WALL_REACH_FT's 380, so only FLY has ever reached it — which is why
 # nobody noticed that the old scale was applied to FLY alone.
-WALL_IMPACT_MAX_HEIGHT_FRAC = 0.85
 # Restitution on the post-impact rolling velocity for in-flight wall
 # contact. Real outfield walls have COR ~0.45–0.55; matching that lets a
 # screaming liner visibly carom off the wall and roll back into play, the
@@ -508,8 +553,6 @@ GROUNDER_BOUNCE_MIN_COUNT   = 3
 GROUNDER_BOUNCE_MAX_COUNT   = 8
 
 THROW_PEAK_H = 30     # low arc on infield throw
-LINER_PEAK_RANGE = (25, 40)
-POPUP_PEAK_RANGE = (270, 320)
 
 # Hit shape weights — drives the "every SINGLE looks different" feel.
 SHAPE_WEIGHTS = {
@@ -519,24 +562,37 @@ SHAPE_WEIGHTS = {
     "HOME RUN": [("FLY", 1.00)],
 }
 
-# HR carry past the wall, in REAL FEET (converted to px per-angle via
-# _px_per_ft_at). Most HRs barely clear; only the highest quality contact
-# carries deep. The displayed distance is computed from the actual landing
-# position rather than a quality-only mapping, so the number on screen
-# always matches where the ball lands. The biased roll
-# (carry = min + (rand**EXPONENT) * range) skews most carries toward zero —
-# "just-cleared" wall-scrapers — so blasts are the rare exception.
+# HR carry past the wall, in REAL FEET (projected per-angle by
+# `_polar_point_ft`). The displayed distance is computed from the actual landing
+# position rather than from a mapping, so the number on screen always matches
+# where the ball lands.
 #
-# Calibrated against MLB home-run distances (mean ~400 ft, p50 ~399,
-# p75 ~417, p90 ~433, ~5% beyond 440). Carry was previously expressed in
-# pixels, which made it 17% longer in feet at centre field than down the
-# line for the same constant, and combined with the old angle clamp it
-# produced a 392–476 ft distribution averaging 423 — every home run a
-# no-doubter.
-HR_CARRY_MIN_FT           = 0.0
-HR_CARRY_BASE_RANGE_FT    = 16.0
-HR_CARRY_QUALITY_BONUS_FT = 45.0
-HR_CARRY_BIAS_EXPONENT    = 3.5
+# **How far a home run carries is not decided here any more.**
+# `HR_CARRY_MIN_FT` / `_BASE_RANGE_FT` / `_QUALITY_BONUS_FT` /
+# `_BIAS_EXPONENT` were a biased roll on contact quality, placing the ball a
+# random 0-61 ft past whatever the fence happened to be at that bearing — so
+# the home run's distance had nothing to do with the exit velocity the same
+# ball had already been given, and a wall-scraper and a 460 ft blast differed
+# only in a `random.random() ** 3.5`. Carry is `ball_flight.carry_distance_ft`
+# now, off this ball's own launch angle and exit velocity, which is the same
+# call `park.fence_verdict` made upstream when it decided this was a home run
+# at all.
+#
+# What is left of the old calibration is a floor, and only for callers that
+# assert a home run without supplying a flight — see `HR_MIN_CLEARANCE_FT`.
+#
+# The distribution the roll was fitted to (mean ~400 ft, p50 ~399, p75 ~417,
+# p90 ~433, ~5% beyond 440) is now something the physics either reproduces or
+# does not; `tests/test_hr_distance.py` measures it rather than pinning the
+# roll that produced it.
+
+# How far past the fence a home run is drawn when the caller asserted the
+# outcome but the flight does not support it — a legacy caller, or a test that
+# builds `HitAnimation(outcome="HOME RUN")` directly with no launch angle or
+# exit velocity. In the game this never binds: the outcome is *derived* from
+# `park.fence_verdict`, so a home run's carry is past the fence by
+# construction. It exists so the picture can never contradict the banner.
+HR_MIN_CLEARANCE_FT = 6.0
 
 # Fielder motion. Constant-velocity with acceleration/deceleration phases —
 # exponential easing produced a "snap to position then freeze" look that
@@ -743,11 +799,11 @@ ERROR_MARK_COLOR        = outcomes.ERROR_COLOR
 # the field — a fielder running at a ball that leaves the park is what
 # a fielder does — it is only the body that isn't.
 #
-# WALL_FACE_HEIGHT_PX is the inward offset from the wall ellipse (which
-# is the *top* of the fence, the camera-far edge) down to where the wall
-# meets the grass, so it is what puts a fielder at the base of the
-# fence; the body radius keeps their whole marker on the field.
-FIELDER_WALL_MARGIN_PX  = WALL_FACE_HEIGHT_PX + BODY_RADIUS_PX
+# The ellipse is where the fence meets the grass (see `_wall_geometry`), so
+# the body radius alone puts a fielder's marker against the base of the
+# fence. It used to add WALL_FACE_HEIGHT_PX on top, back when the ellipse
+# was drawn as the fence's *top* and its base sat that far in front of it.
+FIELDER_WALL_MARGIN_PX  = BODY_RADIUS_PX
 
 # Ball sprite. Deliberately *not* to scale: a real baseball is ~0.24 ft
 # across against a fielder's ~2 ft of shoulder, which at this projection
@@ -759,13 +815,40 @@ FIELDER_WALL_MARGIN_PX  = WALL_FACE_HEIGHT_PX + BODY_RADIUS_PX
 # fielders now clearly dwarf it, which is the relationship that sells the
 # scale of the field.
 #
-# Purely cosmetic: nothing reads this. The catch and secure distances
-# (INTERCEPT_REACH_PX, SECURE_RADIUS_PX) are gameplay tuning measured
-# between body and ball *centres*, so resizing the sprite cannot change
-# any outcome.
+# Purely cosmetic. The catch and secure distances (INTERCEPT_REACH_PX,
+# SECURE_RADIUS_PX) are gameplay tuning measured between body and ball
+# *centres*, and the only other readers are the two arc bounds below, which
+# shape how a flight is drawn — so resizing the sprite cannot change any
+# outcome.
 BALL_RADIUS_PX          = 3
 BALL_SHADOW_W_PX        = 8             # ellipse, flattened by the camera tilt
 BALL_SHADOW_H_PX        = 3
+
+# At the fence, the whole drawn ball is on one side of its rim: below it for
+# a ball off the wall, above it for a home run. Stated against the drawn
+# ball rather than its centre because the ball is 3 px of radius on a face
+# 13.2 px tall — a centre a hair under the rim still draws half the ball over
+# the top, and that is the artifact these exist to prevent. A home run that
+# clears by half a foot draws its centre at 13.75 px against a 13.2 px rim.
+#
+# `park.fence_verdict` has already decided which side each ball is on, off
+# its physical height at the fence; these only make the picture say so. The
+# drawn arc is a sine in screen pixels, not the physical trajectory, so
+# without them a wall-scraping home run — whose carry ends a few feet past
+# the fence, where a sine has almost no height left — is drawn going
+# *through* the face, and a wall ball can be drawn over it.
+WALL_IMPACT_MAX_LIFT_PX = WALL_FACE_HEIGHT_PX - BALL_RADIUS_PX
+HR_FENCE_MIN_LIFT_PX    = WALL_FACE_HEIGHT_PX + BALL_RADIUS_PX
+# How far *past* the fence a home run's rim clearance is solved for, in real
+# feet of path. The animation samples the flight once a frame, so the frame on
+# which the ball is seen to cross the fence is up to one frame's travel beyond
+# it — and on the real descent (`ball_flight.DRAG_APEX_ANCHORS`) a ball at the
+# fence is falling at a foot or more per foot of path, which is 1.3-2.1 px a
+# frame at 60 fps and double that at 30. Solved at the crossing itself, a
+# wall-scraper drew its bottom edge a pixel into the face on the very frame
+# the viewer is watching for it. Two and a half feet is one frame's travel at
+# 30 fps with a little over.
+HR_RIM_CLEARANCE_FT     = 2.5
 
 # Hit chase phase. After the ball lands on a SINGLE/DOUBLE/TRIPLE, the
 # primary fielder keeps running until they reach the ball, then the
@@ -782,23 +865,29 @@ CHARGING_MARGIN_FT      = 2.0
 # distance from a fielder's body to the ball at which an in-flight catch
 # fires; tuned slightly above SECURE_RADIUS_PX so a fielder positioned
 # in the ball's path will catch even if their step is half a beat off,
-# but a fielder a clean half-stride away cleanly misses. INTERCEPT_MAX_LIFT_PX
-# caps the ball-above-ground distance at which a fielder can still reach
-# — anything higher than ~6 ft (jump + glove extension) is over their
-# head and goes through. INTERCEPT_GRACE_S is the timing slack used by
-# fielder routing to decide whether a fielder can plausibly make a play
-# on the path (so they actually run a route, instead of standing at home
-# watching).
+# but a fielder a clean half-stride away cleanly misses. INTERCEPT_GRACE_S
+# is the timing slack used by fielder routing to decide whether a fielder
+# can plausibly make a play on the path (so they actually run a route,
+# instead of standing at home watching).
 INTERCEPT_REACH_PX      = 12
-# Vertical reach of a fielder's glove above the ground (px ≈ ft × 2.5
-# at the render scale). A real player can catch up to ~9–10 ft with
-# jump + glove extension; we use 25 px (~10 ft) so jumping liners are
-# catchable but balls passing genuinely overhead are not. Replaces the
-# old INTERCEPT_MAX_LIFT_PX=80 which was so loose that a fly ball at
-# 6-ft mid-flight height registered as a catch when the *rendered*
-# ball position happened to overlap a fielder's body in screen space —
-# what we now detect as "ball flies over the pitcher and is caught."
-INTERCEPT_MAX_LIFT_PX   = 25
+# How high a fielder can catch, and it is `GLOVE_REACH_FT` because there is
+# only one answer to that question: the same glove takes the ball out of the
+# air here and picks it off a hop in `_update_hit`. Converted at this seam,
+# like every other real quantity in this file.
+#
+# **It was a bare 25 px whose comment said "px ≈ ft × 2.5 at the render
+# scale", and the render scale is `FT_TO_PX_Y` = 1.10** — so what read as a
+# 10 ft ceiling was a 23 ft one, and fielders were catching balls two storeys
+# over their heads. The units drifted out from under it (CLAUDE.md records
+# the same trap for `EV_CALIBRATION` and the batted-ball offset anchors); the
+# tell was that nothing in the file could state it in feet.
+#
+# Worth 8 points of line-drive BABIP on its own (.406 -> .492 measured at
+# LEAGUE over 2,000 balls in play), because the ball a fielder is not tall
+# enough to reach is exactly the line drive over the infield that ought to
+# fall in. Fly balls are untouched at .039: a fly comes *down* through this
+# ceiling into a waiting glove, so where the ceiling sits never decided one.
+INTERCEPT_MAX_LIFT_PX   = GLOVE_REACH_FT * FT_TO_PX_Y
 # Real seconds — it is a fielder's margin for error, so it belongs on the
 # same clock as their sprint and their reaction, not on the render's.
 INTERCEPT_GRACE_S       = 0.22
@@ -979,37 +1068,34 @@ def _decel_time_fraction(s, end_speed_ratio):
     return max(0.0, min(1.0, (b - math.sqrt(disc)) / (2.0 * a)))
 
 
-def _arc_fly(a, b, peak, t, phase=None):
-    """Standard sin-shaped arc.
+def _arc_sine(a, b, peak, t, phase=None, ground=None):
+    """Standard sin-shaped arc — every airborne ball and every throw.
 
     `t` places the ball along the path and `phase` drives the vertical
     arc. They are the same number only when the flight is unretarded: the
     apex is halfway through the *flight time*, which under a decelerating
     horizontal is past the halfway point of the path.
-    """
-    t = max(0.0, min(1.0, t))
-    phase = t if phase is None else max(0.0, min(1.0, phase))
-    x, y = _lerp(a, b, t)
-    lift = peak * math.sin(math.pi * phase)
-    return (x, y - lift)
 
-
-def _arc_liner(a, b, peak, t, phase=None):
-    """Low fast arc. Ease-out (1−(1−t)²) was used here previously for a
-    'shot' feel, but it pulls horizontal velocity to zero at landing —
-    which read as the ball pausing before its post-landing roll picked up.
-    The pacing is no longer a feel choice at all: `_decel_path_fraction`
+    A line drive used to have its own copy of this with an ease-out
+    (1−(1−t)²) for a 'shot' feel, but that pulls horizontal velocity to
+    zero at landing — the ball appeared to pause before its roll picked
+    up. Pacing is not a feel choice any more: `_decel_path_fraction`
     hands this the ball's real position and it arrives at the speed
     `ground_roll` is about to take it at.
+
+    **No batted ball comes through here any more** — an airborne ball's
+    height is `_flight_height_ft`, a real flight arc. What is left is the
+    infield throw (`THROW_PEAK_H`), which is genuinely cosmetic: nothing
+    decides anything off how high a throw arcs.
     """
     t = max(0.0, min(1.0, t))
     phase = t if phase is None else max(0.0, min(1.0, phase))
-    x, y = _lerp(a, b, t)
+    x, y = ground if ground is not None else _lerp(a, b, t)
     lift = peak * math.sin(math.pi * phase)
     return (x, y - lift)
 
 
-def _arc_grounder(a, b, peaks, t, phase=None):
+def _arc_grounder(a, b, peaks, t, phase=None, ground=None):
     """Variable-bounce arc; one parabolic hop per entry in `peaks`, with the
     ball touching ground at every segment boundary.
 
@@ -1022,7 +1108,7 @@ def _arc_grounder(a, b, peaks, t, phase=None):
     """
     t = max(0.0, min(1.0, t))
     phase = t if phase is None else max(0.0, min(1.0, phase))
-    x, y = _lerp(a, b, t)
+    x, y = ground if ground is not None else _lerp(a, b, t)
     n = len(peaks)
     bounce_idx = min(n - 1, int(phase * n))
     bounce_t = (phase * n) % 1.0
@@ -1066,11 +1152,6 @@ def _grounder_peaks(quality, distance_px=None):
         peaks.append(max(GROUNDER_BOUNCE_MIN_PEAK_PX, h))
         h *= GROUNDER_BOUNCE_COR_SQ
     return tuple(peaks)
-
-
-def _shadow_t(shape, t):
-    """Ground-projection progress; all shapes use linear t (matches arc x,y)."""
-    return max(0.0, min(1.0, t))
 
 
 def _wall_r_at(angle):
@@ -1127,25 +1208,11 @@ def _point_outside_wall(point):
     dx = point[0] - HOME[0]
     dy_math = HOME[1] - point[1]
     ellipse_d = math.hypot(dx / WALL_SEMI_X, dy_math / WALL_SEMI_Y)
-    # On the line counts as past it. A home run's carry past the fence
-    # starts at HR_CARRY_MIN_FT = 0, so 0.5% of them land within 1e-9 of
-    # exactly 1.0 — a strict `>` leaves those wall-scrapers drawn as a
-    # white dot in the black beyond the fence, which is the artifact
+    # On the line counts as past it. A wall-scraping home run clears by a
+    # hair, so a strict `>` leaves those drawn as a white dot in the black
+    # beyond the fence, which is the artifact
     # `test_a_home_run_ball_is_gone_once_it_lands` was written for.
     return ellipse_d >= 1.0
-
-
-def _polar_point(angle, dist_px):
-    """(x, y) in pygame coords for a polar (angle, dist) sampled from home,
-    interpreted in *screen-space* pixels. Used for HR landings that overshoot
-    the wall by a literal pixel carry. For real-foot hit landings, use
-    `_polar_point_ft` instead.
-
-    `angle` is the standard math angle (radians) measured from +x axis CCW;
-    90° points straight out toward CF.
-    """
-    return (HOME[0] + dist_px * math.cos(angle),
-            HOME[1] - dist_px * math.sin(angle))
 
 
 def _polar_point_ft(angle, dist_ft):
@@ -1186,9 +1253,18 @@ def _screen_angle_of(field_rad):
 # most, against 20° of scatter); the mean is a real measurement now, so the
 # scatter around it can be what it is — the several degrees of variation two
 # identically-struck balls really do show.
-HR_ANGLE_SIGMA_RAD    = math.radians(7)       # gaussian spread around the mean
-HR_FOUL_MARGIN_RAD    = math.radians(2)       # keep HRs clearly inside the poles
-HR_ANGLE_MAX_TRIES    = 40                    # rejection-sampling attempts
+# `HR_ANGLE_SIGMA_RAD`, `HR_FOUL_MARGIN_RAD` and `HR_ANGLE_MAX_TRIES` are
+# **gone** with `_sample_hr_angle`. They scattered the home run's bearing 7
+# degrees around the swing's own — the last place in this file that re-drew a
+# direction the bat had already given, and the fair-ball path next door had
+# never done it.
+#
+# It had to go once the fence decided home runs rather than a roll:
+# `hit_outcome_manager` asks `park.fence_verdict` at the *bat's* bearing, and
+# the park is 40 ft deeper to centre than down the line, so a ball that cleared
+# at 47 degrees and was then jittered toward centre would have been drawn
+# landing short of a fence it had officially left. A home run takes
+# `_fair_field_angle` now, exactly like every other fair ball.
 
 # Sigma was 9° with a hard clamp to 50°–130° of screen angle. That clamp
 # sits well inside the foul lines (which are at ~30.7°/149.3° on screen),
@@ -1197,38 +1273,8 @@ HR_ANGLE_MAX_TRIES    = 40                    # rejection-sampling attempts
 # wall, which is why distances ran 392–476 ft with a mean of 423.
 
 
-def _sample_hr_angle(mean_angle):
-    """Truncated gaussian over fair territory, by rejection.
-
-    Rejection rather than clamping: at this sigma a clamp would pile every
-    out-of-range draw onto the two boundary angles, stacking a visible
-    fraction of all home runs on exactly the foul-pole line. The uniform
-    fallback is unreachable in practice and exists only to bound the loop.
-    """
-    lo = FOUL_LINE_SCREEN_RIGHT_RAD + HR_FOUL_MARGIN_RAD
-    hi = FOUL_LINE_SCREEN_LEFT_RAD - HR_FOUL_MARGIN_RAD
-    for _ in range(HR_ANGLE_MAX_TRIES):
-        angle = random.gauss(mean_angle, HR_ANGLE_SIGMA_RAD)
-        if lo <= angle <= hi:
-            return angle
-    return random.uniform(lo, hi)
-
-
-def _px_per_ft_at(angle):
-    """Screen pixels per real foot along the bearing `angle`.
-
-    The feet->pixel projection is anisotropic but *linear along any fixed
-    bearing*: a point at polar (angle, r_px) lies
-    `r_px * hypot(cos a / FT_TO_PX_X, sin a / FT_TO_PX_Y)` feet from home.
-    Feet and pixels are therefore proportional at a given angle, and one
-    division converts between them exactly. This is what lets the HR carry
-    be specified in feet — the number that is actually meaningful — instead
-    of pixels, whose worth in feet silently varies by 17% between the foul
-    line and centre field.
-    """
-    ft_per_px = math.hypot(math.cos(angle) / FT_TO_PX_X,
-                           math.sin(angle) / FT_TO_PX_Y)
-    return 1.0 / ft_per_px
+_FAIR_DRAW_MIN_RAD = FOUL_LINE_FIELD_RIGHT_RAD + FAIR_DRAW_MARGIN_RAD
+_FAIR_DRAW_MAX_RAD = FOUL_LINE_FIELD_LEFT_RAD - FAIR_DRAW_MARGIN_RAD
 
 
 def _fair_field_angle(spray_field_rad, allow_foul=False):
@@ -1249,13 +1295,21 @@ def _fair_field_angle(spray_field_rad, allow_foul=False):
         return math.radians(90.0)
     if allow_foul:
         return spray_field_rad
-    return max(FOUL_LINE_FIELD_RIGHT_RAD + FAIR_DRAW_MARGIN_RAD,
-               min(FOUL_LINE_FIELD_LEFT_RAD - FAIR_DRAW_MARGIN_RAD,
-                   spray_field_rad))
+    return max(_FAIR_DRAW_MIN_RAD, min(_FAIR_DRAW_MAX_RAD, spray_field_rad))
+
+
+def _is_fair_field_angle(field_rad):
+    """Is this real-field bearing inside the drawable fair wedge?
+
+    The complement of `_fair_field_angle`'s inset, stated once so the
+    sidespin guard's notion of "still fair" and the landing picker's
+    cannot drift apart by the size of `FAIR_DRAW_MARGIN_RAD` itself.
+    """
+    return _FAIR_DRAW_MIN_RAD <= field_rad <= _FAIR_DRAW_MAX_RAD
 
 
 def _pick_hit_landing(outcome, shape, quality=1.0, spray_field_rad=None,
-                      ev_mph=None):
+                      ev_mph=None, launch_deg=None):
     """Pick a landing point for the contact.
 
     **The direction is an input now**, not a draw. `spray_field_rad` is the
@@ -1273,74 +1327,95 @@ def _pick_hit_landing(outcome, shape, quality=1.0, spray_field_rad=None,
     steers toward a gap or a glove.
     """
     if outcome == "IN_PLAY":
-        dist_min, dist_max = IN_PLAY_LANDING_FT.get(shape, IN_PLAY_LANDING_FT["LINER"])
-        # Passed in, not re-drawn: `exit_velocity_mph` jitters, so drawing
-        # it here would give this ball a different speed from the one its
-        # hang time and wall candidacy were computed against.
+        # Passed in, not re-drawn: both jitter, so drawing either here would
+        # give this ball a different flight from the one its hang time, its
+        # wall candidacy and the home-run verdict were computed against. The
+        # fallback for the angle is the shape's band centre, which is exactly
+        # what this function used before the angle was carried, so a legacy
+        # caller sees no change.
         ev = ev_mph if ev_mph is not None else contact_audio.exit_velocity_mph(quality)
-        # Depth comes from how hard the ball was hit, through the same
-        # projectile identity that gives it its hang time — not from a
-        # linear map on contact quality, whose real distribution sits at
-        # 0.88 and put nearly every batted ball at the deep end of its
-        # range. See ball_flight.carry_distance_ft.
+        launch = (launch_deg if launch_deg is not None
+                  else ball_flight.launch_angle_for_shape(shape))
+        angle = _fair_field_angle(spray_field_rad)
+
         if shape == "GROUNDER":
+            # A ground ball is not a projectile: where it stops is friction and
+            # whether anybody cut it off, so it keeps a depth range, indexed on
+            # exit velocity. The quality map this replaced put nearly every
+            # grounder at the deep end, because quality's real median is 0.88.
+            dist_min, dist_max = IN_PLAY_LANDING_FT["GROUNDER"]
             mid = dist_min + (dist_max - dist_min) * ball_flight.ground_depth_fraction(ev)
+            spread = (dist_max - dist_min) * 0.18
+            # `mid` is clamped into the range *before* the window is built, and
+            # that ordering is the whole point. Written as
+            # `uniform(max(dist_min, mid - spread), min(dist_max, mid + spread))`
+            # the bounds cross over as soon as `mid` sits more than `spread`
+            # outside the range — and `random.uniform(a, b)` does not care which
+            # way round its arguments are, it samples `[b, a]`. So the clamp
+            # inverted into its own opposite exactly where it was needed.
+            mid = min(max(mid, dist_min), dist_max)
+            dist_ft = random.uniform(max(dist_min, mid - spread),
+                                     min(dist_max, mid + spread))
         else:
-            mid = ball_flight.carry_distance_ft(shape, ev)
-        # A small uniform spread so each contact looks distinct even at
-        # a fixed exit velocity.
-        #
-        # `mid` is clamped into the range *before* the window is built, and
-        # that ordering is the whole point. Written as
-        # `uniform(max(dist_min, mid - spread), min(dist_max, mid + spread))`
-        # the bounds cross over as soon as `mid` sits more than `spread`
-        # outside the range — and `random.uniform(a, b)` does not care which
-        # way round its arguments are, it samples `[b, a]`. So the clamp
-        # inverted into its own opposite exactly where it was needed, and the
-        # ball landed *outside* the range on the far side.
-        #
-        # It was not a corner. Over the real quality distribution: 62% of
-        # POP_UPs cleared their 160 ft cap, out to 272 ft — a pop-up landing
-        # in the outfield — plus 8.9% of FLYs past 365 ft (to 416) and 4.3%
-        # of LINERs short of their 130 ft floor (to 100). The EV
-        # recalibration widened it by pushing carry up, but the defect is
-        # independent of calibration and predates it.
-        spread = (dist_max - dist_min) * 0.18
-        mid = min(max(mid, dist_min), dist_max)
-        dist_ft = random.uniform(max(dist_min, mid - spread),
-                                 min(dist_max, mid + spread))
+            # **An airborne ball lands where it carries, and that is all.**
+            #
+            # There were three answers here and they are now one. The depth was
+            # a per-shape range with a uniform spread inside it, so a fly ball
+            # was capped at 365 ft however hard it was hit — 30 ft short of a
+            # fence it could physically reach — while a ball off the wall got a
+            # *random* 5-35 ft past the fence and a home run a *random* 0-61 ft
+            # past it, neither of which had looked at the exit velocity. All
+            # three are `carry_distance_ft` now, at this ball's own launch angle
+            # and exit velocity: the same number `park.fence_verdict` used to
+            # decide which of the three this was.
+            #
+            # No spread, deliberately. The old one existed because `mid` came
+            # from a deterministic map on quality, so identical contacts landed
+            # identically. Both inputs are jittered once upstream now
+            # (`LAUNCH_JITTER_DEG`, `EV_CONTACT_JITTER_MPH`), so a third draw
+            # here would be a fourth model of the same variation — and it could
+            # land a ball the fence verdict called short past the fence.
+            dist_ft = ball_flight.carry_distance_ft(launch, ev)
         # The bat's bearing, unchanged. Still no artificial pull toward gaps
         # or lines — the spray pattern is the input to the fielder simulation,
         # not a hint about the desired outcome. It simply comes from the swing
         # now instead of from `random.uniform`.
-        angle = _fair_field_angle(spray_field_rad)
+        #
+        # The wall clamp is a safety net rather than a model: a ball the fence
+        # verdict called `SHORT_OF_WALL` is inside the fence by construction.
         return _clamp_inside_wall(_polar_point_ft(angle, dist_ft),
                                   LANDING_WALL_MARGIN_PX)
 
     if outcome == "HOME RUN":
-        # The bat's bearing again, crossed into screen polar because the wall
-        # is a screen-space ellipse. It replaced a pull bias read off the
-        # *pitch's* inside/outside location (`HR_INSIDE_NORM_PX`,
-        # `HR_PULL_SHIFT_RAD`, `HR_BASE_PULL_RAD`, all gone): pitch location
-        # does belong in the answer, but it belongs the way it reaches a real
-        # hitter — by moving where the bat points when it arrives — and
-        # `bat_path` already models that. Reading it off the pitch as well was
-        # the second model of one thing.
-        mean_angle = _screen_angle_of(_fair_field_angle(spray_field_rad,
-                                                        allow_foul=True))
-        angle = _sample_hr_angle(mean_angle)
-        wall_r = _wall_r_at(angle)
-        q = max(0.0, min(1.0, quality))
-        # Carry past the wall uses a biased roll so most produce small
-        # carries (just-cleared, wall-scrapers); only the right tail
-        # produces deep blasts. Quality enlarges the *range* of possible
-        # carries, not the likelihood of large ones — so even on max-
-        # quality contact, most HRs still barely clear, with the
-        # occasional moonshot.
-        bias = random.random() ** HR_CARRY_BIAS_EXPONENT
-        carry_range = HR_CARRY_BASE_RANGE_FT + q * HR_CARRY_QUALITY_BONUS_FT
-        carry_ft = HR_CARRY_MIN_FT + bias * carry_range
-        return _polar_point(angle, wall_r + carry_ft * _px_per_ft_at(angle))
+        # The bat's bearing, insetted from the poles exactly as a fair ball in
+        # play is — no jitter, no rejection sampling. It replaced a pull bias
+        # read off the *pitch's* inside/outside location (`HR_INSIDE_NORM_PX`,
+        # `HR_PULL_SHIFT_RAD`, `HR_BASE_PULL_RAD`, all gone), and then a 7
+        # degree gaussian scatter around that bearing (`_sample_hr_angle`),
+        # which was the last place in this file that re-drew a direction the
+        # swing had already decided.
+        #
+        # Removing the scatter is what lets the fence verdict and the drawn
+        # landing be the same event: `park.fence_verdict` cleared this ball at
+        # *this* bearing, and the park is 40 ft deeper to centre than down the
+        # line, so a jittered bearing could have put a certified home run in
+        # front of the fence.
+        field_rad = _fair_field_angle(spray_field_rad)
+        ev = ev_mph if ev_mph is not None else contact_audio.exit_velocity_mph(quality)
+        launch = (launch_deg if launch_deg is not None
+                  else ball_flight.launch_angle_for_shape(shape))
+        # How far this ball actually carries — the same call the fence verdict
+        # made. The floor is for a caller who asserted HOME RUN without giving
+        # a flight that supports one; in the game it never binds.
+        carry_ft = max(
+            ball_flight.carry_distance_ft(launch, ev),
+            park.wall_distance_ft(field_rad) + HR_MIN_CLEARANCE_FT)
+        # `_polar_point_ft`: the carry is in real feet and the bearing is a
+        # real-field one, so the anisotropic projection is applied once, here.
+        # Specifying the carry in *pixels* — which the HR branch did before
+        # feet reached it — buys 17% more ground at centre field than down
+        # the line for the same number.
+        return _polar_point_ft(field_rad, carry_ft)
 
     # Fallback — treat any unknown outcome as a generic HIT (which the
     # caller above already handles for the standard case). Reaches here
@@ -1353,14 +1428,32 @@ def _pick_hit_landing(outcome, shape, quality=1.0, spray_field_rad=None,
         LANDING_WALL_MARGIN_PX)
 
 
+def _shape_from_offset(vertical_offset):
+    """Trajectory shape for a contact `vertical_offset` screen pixels off centre.
+
+    The same launch-angle model `hit_outcome_manager` classifies with, so the
+    path that has no `batted_ball_type` to be told cannot disagree with the one
+    that does. That path is not vestigial: `_start_foul_animation` passes
+    `batted_ball_type=None` on every animated foul, because a foul never runs
+    the hit pipeline that resolves a type.
+
+    It replaced a bucketing on raw pixels whose two upper thresholds were
+    unreachable — POP_UP needed an offset over 25 px when bat and ball stop
+    touching at 17.2, so no foul has ever animated as a pop-up.
+    """
+    return ball_flight.shape_for_launch_angle(
+        ball_flight.launch_angle_deg(vertical_offset * _OFFSET_PX_TO_IN))
+
+
 def _pick_shape(outcome, vertical_offset, batted_ball_type=None):
     """Pick a trajectory shape from outcome + bat-vs-ball alignment.
 
     When batted_ball_type is supplied (by hit_outcome_manager — the canonical
     source), use it directly so the visual matches the resolved type. HOME
     RUN always animates as FLY regardless of underlying type (a line-drive
-    HR clearing the wall would read poorly with a low arc). Legacy callers
-    without a type fall back to the old vertical_offset bucketing.
+    HR clearing the wall would read poorly with a low arc). Callers without a
+    type — the foul path, and legacy callers — derive one from the same
+    geometry rather than from a second model of it.
     """
     if outcome == "HOME RUN":
         return "FLY"
@@ -1369,15 +1462,12 @@ def _pick_shape(outcome, vertical_offset, batted_ball_type=None):
     if outcome == "GROUNDOUT":
         return "GROUNDER"
     if outcome == "FLYOUT":
-        return "POP_UP" if vertical_offset > 25 else "FLY"
+        # Airborne by name, so the bands may only choose *which* airborne
+        # shape it was — never demote it to something that never left the dirt.
+        shape = _shape_from_offset(vertical_offset)
+        return shape if shape in ("FLY", "POP_UP") else "FLY"
     if outcome in ("IN_PLAY", "FOUL"):
-        if vertical_offset > 25:
-            return "POP_UP"
-        if vertical_offset > 8:
-            return "FLY"
-        if vertical_offset < -8:
-            return "GROUNDER"
-        return "LINER"
+        return _shape_from_offset(vertical_offset)
     weights = SHAPE_WEIGHTS.get(outcome, [("FLY", 1.0)])
     r = random.random()
     cum = 0.0
@@ -1398,6 +1488,21 @@ def _wall_geometry():
     semi-axes), so it never changes frame-to-frame. Recomputing the ~97
     sin/cos samples and the point lists every frame was pure waste; build
     them once and reuse the same lists (pygame.draw does not mutate them).
+
+    **The fence stands on the ellipse**: `bot` (where it meets the grass)
+    is the ellipse, and `top` is WALL_FACE_HEIGHT_PX up the screen from it,
+    the same direction and scale a ball's lift is drawn in. The ellipse is
+    `park.wall_distance_ft` — where the fence verdict, the in-flight impact,
+    the containment step and `_point_outside_wall` all put the fence — so
+    this is the only arrangement in which the drawn face is that fence.
+
+    It used to be the other way up, with the ellipse as the *top* and the
+    face hanging 11 px in front of it. Every model put the fence ~10 ft
+    behind the one on screen, so a ball struck the fence with its ground
+    point on the drawn rim and was drawn over the top of it by exactly its
+    lift, then snapped back to the containment line — the "clears the wall,
+    then clips back into play" artifact, surviving a fix that had bounded
+    the lift correctly against the wrong edge.
     """
     global _WALL_GEOMETRY
     if _WALL_GEOMETRY is not None:
@@ -1410,9 +1515,9 @@ def _wall_geometry():
     for i in range(samples + 1):
         t = foul_t + (math.pi - 2 * foul_t) * i / samples
         x = hx + WALL_SEMI_X * math.cos(t)
-        y_top = hy - WALL_SEMI_Y * math.sin(t)
-        wall_top_pts.append((x, y_top))
-        wall_bot_pts.append((x, y_top + WALL_FACE_HEIGHT_PX))
+        y_base = hy - WALL_SEMI_Y * math.sin(t)
+        wall_top_pts.append((x, y_base - WALL_FACE_HEIGHT_PX))
+        wall_bot_pts.append((x, y_base))
     _WALL_GEOMETRY = {
         'top': wall_top_pts,
         'bot': wall_bot_pts,
@@ -1522,7 +1627,8 @@ class HitAnimation:
     """
 
     def __init__(self, game, outcome, on_complete, vertical_offset=0.0, quality=0.0,
-                 batted_ball_type=None, spray_deg=0.0, defense=None):
+                 batted_ball_type=None, spray_deg=0.0, defense=None,
+                 timing_turn_deg=0.0, ev_mph=None, launch_deg=None):
         self.game = game
         self.outcome = outcome
         self.on_complete = on_complete
@@ -1546,10 +1652,26 @@ class HitAnimation:
         # were two different answers to this question and left the ordinary
         # ball in play with none.
         self.spray_deg = spray_deg
-        self.spin = spray.spin_for(self._batter_handedness())
+        # This is a coordinate-frame mirror, not physical ball spin.  It was
+        # previously named ``spin``, which became actively misleading once
+        # batted-ball sidespin was introduced.
+        self.handedness_sign = spray.spin_for(self._batter_handedness())
         # Resolved once, here, rather than at each of the four sites: the
         # handedness flip has exactly one home.
-        self.spray_field_rad = spray.field_angle_rad(spray_deg, self.spin)
+        self.spray_field_rad = spray.field_angle_rad(
+            spray_deg, self.handedness_sign)
+        # The actual bat's turn relative to its nominal contact pose.  This is
+        # the contact geometry's sidespin signal; it is resolved upstream and
+        # carried as data so HitAnimation never reaches back into the swing.
+        self.timing_turn_deg = timing_turn_deg
+        self.curve_ft = 0.0
+        # The ground track this ball actually flew, in real field feet
+        # (`batted_ball_path.BattedBallPath`). Public because it is the one
+        # honest answer to "where did the ball go", and the swing replay draws
+        # it: a straight ray at the departure bearing is the *tangent* of this,
+        # which on a bent flight is not the same picture.
+        self.flight_path = None
+        self._current_flight_progress = 0.0
 
         self.start_time = None
         self.banner_fired = False
@@ -1634,18 +1756,30 @@ class HitAnimation:
         # `_decel_path_fraction`. 1.0 is undecelerated motion, which is
         # what the scripted flights (HOME RUN, fouls) keep.
         self._flight_end_speed_ratio = 1.0
+        # The drawn ball has a radius and the fence's rim is a line; this
+        # is the correction that keeps the picture on the side of the rim
+        # the verdict put the ball on. 1.0 unless the ball arrives within a
+        # ball's radius of it. See `_fence_lift_correction`.
+        self._fence_lift_scale = 1.0
         self._ball_px_per_ft = FT_TO_PX_X
         self._bounces = []
         self._bounces_end_ms = 0.0
         # A ball that struck the fence above the grass, falling down the
-        # face: (height_px, duration_ms). See `_begin_wall_drop`.
+        # face: (height_px, duration_ms), starting at `_wall_drop_start_ms`
+        # on the since-landing clock. See `_begin_wall_drop`.
         self._wall_drop = None
+        self._wall_drop_start_ms = 0.0
         self._bounces_completed = 0
         # Per-frame cache for _forecast_ball.
         self._forecast = None
         self._forecast_at_ms = None
         # Set only when nobody can catch the ball — see _pick_retrieval_role.
         self._retrieval_point = None
+
+        # Only live in-play balls can be routed into the off-the-wall flow.
+        # Keep the flag on every animation, though: foul playback uses the
+        # same draw path and therefore asks `_ball_behind_wall()` about it.
+        self._is_wall_candidate = False
 
         # Set true the first time the rolling ball reflects off the elliptical
         # outfield wall (see _step_ball_on_ground). Drives an XBH override in
@@ -1700,7 +1834,7 @@ class HitAnimation:
         # legacy callers.
         self.shape = _pick_shape(outcome, vertical_offset, batted_ball_type)
 
-        # This batted ball's exit velocity. Drawn once, here, because
+        # This batted ball's exit velocity. Drawn once because
         # `contact_audio.exit_velocity_mph` carries jitter — identical
         # swings must not sound mechanically identical — so calling it per
         # use gives one ball several different speeds. Carry, hang time,
@@ -1709,7 +1843,50 @@ class HitAnimation:
         # models of one thing" mistake as the two clocks, at a smaller
         # scale: a ball could be given a 380 ft carry and the hang time of
         # a 340 ft one.
-        self.exit_velocity_mph = contact_audio.exit_velocity_mph(quality)
+        #
+        # **Taken from the caller when there is one**, because "once" has to
+        # mean once across the whole pitch and not merely once inside this
+        # object. The contact *sound* drew its own, and that draw is what the
+        # DB records and the swing replay's EXIT VELO reports — so the number
+        # the player was shown was not the number the ball was flown at, by
+        # 3.5 mph sd on a contact swing. Worse on a power swing: this call
+        # took the default `swing_type="contact"`, so `EV_POWER_BONUS_MPH`
+        # reached the crack and the readout and never once reached the
+        # physics. `PitchSimulation` now draws it with the real swing type and
+        # hands the same number to both. Same shape as `_pick_hit_landing`'s
+        # `ev_mph`, one level up.
+        self.exit_velocity_mph = (
+            ev_mph if ev_mph is not None
+            else contact_audio.exit_velocity_mph(quality))
+
+        # This ball's launch angle, in degrees above horizontal — the other
+        # half of its flight, and taken from the caller for exactly the same
+        # reason the exit velocity is: `ball_flight.launch_angle_deg` carries a
+        # bounded jitter, so drawing it here as well would give one batted ball
+        # two flights.
+        #
+        # **Everything airborne in this class is now a function of these two
+        # numbers and the bearing.** Carry, hang time, whether the ball clears
+        # the fence and where a home run lands used to be four separate models,
+        # none of which could see the others; the first two read a *band centre*
+        # off the shape (so every fly ball flew at 32 degrees), and the last two
+        # were rolls on contact quality.
+        #
+        # The fallback is that band centre, which is what this class used
+        # before the angle was carried — so a caller with only a
+        # `batted_ball_type` (the harness, older tests) sees exactly the flight
+        # it saw before. It cannot tell a 26 degree fly from a 49 degree one,
+        # which is the whole defect the continuous model removes.
+        self.launch_deg = (
+            launch_deg if launch_deg is not None
+            else ball_flight.launch_angle_for_shape(self.shape))
+
+        # How far this ball carries, cached because every height query needs
+        # it — and it is the *same call* `park.fence_verdict` made upstream to
+        # decide whether this was a home run, so the fence the ball was judged
+        # against and the arc that gets drawn are one flight.
+        self._carry_ft = max(1e-6, ball_flight.carry_distance_ft(
+            self.launch_deg, self.exit_velocity_mph))
 
         # Whether the pitcher can handle a ball hit back at them on this
         # play. Rolled once, up front, rather than per-frame: a coin
@@ -1794,9 +1971,7 @@ class HitAnimation:
             self.hr_distance_ft = round(math.hypot(dx_ft, dy_ft))
 
         # Lazy-init fonts on first draw that needs them.
-        self._font = None
         self._prompt_font = None
-        self._error_font = None
 
     # ---- The real-time boundary -----------------------------------------
     #
@@ -1826,6 +2001,67 @@ class HitAnimation:
         speed = max(0.1, speed_fts if speed_fts is not None else fielder.max_speed)
         return self._anim_ms(ft / speed)
 
+    def _configure_flight_path(self):
+        """Build this ball's shared curved ground track.
+
+        The existing landing picker supplies the initial bearing and nominal
+        carry.  Sidespin moves the eventual landing laterally, but is reduced
+        near a foul line or wall when necessary so an animation-layer detail
+        cannot reverse a fair/foul or in-park classification already settled
+        at contact.
+        """
+        nominal_x, nominal_y = _to_field_ft(self._hit_end)
+        carry_ft = math.hypot(nominal_x, nominal_y)
+        bearing = (math.atan2(nominal_y, nominal_x)
+                   if carry_ft > 1e-9 else self.spray_field_rad)
+        requested = batted_ball_path.curve_distance_ft(
+            self.shape, self.timing_turn_deg, self.handedness_sign)
+        nominal_outside_wall = _point_outside_wall(self._hit_end)
+
+        # Preserve whichever side of the foul line the nominal landing is on.
+        # Backstop pop-ups (negative field y) have no meaningful pole boundary.
+        def keeps_classification(path):
+            end_x, end_y = path.endpoint_ft
+            end = _to_screen(end_x, end_y)
+            if nominal_y > 0.0:
+                nominal_angle = math.atan2(nominal_y, nominal_x)
+                end_angle = math.atan2(end_y, end_x)
+                if nominal_angle < FOUL_LINE_FIELD_RIGHT_RAD:
+                    if end_angle >= FOUL_LINE_FIELD_RIGHT_RAD:
+                        return False
+                elif nominal_angle > FOUL_LINE_FIELD_LEFT_RAD:
+                    if end_angle <= FOUL_LINE_FIELD_LEFT_RAD:
+                        return False
+                elif not _is_fair_field_angle(end_angle):
+                    return False
+            if not nominal_outside_wall and _point_outside_wall(end):
+                return False
+            return True
+
+        curve = requested
+        path = batted_ball_path.BattedBallPath(bearing, carry_ft, curve)
+        # A handful of reductions is sufficient even for a ball initially on
+        # the drawing margin; zero is an exact safe fallback.
+        for _ in range(16):
+            if keeps_classification(path):
+                break
+            curve *= 0.65
+            path = path.with_curve(curve)
+        else:
+            curve = 0.0
+            path = path.with_curve(0.0)
+
+        self.curve_ft = curve
+        self.flight_path = path
+        end_x, end_y = path.endpoint_ft
+        self._hit_end = _to_screen(end_x, end_y)
+
+    def _flight_ground_point(self, progress):
+        """Screen position on the one path shared by ball and defense."""
+        if self.flight_path is None:
+            return _lerp(HOME, self._hit_end, progress)
+        return _to_screen(*self.flight_path.point_ft(progress))
+
     # ---- Setup ----------------------------------------------------------
 
     def _setup_hit(self, outcome):
@@ -1842,75 +2078,61 @@ class HitAnimation:
         # 15% of line drives landing past 360 ft. Asking the carry model
         # is both correct and self-calibrating: it cannot disagree with
         # the distance the same ball would have been given anyway.
-        self._is_wall_candidate = False
-        if outcome == "IN_PLAY" and self.shape in ("FLY", "LINER"):
-            carry_ft = ball_flight.carry_distance_ft(
-                self.shape, self.exit_velocity_mph)
-            # Measured toward centre field, the shallowest part of the
-            # park; the angle isn't chosen yet, and picking the deepest
-            # reference keeps this from over-selecting balls that only
-            # reach a wall they were never hit toward.
-            if carry_ft >= WALL_REACH_FT:
-                self._is_wall_candidate = True
+        # Does this ball reach the fence, and does it clear it? One question,
+        # asked of the flight at the ball's own bearing — the same call
+        # `hit_outcome_manager` made upstream when it decided whether this was
+        # a home run, off the same launch angle, exit velocity and bearing.
+        #
+        # It replaced a `carry_ft >= WALL_REACH_FT = 380` test taken "toward
+        # centre field", against a fence that runs 360 ft down the lines. A
+        # fly carrying 365 ft into the corner clears that fence and was not
+        # even a candidate; it got clamped into `IN_PLAY_LANDING_FT`'s 365 ft
+        # cap instead. And before *that* it was a quality-gated coin flip
+        # (`WALL_HIT_PROB_MAX = 0.22` ramped from q = 0.5), the third place the
+        # uniform-quality assumption did damage.
+        if outcome == "IN_PLAY":
+            field_rad = _fair_field_angle(self.spray_field_rad)
+            self._is_wall_candidate = (
+                park.fence_verdict(self.launch_deg, self.exit_velocity_mph,
+                                   field_rad) == park.OFF_THE_WALL)
 
         if self._is_wall_candidate:
-            # The bat's bearing, crossed into screen polar because the wall
-            # is. Distance is wall_r + carry, with squared bias so most
-            # carries are small (impact low on the face).
-            # This branch used to run its own line-versus-gap lottery and
-            # then pick the *side* with `random.choice((-1, 1))` — so which
-            # way a ball off the wall went, which is the difference between a
-            # double down the line and one in the gap, was a coin flip taken
-            # after the swing was over.
-            angle = _screen_angle_of(_fair_field_angle(self.spray_field_rad))
-            bias = random.random() ** WALL_HIT_CARRY_BIAS_EXP
-            carry_ft = WALL_HIT_CARRY_FT_MIN + bias * (
-                WALL_HIT_CARRY_FT_MAX - WALL_HIT_CARRY_FT_MIN
-            )
-            # Convert the polar wall-radius (px) at this angle back into
-            # the equivalent screen distance, then add carry. We pick the
-            # landing point directly in screen pixels (no foot-space
-            # _polar_point_ft) because the wall is defined in screen-
-            # space and the in-flight check uses screen-space too.
-            wall_px = _wall_r_at(angle)
-            dist_px = wall_px + carry_ft * FT_TO_PX_Y  # use y-scale as
-            # a rough px-per-ft for radial carry; exact value is not
-            # critical — the in-flight detector kills the arc at the
-            # wall regardless of how far past the landing was aimed.
-            self._hit_end = (
-                HOME[0] + dist_px * math.cos(angle),
-                HOME[1] - dist_px * math.sin(angle),
-            )
+            # Aimed at where the ball would actually have come down, which is
+            # past the fence by construction for anything the verdict calls a
+            # wall ball. `_maybe_trigger_in_flight_wall_impact` then ends the
+            # flight where the shadow crosses the ellipse.
+            #
+            # This branch used to run its own line-versus-gap lottery and then
+            # pick the *side* with `random.choice((-1, 1))` — so which way a
+            # ball off the wall went, which is the difference between a double
+            # down the line and one in the gap, was a coin flip taken after the
+            # swing was over. Then it drew a random 5-35 ft of carry past the
+            # fence in *pixels*, discarding the carry the exit velocity had
+            # just been asked for two lines above.
+            carry_ft = ball_flight.carry_distance_ft(
+                self.launch_deg, self.exit_velocity_mph)
+            self._hit_end = _polar_point_ft(
+                _fair_field_angle(self.spray_field_rad), carry_ft)
         else:
             self._hit_end = _pick_hit_landing(
                 outcome, self.shape, self.quality,
                 spray_field_rad=self.spray_field_rad,
                 ev_mph=self.exit_velocity_mph,
+                launch_deg=self.launch_deg,
             )
 
-        # Peak chosen per shape. HOME RUN uses its scripted peak; HIT uses
-        # a quality-scaled FLY peak so soft flies arc lower than screamers.
-        if self.shape == "FLY":
-            if outcome == "HOME RUN":
-                self._hit_peak = HR_PEAK_H
-            else:
-                q = max(0.0, min(1.0, self.quality))
-                lo, hi = FLY_HIT_PEAK_RANGE
-                self._hit_peak = lo + q * (hi - lo)
-                # A wall candidate's peak is capped further down, once the
-                # flight's pacing is known — see `_wall_impact_peak_cap`.
-                # It cannot be done here: the height at the fence depends
-                # on when the ball gets there, and that is not settled
-                # until `_flight_end_speed_ratio` is.
-        elif self.shape == "LINER":
-            self._hit_peak = random.uniform(*LINER_PEAK_RANGE)
-        elif self.shape == "POP_UP":
-            self._hit_peak = random.uniform(*POPUP_PEAK_RANGE)
-        else:  # GROUNDER — peaks vary with contact quality. Distance to
+        self._configure_flight_path()
+
+        # **Nothing sets an arc peak here.** An airborne ball's height is
+        # `_flight_height_ft`, off the launch angle and the carry this ball
+        # already has. The correction that keeps the drawn ball on the right
+        # side of the fence's rim is one scale, solved below.
+        self._fence_lift_scale = self._fence_lift_correction()
+
+        if self.shape == "GROUNDER":  # peaks vary with contact quality. Distance to
             # the landing point scales the bounce count (one hop per
             # spacing_px of travel) so the ball touches grass between every
             # hop instead of arcing once over the entire infield.
-            self._hit_peak = 0
             grounder_dist_px = math.hypot(self._hit_end[0] - HOME[0],
                                           self._hit_end[1] - HOME[1])
             self._grounder_peaks = _grounder_peaks(self.quality, grounder_dist_px)
@@ -1928,15 +2150,19 @@ class HitAnimation:
         # 3.4 s against a real 3.3 s and were caught always. Fly-ball BABIP
         # came out .425 against an MLB .120, and those extra fly-ball hits
         # were most of the doubles surplus.
-        if outcome == "HOME RUN":
-            self.duration_ms = HR_DURATION_MS
-            self.flight_time_s = HR_DURATION_MS / 1000.0
-        else:
-            landing_ft = _ft_dist(self._hit_end[0] - HOME[0],
-                                  self._hit_end[1] - HOME[1])
-            self.flight_time_s = ball_flight.flight_time_s(
-                self.shape, self.exit_velocity_mph, landing_ft)
-            self.duration_ms = int(self._anim_ms(self.flight_time_s))
+        #
+        # **The home run is on this clock too now.** It used to keep a scripted
+        # `HR_DURATION_MS = 5000` and then set `flight_time_s = 5.0` from it —
+        # so for that one outcome `duration_ms` was `flight_time_s * 1000` with
+        # no `PRESENTATION_TIME_SCALE` in between, and `flight_time_s`, whose
+        # whole contract is "real seconds", was carrying an animated duration.
+        # A ball that carries 400 ft hangs about 4.7 s; there was never a
+        # reason for it to be a cutscene, and one clock means one clock.
+        landing_ft = _ft_dist(self._hit_end[0] - HOME[0],
+                              self._hit_end[1] - HOME[1])
+        self.flight_time_s = ball_flight.flight_time_s(
+            self.launch_deg, self.exit_velocity_mph, landing_ft)
+        self.duration_ms = int(self._anim_ms(self.flight_time_s))
 
         # Fielder reaction delays are stored in real seconds (they are
         # human latencies, not pacing), so bring them onto this play's
@@ -1974,15 +2200,13 @@ class HitAnimation:
         # the same flight the viewer sees.
         self._flight_end_speed_ratio = self._landing_speed_ratio()
 
-        # A wall candidate is aimed *past* the fence, so how high the ball
-        # is when it actually reaches the fence is a leftover of the arc
-        # unless something asks for it. Ask: cap the peak at the value
-        # that has the ball strike the face rather than clear it. This has
-        # to run here rather than beside the peak, because the crossing
-        # phase is a question about the flight's pacing and the line above
-        # is where that is settled.
-        if self._is_wall_candidate:
-            self._hit_peak = min(self._hit_peak, self._wall_impact_peak_cap())
+        # A wall candidate needed a second pass here, after the pacing was
+        # known, to bring its vertical arc down onto the fence face: the
+        # height at the fence was a leftover of a sine, so it depended on
+        # *when* the ball got there. An arc in the path does not — the
+        # height at the fence is the number the verdict was computed from,
+        # whatever the flight's pacing — so `_fence_lift_correction` is
+        # settled up at the landing and nothing is left to solve here.
 
         # Route every plausible defender to their best intercept point on
         # the ball's path. The fielder whose intercept timing best matches
@@ -1994,57 +2218,53 @@ class HitAnimation:
         self._assign_in_play_targets()
 
     def _setup_foul(self):
-        """Scripted foul-ball flight. Direction is the ball's own bearing,
+        """Scripted foul-ball flight. **Direction is the bearing it was handed**,
         shape is the vertical contact offset (already bucketed into
         self.shape), and depth/foul-HR come from quality. No interception or
         securing — the ball lands untouched and the animation finishes on
         duration_ms.
 
-        Direction used to be the *sign of the swing's timing error* against a
-        window of hand-tuned milliseconds: early meant pull side, late meant
-        opposite field, and how far foul was how badly mistimed. That was the
-        only place in the game where the swing reached the ball's direction at
-        all, and it was a different model from the one the home run used and
-        from the nothing a ball in play used. It reads the same `spray_deg` as
-        everything else now, and being early still hooks the ball toward the
-        pull-side pole — because that is what turning the bat further round
-        does, not because a branch says so.
+        Direction has now been wrong here twice, in two different ways, and
+        the second is worth stating because it looked like the fix for the
+        first. It used to be the *sign of the swing's timing error* against a
+        window of hand-tuned milliseconds. `spray` replaced that — but only
+        the sign of it: this method went on inventing the magnitude out of
+        `quality` and three `random` draws, in render code, while the swing
+        replay drew `spray_deg`. Measured over 600 real fouls the two
+        disagreed by a median of **40.7 degrees**, 271 of them drawn by the
+        replay as a fair ray under a FOUL banner, and one identical contact
+        animated at eight different bearings across eight plays.
+
+        So the deflection a glancing blow puts on the ball is now
+        `spray.foul_departure_deg`, resolved once at the `PitchSimulation`
+        handoff and passed in as `spray_deg` — which means
+        `HitAnimation.spray_deg` says the same thing for a fair ball, a foul
+        and a home run alike: the bearing the ball left on. There is no
+        direction model left in this method. What stays is what it is for:
+        how deep the ball went, how high it arced, and which fielder drifts
+        after it.
         """
         # Which side of the field: straight off the bearing, so handedness is
-        # already folded in.
-        foul_side = 1.0 if self.spray_field_rad > math.radians(90.0) else -1.0
+        # already folded in. `>= 0` on the spray rather than `> 90 deg` on the
+        # field angle, which is false at exactly 90 and sent every dead-centre
+        # foul to the first-base side.
+        foul_side = 1.0 if self.spray_deg >= 0.0 else -1.0
         q = max(0.0, min(1.0, self.quality))
-        # How far past the line. **The two ways to foul a ball land here as
-        # two different pictures**, which is worth keeping: a ball hooked past
-        # the pole was struck cleanly and is only just foul, so it hugs the
-        # line; a ball that left between the lines is here because the contact
-        # was glancing — tipped, topped, caught off the end — and those spray
-        # sharply foul however they were pointed. `severity` is the second one
-        # measured off quality, where it used to be measured off a timing
-        # window that had stopped meaning anything.
-        past_rad = max(0.0, math.radians(abs(self.spray_deg) - spray.FOUL_LINE_DEG))
-        severity = min(1.0, max(past_rad, (1.0 - q) * FOUL_OFF_MAX_RAD)
-                       / FOUL_OFF_MAX_RAD)
-        # Two line constants because the two landing pickers work in
-        # different spaces: generic fouls go through _polar_point_ft
-        # (real-field feet, lines at 45°/135°), the foul-HR through
-        # _polar_point (screen pixels, lines at ≈30.7°/149.3°).
-        field_line = (FOUL_LINE_FIELD_LEFT_RAD if foul_side > 0
-                      else FOUL_LINE_FIELD_RIGHT_RAD)
-        screen_line = (FOUL_LINE_SCREEN_LEFT_RAD if foul_side > 0
-                       else FOUL_LINE_SCREEN_RIGHT_RAD)
+        # How far past the line this ball left, read back off the bearing
+        # rather than recomputed from quality — `spray.foul_departure_deg` put
+        # it there and this is the same number, so the gate below and the
+        # flight cannot come from two different severities.
+        severity = min(1.0, max(0.0, abs(self.spray_deg) - spray.FOUL_LINE_DEG)
+                       / spray.FOUL_OFF_MAX_DEG)
 
         if self.shape == "POP_UP":
-            # Severe undercut: popped straight back behind the plate. The
-            # camera leaves only ~50 px of screen below home, so the pop
-            # reads mostly through its tall arc; the landing is clamped
-            # onto the visible apron.
-            angle = math.radians(270) - foul_side * random.uniform(
-                math.radians(15), math.radians(60))
+            # Severe undercut: popped up behind the plate. The camera leaves
+            # only ~50 px of screen below home, so the pop reads mostly
+            # through its tall arc; the landing is clamped onto the visible
+            # apron.
             dist_ft = random.uniform(*FOUL_POP_BACK_FT)
-            end = _polar_point_ft(angle, dist_ft)
+            end = _polar_point_ft(self.spray_field_rad, dist_ft)
             self._hit_end = (max(15.0, min(1265.0, end[0])), min(712.0, end[1]))
-            self._hit_peak = random.uniform(*POPUP_PEAK_RANGE)
             self._foul_flight_ms = FOUL_FLIGHT_MS["POP_UP"]
             drift_role = "C"
         elif (q >= FOUL_HR_QUALITY_MIN and severity <= FOUL_HR_MAX_SEVERITY
@@ -2052,29 +2272,33 @@ class HitAnimation:
             # "Foul home run": barreled but barely mistimed — a deep fly
             # hooking just past the pole. Reuses the HR carry model for the
             # flight, but deliberately shows no distance: it's still a strike.
+            #
+            # Crossed into screen polar because the wall is a screen-space
+            # ellipse, through the one function that does that. It used to be
+            # a hand-picked 2-9 deg past the *screen* foul line, which is a
+            # second answer to a question the bearing already answers.
             self.shape = "FLY"
             self.is_foul_hr = True
-            angle = screen_line + foul_side * random.uniform(*FOUL_HR_OFF_RAD)
-            bias = random.random() ** HR_CARRY_BIAS_EXPONENT
-            carry_ft = HR_CARRY_MIN_FT + bias * (
-                HR_CARRY_BASE_RANGE_FT + q * HR_CARRY_QUALITY_BONUS_FT)
-            self._hit_end = _polar_point(
-                angle, _wall_r_at(angle) + carry_ft * _px_per_ft_at(angle))
-            self._hit_peak = HR_PEAK_H
-            self._foul_flight_ms = HR_DURATION_MS
+            # The same physical carry a fair ball gets — this one simply left
+            # on the wrong side of a pole. It used to reuse the home run's
+            # quality-indexed roll past the fence, which is the model that is
+            # gone; a foul home run is a real flight that happened to be foul,
+            # not a home run with an asterisk.
+            carry_ft = max(
+                ball_flight.carry_distance_ft(self.launch_deg,
+                                              self.exit_velocity_mph),
+                park.wall_distance_ft(self.spray_field_rad)
+                + HR_MIN_CLEARANCE_FT)
+            self._hit_end = _polar_point_ft(self.spray_field_rad, carry_ft)
+            self._foul_flight_ms = self._anim_ms(
+                ball_flight.hang_time_s(self.launch_deg, carry_ft))
             pool = ("LF", "3B") if foul_side > 0 else ("RF", "1B")
             drift_role = self._closest_role_in(pool, self._hit_end)
         else:
-            # Generic foul: off-line angle grows with timing severity so a
-            # barely-foul swing hugs the line while a badly mistimed one
-            # sprays sharply foul. Depth is quality-centered inside the
-            # per-shape range (same style as _pick_hit_landing).
-            off = severity * FOUL_OFF_MAX_RAD + random.gauss(0.0, math.radians(4))
-            if self.shape == "GROUNDER":
-                # Choppers need to clearly leave fair ground.
-                off = max(off, math.radians(10))
-            off = max(math.radians(2), min(math.radians(55), off))
-            angle = field_line + foul_side * off
+            # Generic foul. Depth is quality-centered inside the per-shape
+            # range (same style as _pick_hit_landing); the bearing is the
+            # ball's own.
+            angle = self.spray_field_rad
             dist_min, dist_max = FOUL_LANDING_FT[self.shape]
             mid = dist_min + (dist_max - dist_min) * q
             spread = (dist_max - dist_min) * 0.18
@@ -2083,13 +2307,7 @@ class HitAnimation:
             end = _clamp_inside_wall(_polar_point_ft(angle, dist_ft),
                                      LANDING_WALL_MARGIN_PX)
             self._hit_end = (max(15.0, min(1265.0, end[0])), min(712.0, end[1]))
-            if self.shape == "FLY":
-                lo, hi = FLY_HIT_PEAK_RANGE
-                self._hit_peak = lo + q * (hi - lo)
-            elif self.shape == "LINER":
-                self._hit_peak = random.uniform(*LINER_PEAK_RANGE)
-            else:  # GROUNDER
-                self._hit_peak = 0
+            if self.shape == "GROUNDER":
                 dist_px = math.hypot(self._hit_end[0] - HOME[0],
                                      self._hit_end[1] - HOME[1])
                 self._grounder_peaks = _grounder_peaks(q, dist_px)
@@ -2101,6 +2319,8 @@ class HitAnimation:
             drift_role = pool[0]
 
         self.duration_ms = self._foul_flight_ms + FOUL_HOLD_MS
+
+        self._configure_flight_path()
 
         # One side-appropriate fielder drifts toward the landing spot but
         # pulls up short — sells "lets it drop foul". Everyone else keeps
@@ -2244,9 +2464,8 @@ class HitAnimation:
 
         Grounders are played in flight only by IFs and the pitcher — if
         the ball gets past them it has to roll into the OF for retrieval,
-        not be magically caught on a single bounce by the LF. Pop-ups
-        belong to the diamond. Flies and liners can be caught by anyone
-        in the ball's path.
+        not be magically caught on a single bounce by the LF. Everything
+        airborne can be caught by anyone in the ball's path.
 
         The pitcher drops out entirely when they lost the clean-fielding
         roll for this play (_pitcher_fields_clean) — that's what lets a
@@ -2261,7 +2480,21 @@ class HitAnimation:
             # catcher on pop-ups in fair territory. Including P/C in the
             # pool sent the pitcher chasing every centered pop-up, which
             # they almost never field in reality.
-            pool = ["1B", "2B", "SS", "3B"]
+            #
+            # **The outfield belongs here, and leaving it out was a leftover
+            # from when a pop-up meant a ball over the diamond.** A POP_UP is
+            # a launch angle over 50 degrees and nothing else now, and at
+            # these exit velocities that carries: pop-ups land a median of
+            # 178 ft out and reach 380. So the outfielder the ball was hit to
+            # got there, camped under it for whole seconds, and *could not
+            # catch it* — measured over 2,500 balls in play, 11 pop-ups fell
+            # with a fielder a pixel and a half away (5 of them doubles,
+            # because a ball that hangs six seconds has the batter at second
+            # by the time it lands). The other half of the same defect is
+            # what did convert: all 167 caught pop-ups were caught by
+            # infielders, the SS and 2B taking balls landing a median of
+            # 212 ft away and sprinting up to 157 ft to do it.
+            pool = [r for r in ROLES if r not in ("P", "C")]
         else:
             pool = list(ROLES)
         if not self._pitcher_fields_clean and "P" in pool:
@@ -2331,6 +2564,23 @@ class HitAnimation:
         if self.shape in ("FLY", "POP_UP"):
             intercept = self._hit_end
             ball_arrives = self.duration_ms
+        elif abs(self.curve_ft) > 1e-6:
+            # A straight path has an analytic perpendicular foot.  A curved
+            # quadratic would require a cubic closest-point solve; a compact
+            # fixed sample is easier to audit and more than fine-grained
+            # enough for a glove-sized interception.  Rendering calls the
+            # same path function, so the fielder never routes to an invisible
+            # straight chord while the ball bends elsewhere.
+            samples = 64
+            candidates = []
+            for i in range(samples + 1):
+                progress = i / samples
+                point = self._flight_ground_point(progress)
+                dist_sq = ((point[0] - home[0]) ** 2
+                           + (point[1] - home[1]) ** 2)
+                candidates.append((dist_sq, progress, point))
+            _, t_proj, intercept = min(candidates, key=lambda item: item[0])
+            ball_arrives = self._flight_time_fraction(t_proj) * self.duration_ms
         else:
             intercept = (HOME[0] + t_proj * px, HOME[1] + t_proj * py)
             # Not `t_proj * duration_ms`: the ball decelerates, so it is
@@ -2735,10 +2985,19 @@ class HitAnimation:
         home is hands-off); the 30 px default applies to corner/middle
         infielders so they don't bail out at the very edge of their
         range.
+
+        **Measured from the ball's shadow, not from the drawn ball.** The
+        drawn ball carries its lift, and lift is *up* the screen, which is
+        the same direction as away from HOME — so a ball in the air read as
+        further out than its ground position, by its whole height. That is
+        the same fault as the catch gate's: a decision reading the picture.
+        It went unnoticed while the lift was a per-shape pixel peak, and the
+        docstring above has always said what it meant to measure.
         """
         if fielder.role in OUTFIELD_ROLES:
             return False
-        d_ball = math.hypot(self._ball[0] - HOME[0], self._ball[1] - HOME[1])
+        d_ball = math.hypot(self._ball_shadow[0] - HOME[0],
+                            self._ball_shadow[1] - HOME[1])
         d_home = math.hypot(fielder.home_pos[0] - HOME[0],
                             fielder.home_pos[1] - HOME[1])
         bail_buffer = ROLE_BAIL_OUT_BEHIND_PX.get(fielder.role, BAIL_OUT_BEHIND_PX)
@@ -2981,6 +3240,17 @@ class HitAnimation:
         `shadow_y - lift` — and converted with FT_TO_PX_Y, the same
         vertical scale the glove-reach test uses.
         """
+        # A ball the fence verdict called `OFF_THE_WALL` never left the park,
+        # so the fence is never between it and the camera — it is approaching
+        # the face, on it, or coming back off it. Needed once the wall band
+        # became physical: a wall ball now carries only a few feet past the
+        # fence, so its shadow crosses the line in the last frames of an arc
+        # whose height there is nearly zero, and it read as "beyond the fence
+        # and below its top" for a frame or two before the impact fired. When
+        # the arc was aimed a random 5-35 ft past the fence that frame did not
+        # exist.
+        if self._is_wall_candidate:
+            return False
         if not _point_outside_wall(self._ball_shadow):
             return False
         lift_px = self._ball_shadow[1] - self._ball[1]
@@ -3005,10 +3275,9 @@ class HitAnimation:
 
         `ground_roll` owns the physics and states it in feet and seconds;
         this is the single place it becomes screen motion. The *direction*
-        comes from the flight — horizontal motion is linear in all four arc
-        shapes, so the ground-frame bearing at landing is exactly
-        (hit_end − HOME); sampling the rendered arc instead would leak the
-        sin lift into the y component and push the ball deeper. The
+        comes from the flight's ground-plane tangent at landing; sampling the
+        rendered ball itself would leak the vertical sin lift into the y
+        component and push the ball deeper. The
         *magnitude* is not taken from the flight either: a batted ball
         lands at its own speed, near terminal velocity, and how fast the
         animation happened to fly it has no claim on what that is.
@@ -3032,8 +3301,7 @@ class HitAnimation:
                 f.pulled_up = False
                 f.max_speed = f.base_max_speed
 
-        dx = self._hit_end[0] - HOME[0]
-        dy = self._hit_end[1] - HOME[1]
+        dx, dy = self._landing_direction_px()
         dist_px = math.hypot(dx, dy)
         self._ball_px_per_ft = self._landing_px_per_ft()
         self._ground_path = self._landing_ground_path()
@@ -3062,15 +3330,32 @@ class HitAnimation:
         # contact that ends the hopping, so this runs to len(hops) + 1.
         self._bounces_completed = 0
 
+    def _landing_direction_px(self):
+        """The ball's direction of travel at landing, as a screen vector.
+
+        The roll's bearing and the px-per-ft it is carried at are two
+        readings of one direction, so they take it from here rather than
+        deriving it separately — a drift between them would roll the ball
+        at a speed computed for a bearing it is not travelling on.
+        `batted_ball_path` bends the flight, so the departure bearing is
+        not the landing one; without a path we fall back to the straight
+        line from home to the landing point.
+        """
+        if self.flight_path is not None:
+            progress = (self._current_flight_progress
+                        if self._elapsed < self.duration_ms else 1.0)
+            tangent_x_ft, tangent_y_ft = self.flight_path.tangent_ft(progress)
+            return tangent_x_ft * FT_TO_PX_X, -tangent_y_ft * FT_TO_PX_Y
+        return (self._hit_end[0] - HOME[0], self._hit_end[1] - HOME[1])
+
     def _landing_px_per_ft(self):
         """Pixels per foot along the ball's bearing.
 
         The projection is anisotropic, so this is the only honest way to
         carry a real speed or a real distance onto the screen — same
-        reasoning as `_ft_dist` and `_px_per_ft_at`.
+        reasoning as `_ft_dist`.
         """
-        dx = self._hit_end[0] - HOME[0]
-        dy = self._hit_end[1] - HOME[1]
+        dx, dy = self._landing_direction_px()
         dist_ft = _ft_dist(dx, dy)
         if dist_ft <= 1e-9:
             return FT_TO_PX_X
@@ -3139,31 +3424,142 @@ class HitAnimation:
         """When the ball reaches path fraction `s`, as a time fraction."""
         return _decel_time_fraction(s, self._flight_end_speed_ratio)
 
-    def _wall_impact_peak_cap(self):
-        """The largest arc peak that still strikes the fence *face*.
+    def _path_fraction_at_wall(self, norm):
+        """Path fraction at which the flight's ground point first reaches
+        `norm` in normalized-ellipse units, or None if it never does.
 
-        The ball reaches the fence at path fraction `wall_r / dist`, which
-        the flight's deceleration puts at an earlier *phase* — and the
-        arc's height is keyed to the phase. Inverting `peak · sin(π·phase)`
-        for the peak at WALL_IMPACT_MAX_HEIGHT_FRAC of the fence height is
-        the whole calculation.
-
-        A crossing so late that the ball is already on the ground there
-        needs no cap and would divide by ~0, so it returns the peak
-        unchanged.
+        Bisected on the flight path itself rather than read off as
+        `wall_r / dist` along a straight line: the path curves with
+        sidespin, and near the end of a sine arc a small error in *where*
+        the crossing is becomes a large one in the height there.
         """
-        dx = self._hit_end[0] - HOME[0]
-        dy_math = HOME[1] - self._hit_end[1]
-        dist_px = math.hypot(dx, dy_math)
-        if dist_px <= 1e-9:
-            return self._hit_peak
-        wall_px = _wall_r_at(math.atan2(dy_math, dx))
-        phase = self._flight_time_fraction(min(1.0, wall_px / dist_px))
-        lift_per_peak = math.sin(math.pi * phase)
-        if lift_per_peak <= 1e-6:
-            return self._hit_peak
-        target_px = WALL_IMPACT_MAX_HEIGHT_FRAC * WALL_HEIGHT_FT * FT_TO_PX_Y
-        return target_px / lift_per_peak
+        def ellipse_d(s):
+            x, y = self._flight_ground_point(s)
+            return math.hypot((x - HOME[0]) / WALL_SEMI_X,
+                              (HOME[1] - y) / WALL_SEMI_Y)
+
+        if ellipse_d(1.0) < norm:
+            return None
+        lo, hi = 0.0, 1.0
+        for _ in range(40):
+            mid = 0.5 * (lo + hi)
+            if ellipse_d(mid) < norm:
+                lo = mid
+            else:
+                hi = mid
+        return hi
+
+    def _flight_height_ft(self, progress):
+        """How high the ball is, in real feet, at path fraction `progress`.
+
+        **The one answer to that question**, and the same arc
+        `park.fence_verdict` compared against the fence when it decided
+        whether this ball was a home run. There used to be a second, and it
+        was the one that got drawn: a per-shape peak in *pixels* (`HR_PEAK_H
+        = 200`, a quality lerp over `FLY_HIT_PEAK_RANGE`, `random.uniform`
+        over `LINER_PEAK_RANGE` / `POPUP_PEAK_RANGE`) rendered as `peak *
+        sin(pi * phase)`, tied to neither the launch angle nor the carry.
+
+        That was not merely redundant. **The catch gate reads how high the
+        ball is**, so whether a fielder could take a line drive in flight was
+        decided by `random.uniform(25, 40)`; and one frame later, after the
+        landing, the identical expression read a genuinely physical height,
+        because `_init_ball_on_ground` converts `ground_roll`'s `hop.height_ft`.
+        The same number meant two different things either side of the grass.
+
+        `HR_PEAK_H` was `HR_DURATION_MS`'s twin one axis over — the home run
+        came off its scripted 5000 ms clock for exactly this reason and kept a
+        scripted arc. A 420 ft home run at 27 degrees really does peak at about
+        54 ft, which is 59 px, not 200.
+
+        Parameterised on **path fraction times carry** rather than on the
+        radial ground distance, which is what lets one expression cover every
+        case with no branch. A fair airborne ball has `_hit_end` at the carry,
+        so the two are the same number and the height reaches exactly 0 at the
+        landing. It sidesteps `batted_ball_path`'s curve, where arc length and
+        radius differ. And a flight truncated by something other than the
+        ground — a wall ball cut off at the fence, a foul pop clamped onto the
+        visible apron by `_setup_foul` — keeps its real apex instead of having
+        it compressed onto the shortened draw. That last one is what keeps a
+        foul pop-up readable: 65-125 px across the whole 55-85 degree band,
+        because a steeper launch buys less carry.
+
+        The GROUNDER is the exception and is deliberately left alone: its
+        in-flight hops are still `GROUNDER_BOUNCE_PROFILE`, stated in pixels,
+        and are the last px-unit height model in this file.
+        """
+        return ball_flight.height_at_distance_ft(
+            self.launch_deg, self._carry_ft,
+            max(0.0, min(1.0, progress)) * self._carry_ft)
+
+    def _flight_lift_px(self, progress):
+        """`_flight_height_ft` in drawn pixels — the one seam it crosses."""
+        return (max(0.0, self._flight_height_ft(progress)) * FT_TO_PX_Y
+                * self._fence_lift_scale)
+
+    def _fence_lift_correction(self):
+        """The drawn ball has a radius; the fence's rim is a line.
+
+        `park.fence_verdict` has already put this ball on one side of that
+        rim, off its physical height at the fence. What it cannot know is that
+        the ball is drawn as 3 px of radius on a 13.2 px face — so a home run
+        clearing by inches draws its *bottom* edge under the rim, and a ball
+        off the wall arriving 11 ft up draws its *top* edge over it. The
+        picture contradicting a verdict that is correct.
+
+        One scale on the whole arc, solved at the fence, so the arc keeps
+        its shape. It is 1.0 unless the ball arrives within about a ball's
+        radius of the rim, which is the only place either bound can bite.
+
+        It replaced two solves against the *sine*: `_home_run_peak_floor`,
+        which raised the peak, and `_wall_impact_landing_phase`, which moved
+        where the arc came down. Both existed because the drawn arc and the
+        physical trajectory were unrelated, so how high the ball was at the
+        fence was whatever the arc happened to give — measured over 162 wall
+        balls, 54% were drawn *above* the rim as they struck it. Neither is
+        needed against an arc whose height at the fence is the verdict's
+        own number, and neither has to wait for `_flight_end_speed_ratio`:
+        a sine's height at the fence depended on *when* the ball got there,
+        and an arc in the path does not.
+        """
+        home_run = self.outcome == "HOME RUN"
+        if not home_run and not self._is_wall_candidate:
+            return 1.0
+        s = self._path_fraction_at_wall(1.0 if home_run
+                                        else BALL_WALL_LIMIT_NORM)
+        if s is None:
+            return 1.0
+        if home_run:
+            # A frame past the crossing, not the crossing: see
+            # HR_RIM_CLEARANCE_FT. The wall ball needs no such margin — its
+            # bound is a *maximum*, and a descending ball is only lower on
+            # the frame after.
+            s = min(1.0, s + HR_RIM_CLEARANCE_FT / max(1e-6, self._carry_ft))
+        lift = max(0.0, self._flight_height_ft(s)) * FT_TO_PX_Y
+        if lift <= 1e-6:
+            return 1.0
+        if home_run:
+            return max(1.0, HR_FENCE_MIN_LIFT_PX / lift)
+        return min(1.0, WALL_IMPACT_MAX_LIFT_PX / lift)
+
+    def _wall_impact_lift_px(self):
+        """How far up the drawn face this ball strikes the fence.
+
+        The ball's physical height at the fence — the number
+        `park.fence_verdict` compared with the fence's height to call it off
+        the wall — drawn at the scale every other height in this file is drawn
+        at, and held under the rim so no ball off the wall is ever drawn over
+        it. The verdict's own bearing, not the curved path's, so this is the
+        verdict's number and not a second one.
+
+        It used to reach that height by its own call to `carry_distance_ft`
+        and `height_at_distance_ft`; it is `_flight_height_ft` now, because
+        this is a question about the arc and the arc is that function.
+        """
+        wall_ft = park.wall_distance_ft(_fair_field_angle(self.spray_field_rad))
+        lift_px = max(0.0, self._flight_height_ft(
+            wall_ft / self._carry_ft)) * FT_TO_PX_Y
+        return min(lift_px, WALL_IMPACT_MAX_LIFT_PX)
 
     def _fielded_ft(self):
         """Where the ball was actually gloved, in feet from home.
@@ -3210,11 +3606,17 @@ class HitAnimation:
                 speed_fts=0.0, hops=(), final_retention=1.0,
                 grass_decel_ft_s2=self._ground_path.grass_decel_ft_s2)
 
-    def _begin_wall_drop(self, height_px):
+    def _begin_wall_drop(self, height_px, start_ms=0.0):
         """Let a ball that struck the fence fall down the face.
 
+        `start_ms` is when it struck, on the since-landing clock: 0 for a
+        ball off the wall on the fly, which lands by striking it, and the
+        moment of contact for one that landed short and hopped into it. The
+        second used to have its hop cut to the grass in the frame it
+        reached the wall — a median 2.3 px, up to 5.7, straight down.
+
         It hits the wall several feet up (bounded by
-        WALL_IMPACT_MAX_HEIGHT_FRAC) and has to get to the grass. Planting
+        WALL_IMPACT_MAX_LIFT_PX) and has to get to the grass. Planting
         it there in the same frame is a jump downward at the exact moment
         the viewer is watching the carom — the last of the reported
         abruptness, and the part that survives even once the ball is no
@@ -3237,7 +3639,8 @@ class HitAnimation:
             return
         fall_ms = self._anim_ms(math.sqrt(2.0 * height_ft / ball_flight.G_FT_S2))
         self._wall_drop = (height_px, fall_ms)
-        self._bounces_end_ms = fall_ms
+        self._wall_drop_start_ms = start_ms
+        self._bounces_end_ms = start_ms + fall_ms
 
     def _hops_completed(self, tau_ms):
         """Ground contacts already made at `tau_ms` since landing."""
@@ -3296,10 +3699,11 @@ class HitAnimation:
         """
         if self._wall_drop is not None:
             height_px, fall_ms = self._wall_drop
-            if tau_ms >= fall_ms:
+            since_ms = max(0.0, tau_ms - self._wall_drop_start_ms)
+            if since_ms >= fall_ms:
                 return 0.0
             # Free fall from rest: h − ½gt², with T² = 2h/g.
-            return height_px * (1.0 - (tau_ms / fall_ms) ** 2)
+            return height_px * (1.0 - (since_ms / fall_ms) ** 2)
         if tau_ms >= self._bounces_end_ms:
             return 0.0
         for t_start, t_dur, h, _r in self._bounces:
@@ -3467,8 +3871,13 @@ class HitAnimation:
                 # otherwise keep pogoing in place at the wall as the
                 # remaining hops play out — same visual bug as the
                 # in-flight wall impact. Truncate the schedule on contact
-                # so the rebounded ball just rolls.
+                # so the rebounded ball just rolls — once it is down: a
+                # ball that reaches the fence mid-hop falls down the face
+                # from wherever the hop had it, exactly as one that
+                # struck it on the fly does.
+                lift_px = self._current_bounce_lift(tau_ms)
                 self._end_hopping()
+                self._begin_wall_drop(lift_px, start_ms=tau_ms)
             # Pull ball back inside: scale toward home along the radial line
             # in ellipse-normalized space (linear in pygame coords too).
             s = limit / ellipse_d
@@ -3476,8 +3885,8 @@ class HitAnimation:
             self._ball_pos[1] = HOME[1] + dy_pyg * s
 
     def _maybe_trigger_in_flight_wall_impact(self):
-        """Check whether the ball's shadow has crossed outside the wall
-        ellipse during flight. If yes, fire the wall-impact transition:
+        """Check whether the ball's shadow has reached the fence (the line a
+        live ball is held at) during flight. If yes, fire the wall-impact transition:
         plant the ball at the wall edge, kill most of its velocity (and
         flip inward so it rebounds toward the fielder rather than
         continuing radially outward), set self._wall_hit so the
@@ -3496,21 +3905,26 @@ class HitAnimation:
         dy_math = HOME[1] - sy   # math convention (+y outward)
         if dx == 0 and dy_math == 0:
             return
+        # Fires on the line the impact point is placed on, not on the fence
+        # behind it. Triggered at the fence, the ball was pulled back in to
+        # that line on the frame it struck — a visible jump toward the camera
+        # at the one moment the viewer is watching, which was 8-11 px when the
+        # line sat 8 px in. Now the only correction is the part of one frame's
+        # travel that overshot it.
+        if math.hypot(dx / WALL_SEMI_X, dy_math / WALL_SEMI_Y) < BALL_WALL_LIMIT_NORM:
+            return
         angle = math.atan2(dy_math, dx)
         wall_r = _wall_r_at(angle)
-        shadow_r = math.hypot(dx, dy_math)
-        if shadow_r < wall_r:
-            return
 
         # How far up the face the ball hit. Bounded by
-        # WALL_IMPACT_MAX_HEIGHT_FRAC, and read off the frame rather than
+        # WALL_IMPACT_MAX_LIFT_PX, and read off the frame rather than
         # re-derived, so the drop below starts from exactly where the ball
         # was last drawn.
         impact_lift_px = max(0.0, self._ball_shadow[1] - self._ball[1])
 
         # Impact point: the wall edge along this angle, pulled in to the
-        # line a live ball is held at so the ball renders flush with the
-        # face rather than embedded in it.
+        # line a live ball is held at so the ball renders touching the face
+        # rather than embedded in it.
         #
         # That line is BALL_WALL_LIMIT_NORM, in normalized-ellipse units.
         # This used to subtract BALL_WALL_MARGIN_PX from the *radius*,
@@ -3572,8 +3986,15 @@ class HitAnimation:
         before it lands? Catch fires when (1) the fielder has read the
         ball (past their see-react delay), (2) the ball's *ground
         projection* (shadow) comes within INTERCEPT_REACH_PX of their
-        body, and (3) the ball's lift is within glove reach
-        (INTERCEPT_MAX_LIFT_PX).
+        body, and (3) the ball is within `GLOVE_REACH_FT` of the grass — a
+        ball higher than the glove is over the fielder and goes through.
+
+        **(3) is asked in feet, of the flight model**, not of the drawn
+        pixels. It used to read `_ball_shadow[1] - _ball[1]` against
+        `INTERCEPT_MAX_LIFT_PX`, and the drawn lift was a per-shape pixel
+        peak with no tie to the launch angle or the carry — so whether a
+        fielder could catch a line drive in flight came out of
+        `random.uniform(25, 40)`. A decision must not read the picture.
 
         The shadow-based lateral check decouples "where the ball is on
         the field" from "how high above the ground the ball is", so a
@@ -3608,8 +4029,16 @@ class HitAnimation:
         """
         bx, by = self._ball
         sx, sy = self._ball_shadow
-        lift = max(0.0, sy - by)
-        if lift > INTERCEPT_MAX_LIFT_PX:
+        if self.shape == "GROUNDER":
+            # The one shape whose height is still drawn rather than modelled:
+            # `GROUNDER_BOUNCE_PROFILE` states its hops in pixels, so the
+            # drawn lift is the only height a grounder has. Left exactly as
+            # it was, which is what keeps ground-ball outcomes identical
+            # across this change.
+            if max(0.0, sy - by) > INTERCEPT_MAX_LIFT_PX:
+                return False
+        elif self._flight_height_ft(
+                self._current_flight_progress) > GLOVE_REACH_FT:
             return False
         for role in self._eligible_intercept_pool():
             # Whoever is covering first is running to receive a throw, not
@@ -3662,7 +4091,7 @@ class HitAnimation:
                 return True
         return False
 
-    def _resolve_ground_ball(self, catcher, unassisted):
+    def _resolve_ground_ball(self, catcher, unassisted, cover_role=None):
         """Decide a fielded grounder by the clock, not by the geometry.
 
         Reaching the ball used to *be* the out. It now only means the
@@ -3696,8 +4125,18 @@ class HitAnimation:
         # the unassisted carry would let a Gold Glove first baseman sprint at
         # 29 ft/s and then carry the ball to the bag at 27 — two models of one
         # fielder's legs.
-        throw_fts = (self.defense.sprint_fts if unassisted
-                     else self.defense.throw_fts)
+        if unassisted:
+            throw_fts = self.defense.sprint_fts
+        elif catcher.role == "1B" and cover_role == "P":
+            # The 3-1 is a feed to a moving pitcher a few steps away, not an
+            # across-the-diamond throw.  At the routine infield arm speed a
+            # 15-30 ft toss crossed the screen in roughly 0.15-0.27 real
+            # seconds and read as a bullet.  Cap it at the soft-toss speed;
+            # `min` still respects a deliberately weaker defense profile.
+            throw_fts = min(self.defense.throw_fts,
+                            infield_timing.FIRST_BASE_SOFT_TOSS_FTS)
+        else:
+            throw_fts = self.defense.throw_fts
 
         # How long the ball actually took to reach the glove. For an
         # in-flight intercept the ball's own travel time is right, because
@@ -3807,7 +4246,8 @@ class HitAnimation:
         # the timing was resolved afterwards, so a throw from deep in
         # the hole looked identical to one from on top of the bag while
         # the model knew they were 0.4 s apart.
-        timing = self._resolve_ground_ball(catcher, unassisted=unassisted)
+        timing = self._resolve_ground_ball(
+            catcher, unassisted=unassisted, cover_role=cover_role)
 
         # From here the throw (or the carry) owns ball rendering and the
         # finish clock, whichever way the ball reached the glove.
@@ -4245,7 +4685,7 @@ class HitAnimation:
             self._ball_shadow = catcher_pos
         elif elapsed <= self._go_throw_arrive_ms:
             t = (elapsed - self._go_throw_start_ms) / max(1.0, self._go_throw_ms)
-            self._ball = _arc_fly(catcher_pos, first_base, THROW_PEAK_H, t)
+            self._ball = _arc_sine(catcher_pos, first_base, THROW_PEAK_H, t)
             self._ball_shadow = _lerp(catcher_pos, first_base, t)
         else:
             self._ball = first_base
@@ -4310,13 +4750,13 @@ class HitAnimation:
         the play is already over, this is pure presentation.
         """
         t = min(1.0, elapsed / max(1, self._foul_flight_ms))
+        ground = self._flight_ground_point(t)
         if self.shape == "GROUNDER":
-            self._ball = _arc_grounder(HOME, self._hit_end, self._grounder_peaks, t)
-        elif self.shape == "LINER":
-            self._ball = _arc_liner(HOME, self._hit_end, self._hit_peak, t)
+            self._ball = _arc_grounder(
+                HOME, self._hit_end, self._grounder_peaks, t, ground=ground)
         else:
-            self._ball = _arc_fly(HOME, self._hit_end, self._hit_peak, t)
-        self._ball_shadow = _lerp(HOME, self._hit_end, _shadow_t(self.shape, t))
+            self._ball = (ground[0], ground[1] - self._flight_lift_px(t))
+        self._ball_shadow = ground
 
     def _update_hit(self, elapsed):
         # Post-intercept sub-animations (the in-flight catch + the throw
@@ -4330,26 +4770,28 @@ class HitAnimation:
 
         if in_flight:
             # Two parameters, because the ball decelerates: `phase` is how
-            # far through the flight time it is, `t` how far along the
-            # path that puts it. The vertical shape belongs to the first
-            # and the position to the second.
+            # far through the flight time it is, `t` how far along the path
+            # that puts it. The grounder's hop schedule still needs both —
+            # its hops are spaced over the flight *time*, so a decelerating
+            # ball takes equal-duration hops covering less and less ground.
+            #
+            # **The airborne ball needs only `t` now**, and that is a real
+            # simplification rather than an oversight. The old sine had no
+            # tie to position at all, so its apex had to be pinned to the
+            # flight time by hand; an arc in the *path* is a function of
+            # where the ball *is*, and where the ball is already carries the
+            # deceleration. One fewer thing that can disagree with itself.
             phase = elapsed / self.duration_ms
             t = self._flight_path_fraction(phase)
+            self._current_flight_progress = t
+            ground = self._flight_ground_point(t)
             if self.shape == "GROUNDER":
                 self._ball = _arc_grounder(HOME, self._hit_end,
-                                           self._grounder_peaks, t, phase)
-            elif self.shape == "LINER":
-                self._ball = _arc_liner(HOME, self._hit_end, self._hit_peak,
-                                        t, phase)
+                                           self._grounder_peaks, t, phase,
+                                           ground=ground)
             else:
-                self._ball = _arc_fly(HOME, self._hit_end, self._hit_peak,
-                                      t, phase)
-            self._ball_shadow = _lerp(HOME, self._hit_end, _shadow_t(self.shape, t))
-            # Wall-candidate trajectories aim past the wall; this is what
-            # actually stops the ball at the wall and routes it through
-            # the wall-hit classifier. No-op for non-wall-candidates.
-            if self._is_wall_candidate and not self._wall_hit:
-                self._maybe_trigger_in_flight_wall_impact()
+                self._ball = (ground[0], ground[1] - self._flight_lift_px(t))
+            self._ball_shadow = ground
             # Keep first base covered as the play develops. `_primary_role`
             # can change mid-flight, and whoever it lands on has to be off
             # the bag — so the assignment is re-resolved rather than fixed
@@ -4359,14 +4801,31 @@ class HitAnimation:
                 self._route_first_base_cover(self._primary_role)
             # In-flight intercept check — any fielder reaching the ball
             # before it lands turns this into a FLYOUT or GROUNDOUT.
-            # Suppressed for wall-candidate trajectories: those are aimed
-            # past the wall by definition (gappers/down-the-line shots
-            # that pass every fielder by design), and letting an OF
-            # interception fire there would defeat the wall-bounce XBH
-            # logic the wall-candidate path exists to produce.
-            if (self.outcome == "IN_PLAY"
-                    and not self._secured
-                    and not self._is_wall_candidate):
+            #
+            # **A ball on its way to the fence is checked like any other**,
+            # and it is asked *before* the fence is, because the glove is in
+            # front of the wall. This used to be suppressed outright for
+            # wall candidates, on the grounds that they "pass every fielder
+            # by design" — true of the coin flip that once picked them, which
+            # also aimed the ball into a gap, and false of the carry model
+            # that picks them now. Candidacy is `park.fence_verdict` off this
+            # ball's own launch angle, exit velocity and bearing, so a fly
+            # that carries 402 ft straight at the centre fielder is a wall
+            # candidate, and the suppression made it an automatic extra-base
+            # hit: measured over 2,500 balls in play, all 72 wall candidates
+            # were doubles, and on 60 of them a fielder was standing inside
+            # glove range of the ball at glove height while the catch check
+            # was not allowed to run. What the viewer saw was the centre
+            # fielder camped at the warning track and the ball dropping
+            # through him.
+            #
+            # Nor is there anything left to defeat. A wall ball is *by
+            # definition* one that reaches the fence below its 12 ft rim —
+            # anything higher cleared it and is a home run — so it arrives at
+            # glove height, and whether it is caught is the ordinary question
+            # of whether somebody got there. About one in six still are not
+            # (gappers and balls down the line), and those still carom.
+            if self.outcome == "IN_PLAY" and not self._secured:
                 if self._check_in_flight_intercept():
                     # Something happened at the ball this frame. Returning
                     # short-circuits the in-flight primary motion block
@@ -4381,6 +4840,19 @@ class HitAnimation:
                     if self._secured_in_flight:
                         self._render_post_fielding(elapsed)
                     return
+            # Nobody got to it, so the fence does. Wall-candidate
+            # trajectories aim past the wall; this is what actually stops
+            # the ball at the face and routes it through the wall-hit
+            # classifier. No-op for non-wall-candidates.
+            #
+            # Last, because a fielder who reaches the ball reaches it in
+            # front of the fence. Run before the catch check — where it
+            # used to sit — it plants the ball at the wall and truncates
+            # the flight on the crossing frame, and the check above would
+            # then hand the carom to whichever fielder was standing at the
+            # impact point.
+            if self._is_wall_candidate and not self._wall_hit:
+                self._maybe_trigger_in_flight_wall_impact()
         elif self._needs_secure:
             # SINGLE/DOUBLE/TRIPLE: stateful ball-on-ground physics — linear
             # friction + radial reflection off the wall, lazy-initialized
@@ -4582,31 +5054,34 @@ class HitAnimation:
 
     # ---- Draw -----------------------------------------------------------
 
+    def presentation_frame(self):
+        """Copy only visible state; no game references or mutable fielder data."""
+        from strikefactor.gameplay.fielding_record import FielderFrame, FieldingFrame
+
+        fielders = []
+        error = None
+        for f in self.fielders.values():
+            x, y = f.pos
+            if math.dist(f.target, f.pos) < 2.0:
+                y += math.sin(self._elapsed * SWAY_FREQUENCY + f.sway_phase) * SWAY_AMPLITUDE
+            dx, dy = self._ball[0] - x, self._ball[1] - y
+            length = math.hypot(dx, dy) or 1.0
+            fielders.append(FielderFrame(f.role, (x, y), (x + 6 * dx / length, y + 6 * dy / length)))
+            if f.role == self._error_role and self._error_mark_alpha() > 0:
+                since = self._elapsed - self._error_marked_at_ms
+                rise = ERROR_MARK_RISE_PX * min(1.0, since / max(1e-6, self._anim_ms(ERROR_MARK_POP_S)))
+                error = (x, y - ERROR_MARK_OFFSET_PX - rise, self._error_mark_alpha())
+        distance = None
+        if self.hr_distance_ft is not None and self._hr_distance_alpha() > 0:
+            distance = (self.hr_distance_ft, self._hit_end[0], int(self._hit_end[1]) - 28,
+                        self._hr_distance_alpha())
+        return FieldingFrame(self._elapsed, tuple(self._ball), tuple(self._ball_shadow),
+                             not self._ball_behind_wall(), not _point_outside_wall(self._ball_shadow),
+                             tuple(fielders), error, distance)
+
     def draw(self, screen):
-        self._draw_field(screen)
-
-        # Fielders first so the ball renders on top (sells "ball in glove").
-        for fielder in self.fielders.values():
-            self._draw_fielder(screen, fielder, self._ball)
-
-        # The shadow is the ball's point on the *ground*, so once that is
-        # out of the park it is on the far side of the fence and nothing
-        # on this side can see it — regardless of how high the ball is.
-        if not _point_outside_wall(self._ball_shadow):
-            sx, sy = int(self._ball_shadow[0]), int(self._ball_shadow[1])
-            pygame.draw.ellipse(screen, (60, 60, 60), pygame.Rect(
-                sx - BALL_SHADOW_W_PX // 2, sy - BALL_SHADOW_H_PX // 2,
-                BALL_SHADOW_W_PX, BALL_SHADOW_H_PX))
-
-        if not self._ball_behind_wall():
-            bx, by = int(self._ball[0]), int(self._ball[1])
-            pygame.draw.circle(screen, (255, 255, 255), (bx, by), BALL_RADIUS_PX)
-
-        if self.hr_distance_ft is not None:
-            self._draw_hr_distance(screen)
-
-        # Once the banner has fired, show a "press any key" prompt so the
-        # player controls when to advance instead of an arbitrary timeout.
+        from strikefactor.ui.fielding_renderer import draw_frame
+        draw_frame(screen, self.presentation_frame())
         if self.banner_fired:
             self._draw_continue_prompt(screen)
 
@@ -4627,25 +5102,6 @@ class HitAnimation:
         screen.blit(shadow, rect.move(2, 2))
         screen.blit(body, rect)
 
-    def _draw_fielder(self, screen, fielder, ball_pos):
-        x, y = fielder.pos[0], fielder.pos[1]
-        # Subtle idle sway only when essentially at target (not actively moving).
-        dist_to_target = math.hypot(fielder.target[0] - x, fielder.target[1] - y)
-        if dist_to_target < 2.0:
-            y = y + math.sin(self._elapsed * SWAY_FREQUENCY + fielder.sway_phase) * SWAY_AMPLITUDE
-
-        pygame.draw.circle(screen, BODY_COLOR, (int(x), int(y)), BODY_RADIUS_PX)
-
-        bdx = ball_pos[0] - x
-        bdy = ball_pos[1] - y
-        bd = math.hypot(bdx, bdy) or 1.0
-        gx = int(x + 6 * bdx / bd)
-        gy = int(y + 6 * bdy / bd)
-        pygame.draw.circle(screen, GLOVE_COLOR, (gx, gy), 3)
-
-        if fielder.role == self._error_role:
-            self._draw_error_mark(screen, x, y)
-
     def _error_mark_alpha(self):
         """Fade ramp for the error "!": 1 through the hold, then down.
 
@@ -4662,37 +5118,6 @@ class HitAnimation:
         if since <= hold:
             return 1.0
         return max(0.0, 1.0 - (since - hold) / self._anim_ms(ERROR_MARK_FADE_S))
-
-    def _draw_error_mark(self, screen, x, y):
-        """The "!" over the fielder who just booted it.
-
-        Anchored to the fielder's own drawn position — including the idle
-        sway — rather than to where the misplay happened, so it stays with
-        them while they turn and chase the ball they let through.
-        """
-        alpha = self._error_mark_alpha()
-        if alpha <= 0.0:
-            return
-
-        if self._error_font is None:
-            self._error_font = pygame.font.SysFont(None, 30, bold=True)
-
-        # A small pop upward off the head on appearance, so it reads as
-        # something that just happened rather than a label that was always
-        # there.
-        since = self._elapsed - self._error_marked_at_ms
-        rise = ERROR_MARK_RISE_PX * min(
-            1.0, since / max(1e-6, self._anim_ms(ERROR_MARK_POP_S)))
-
-        body = self._error_font.render("!", True, ERROR_MARK_COLOR)
-        shadow = self._error_font.render("!", True, (0, 0, 0))
-        body.set_alpha(int(alpha * 255))
-        shadow.set_alpha(int(alpha * 200))
-
-        rect = body.get_rect(
-            center=(int(x), int(y - ERROR_MARK_OFFSET_PX - rise)))
-        screen.blit(shadow, rect.move(1, 1))
-        screen.blit(body, rect)
 
     def _hr_distance_alpha(self):
         """Reveal ramp for the distance readout: 0 until it appears, then
@@ -4712,91 +5137,3 @@ class HitAnimation:
             return 0.0
         return min(1.0, (since_landing - HR_DISTANCE_REVEAL_DELAY_MS)
                    / HR_DISTANCE_FADE_MS)
-
-    def _draw_hr_distance(self, screen):
-        alpha = self._hr_distance_alpha()
-        if alpha <= 0.0:
-            return
-
-        if self._font is None:
-            self._font = pygame.font.SysFont(None, 36, bold=True)
-
-        text = f"{self.hr_distance_ft} FT"
-        body = self._font.render(text, True, (255, 230, 120))
-        shadow = self._font.render(text, True, (0, 0, 0))
-        body.set_alpha(int(alpha * 255))
-        shadow.set_alpha(int(alpha * 200))
-
-        # Clamp text to remain visible even when the ball lands at or above
-        # the top of the screen (the rare deep blasts). Without this, the
-        # distance disappears off-screen exactly when the player most wants
-        # to read it.
-        text_h = body.get_height()
-        text_y = max(text_h // 2 + 4, int(self._hit_end[1]) - 28)
-        rect = body.get_rect(center=(int(self._hit_end[0]), text_y))
-        screen.blit(shadow, rect.move(2, 2))
-        screen.blit(body, rect)
-
-    def _draw_field(self, screen):
-        hx, hy = HOME
-
-        # Outfield wall — sampled-arc band rather than a single pygame.draw.arc.
-        # The arc spans from one foul-pole corner across CF to the other,
-        # forming a continuous boundary. The parametric ellipse angle at the
-        # foul corners is `atan2(WALL_FT_X, WALL_FT_Y)` — using the *real-foot*
-        # semi-axes, since the parametric angle is invariant under axis-aligned
-        # scaling. (Using the screen-pixel semi-axes was the previous bug that
-        # left a gap between the foul lines and the wall.) The geometry is
-        # static, so it's computed once and cached in _wall_geometry().
-        geo = _wall_geometry()
-        wall_top_pts = geo['top']
-        wall_bot_pts = geo['bot']
-        face_poly = geo['face_poly']
-
-        # Wall face — filled band so the wall reads as a 3D structure.
-        pygame.draw.polygon(screen, (60, 60, 60), face_poly, 0)
-        # Bright top edge (outer rim of the wall, where it meets the sky/black
-        # background) and a softer inner edge where it meets the field.
-        pygame.draw.lines(screen, (200, 200, 200), False, wall_top_pts, 2)
-        pygame.draw.lines(screen, (115, 115, 115), False, wall_bot_pts, 1)
-
-        # Foul lines — terminate at the inner-wall edge (where the field
-        # meets the wall face), not at the outer rim. wall_bot_pts[0] is the
-        # right foul-pole base, wall_bot_pts[-1] is the left.
-        foul_right_base = wall_bot_pts[0]
-        foul_left_base  = wall_bot_pts[-1]
-        line_color = (150, 150, 150)
-        pygame.draw.line(screen, line_color, (hx, hy), foul_right_base, 1)
-        pygame.draw.line(screen, line_color, (hx, hy), foul_left_base, 1)
-
-        # Foul poles — short vertical bars rising from the wall corners. Match
-        # the glove yellow so the only non-gray elements are the two play-
-        # critical accents (poles + glove).
-        foul_right_top = wall_top_pts[0]
-        foul_left_top  = wall_top_pts[-1]
-        pole_color = (245, 215, 90)
-        pygame.draw.line(screen, pole_color, foul_right_top,
-                         (foul_right_top[0], foul_right_top[1] - FOUL_POLE_HEIGHT_PX), 2)
-        pygame.draw.line(screen, pole_color, foul_left_top,
-                         (foul_left_top[0], foul_left_top[1] - FOUL_POLE_HEIGHT_PX), 2)
-
-        # Infield diamond — minimalist grayscale (was brown).
-        diamond = [HOME, BASES["1B"], BASES["2B"], BASES["3B"]]
-        pygame.draw.polygon(screen, (35, 35, 35), diamond, 0)
-        pygame.draw.polygon(screen, (180, 180, 180), diamond, 2)
-
-        # Bases
-        for bp in BASES.values():
-            bx, by = int(bp[0]), int(bp[1])
-            pygame.draw.rect(screen, (220, 220, 220),
-                             pygame.Rect(bx - 5, by - 5, 10, 10))
-
-        # Pitcher's mound — grayscale to match the diamond.
-        pygame.draw.circle(screen, (35, 35, 35), PITCHERS_MOUND, 14)
-        pygame.draw.circle(screen, (180, 180, 180), PITCHERS_MOUND, 14, 1)
-
-        # Home plate
-        pygame.draw.polygon(screen, (220, 220, 220), [
-            (hx - 8, hy - 8), (hx + 8, hy - 8), (hx + 8, hy),
-            (hx, hy + 6), (hx - 8, hy),
-        ], 0)

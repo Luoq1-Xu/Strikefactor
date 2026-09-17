@@ -20,6 +20,7 @@ class KeyAction(Enum):
     CHALLENGE = "challenge"
     TOGGLE_HUD_MODE = "toggle_hud_mode"
     SWING_REPLAY = "swing_replay"
+    FIELDING_REPLAY = "fielding_replay"
 
 class KeyBindingManager:
     def __init__(self, settings_manager):
@@ -37,7 +38,8 @@ class KeyBindingManager:
             KeyAction.TOGGLE_TRACK.value: pygame.K_t,
             KeyAction.CHALLENGE.value: pygame.K_c,
             KeyAction.TOGGLE_HUD_MODE.value: pygame.K_u,
-            KeyAction.SWING_REPLAY.value: pygame.K_r
+            KeyAction.SWING_REPLAY.value: pygame.K_r,
+            KeyAction.FIELDING_REPLAY.value: pygame.K_f
         }
 
         self.current_bindings = self.load_bindings()
@@ -109,12 +111,13 @@ class KeyBindingManager:
             KeyAction.TOGGLE_SOUND: "Toggle Sound",
             KeyAction.TOGGLE_BATTER: "Toggle Batter",
             KeyAction.QUICK_PITCH: "Quick Pitch",
-            KeyAction.VIEW_PITCHES: "View Pitches",
+            KeyAction.VIEW_PITCHES: "Review: PitchViz",
             KeyAction.MAIN_MENU: "Main Menu",
-            KeyAction.TOGGLE_TRACK: "Toggle Track",
+            KeyAction.TOGGLE_TRACK: "Pitch Flight",
             KeyAction.CHALLENGE: "ABS Challenge",
             KeyAction.TOGGLE_HUD_MODE: "Toggle HUD Mode",
-            KeyAction.SWING_REPLAY: "Swing Replay"
+            KeyAction.SWING_REPLAY: "Review: Swing",
+            KeyAction.FIELDING_REPLAY: "Review: Fielding"
         }
         return action_names.get(action, action.value.replace('_', ' ').title())
 

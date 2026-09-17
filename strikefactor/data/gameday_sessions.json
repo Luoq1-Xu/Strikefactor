@@ -1,5 +1,354 @@
 {
   "version": "1.0",
-  "sessions": [],
-  "last_updated": "2026-09-01T11:28:34.442215"
+  "sessions": [
+    {
+      "session_id": "05606398-20a9-4d87-81af-37c951614119",
+      "saved_at": "2026-09-10T16:29:56.011354",
+      "opponent_starter": "yamamoto",
+      "difficulty": "professional",
+      "inning": 3,
+      "half": "Bot",
+      "player_score": 0,
+      "opponent_score": 2,
+      "phase": "SHOW_SCORE",
+      "db_game_id": "92b26891-7ea4-40e0-bfb2-e4520637460f",
+      "state": {
+        "session_uuid": "05606398-20a9-4d87-81af-37c951614119",
+        "player_name": "Player",
+        "opponent_name": "Opponent",
+        "difficulty": "professional",
+        "current_inning": 3,
+        "is_top_inning": false,
+        "player_score": 0,
+        "opponent_score": 2,
+        "game_over": false,
+        "is_walkoff": false,
+        "_result_saved": false,
+        "player_inning_scores": [
+          0,
+          0
+        ],
+        "opponent_inning_scores": [
+          0,
+          1,
+          1
+        ],
+        "_current_half_runs": 0,
+        "_consecutive_hits": 0,
+        "player_consecutive_hits": 0,
+        "current_outs": 3,
+        "opponent_pitcher_preset": {
+          "starter": "yamamoto",
+          "relievers": [
+            "sale",
+            "degrom",
+            "sasaki",
+            "mcclanahan"
+          ],
+          "pitch_count_thresholds": [
+            90,
+            100,
+            110
+          ]
+        },
+        "current_pitcher_name": "yamamoto",
+        "available_opponent_relievers": [
+          "sale",
+          "degrom",
+          "sasaki",
+          "mcclanahan"
+        ],
+        "opponent_pitcher_stats": {
+          "yamamoto": {
+            "name": "yamamoto",
+            "pitch_count": 43,
+            "outs_recorded": 9,
+            "hits_allowed": 3,
+            "runs_allowed": 0,
+            "strikeouts": 6,
+            "walks": 0,
+            "home_runs_allowed": 0,
+            "consecutive_hits": 0,
+            "is_active": true
+          }
+        },
+        "player_pitcher_preset": {
+          "starters": [
+            "yesavage",
+            "scherzer",
+            "snell",
+            "kershaw",
+            "glasnow"
+          ],
+          "relievers": [
+            "hoffman",
+            "lauer",
+            "woo",
+            "miller",
+            "vesia",
+            "kahnle",
+            "chapman",
+            "garcia"
+          ]
+        },
+        "current_player_pitcher_name": "scherzer",
+        "available_player_relievers": [
+          "hoffman",
+          "lauer",
+          "woo",
+          "miller",
+          "vesia",
+          "kahnle",
+          "chapman",
+          "garcia"
+        ],
+        "player_pitcher_innings_pitched": 0,
+        "player_pitcher_stats": {
+          "scherzer": {
+            "name": "scherzer",
+            "pitch_count": 61,
+            "outs_recorded": 9,
+            "hits_allowed": 4,
+            "runs_allowed": 2,
+            "strikeouts": 2,
+            "walks": 2,
+            "home_runs_allowed": 0,
+            "consecutive_hits": 0,
+            "is_active": true
+          }
+        },
+        "opponent_lineup": [
+          "J. Smith",
+          "A. Johnson",
+          "M. Davis",
+          "R. Wilson",
+          "K. Brown",
+          "T. Martinez",
+          "C. Garcia",
+          "D. Rodriguez",
+          "S. Lee"
+        ],
+        "current_batter_index": 6,
+        "event_log": [
+          {
+            "inning": 1,
+            "is_top": true,
+            "batter_name": "J. Smith",
+            "pitcher_name": "scherzer",
+            "result": "GROUNDOUT",
+            "runs_scored": 0
+          },
+          {
+            "inning": 1,
+            "is_top": true,
+            "batter_name": "A. Johnson",
+            "pitcher_name": "scherzer",
+            "result": "WALK",
+            "runs_scored": 0
+          },
+          {
+            "inning": 1,
+            "is_top": true,
+            "batter_name": "M. Davis",
+            "pitcher_name": "scherzer",
+            "result": "WALK",
+            "runs_scored": 0
+          },
+          {
+            "inning": 1,
+            "is_top": true,
+            "batter_name": "R. Wilson",
+            "pitcher_name": "scherzer",
+            "result": "GROUNDOUT",
+            "runs_scored": 0
+          },
+          {
+            "inning": 1,
+            "is_top": true,
+            "batter_name": "K. Brown",
+            "pitcher_name": "scherzer",
+            "result": "LINEOUT",
+            "runs_scored": 0
+          },
+          {
+            "inning": 1,
+            "is_top": false,
+            "batter_name": "Player",
+            "pitcher_name": "yamamoto",
+            "result": "STRIKEOUT",
+            "runs_scored": 0
+          },
+          {
+            "inning": 1,
+            "is_top": false,
+            "batter_name": "Player",
+            "pitcher_name": "yamamoto",
+            "result": "GROUNDOUT",
+            "runs_scored": 0
+          },
+          {
+            "inning": 1,
+            "is_top": false,
+            "batter_name": "Player",
+            "pitcher_name": "yamamoto",
+            "result": "STRIKEOUT",
+            "runs_scored": 0
+          },
+          {
+            "inning": 2,
+            "is_top": true,
+            "batter_name": "T. Martinez",
+            "pitcher_name": "scherzer",
+            "result": "DOUBLE",
+            "runs_scored": 0
+          },
+          {
+            "inning": 2,
+            "is_top": true,
+            "batter_name": "C. Garcia",
+            "pitcher_name": "scherzer",
+            "result": "SINGLE",
+            "runs_scored": 0
+          },
+          {
+            "inning": 2,
+            "is_top": true,
+            "batter_name": "D. Rodriguez",
+            "pitcher_name": "scherzer",
+            "result": "GROUNDOUT",
+            "runs_scored": 1
+          },
+          {
+            "inning": 2,
+            "is_top": true,
+            "batter_name": "S. Lee",
+            "pitcher_name": "scherzer",
+            "result": "FLYOUT",
+            "runs_scored": 0
+          },
+          {
+            "inning": 2,
+            "is_top": true,
+            "batter_name": "J. Smith",
+            "pitcher_name": "scherzer",
+            "result": "STRIKEOUT",
+            "runs_scored": 0
+          },
+          {
+            "inning": 2,
+            "is_top": false,
+            "batter_name": "Player",
+            "pitcher_name": "yamamoto",
+            "result": "STRIKEOUT",
+            "runs_scored": 0
+          },
+          {
+            "inning": 2,
+            "is_top": false,
+            "batter_name": "Player",
+            "pitcher_name": "yamamoto",
+            "result": "FLYOUT",
+            "runs_scored": 0
+          },
+          {
+            "inning": 2,
+            "is_top": false,
+            "batter_name": "Player",
+            "pitcher_name": "yamamoto",
+            "result": "SINGLE",
+            "runs_scored": 0
+          },
+          {
+            "inning": 2,
+            "is_top": false,
+            "batter_name": "Player",
+            "pitcher_name": "yamamoto",
+            "result": "GROUNDOUT",
+            "runs_scored": 0
+          },
+          {
+            "inning": 3,
+            "is_top": true,
+            "batter_name": "A. Johnson",
+            "pitcher_name": "scherzer",
+            "result": "SINGLE",
+            "runs_scored": 0
+          },
+          {
+            "inning": 3,
+            "is_top": true,
+            "batter_name": "M. Davis",
+            "pitcher_name": "scherzer",
+            "result": "SINGLE",
+            "runs_scored": 0
+          },
+          {
+            "inning": 3,
+            "is_top": true,
+            "batter_name": "R. Wilson",
+            "pitcher_name": "scherzer",
+            "result": "GROUNDOUT",
+            "runs_scored": 0
+          },
+          {
+            "inning": 3,
+            "is_top": true,
+            "batter_name": "K. Brown",
+            "pitcher_name": "scherzer",
+            "result": "GROUNDOUT",
+            "runs_scored": 1
+          },
+          {
+            "inning": 3,
+            "is_top": true,
+            "batter_name": "T. Martinez",
+            "pitcher_name": "scherzer",
+            "result": "STRIKEOUT",
+            "runs_scored": 0
+          },
+          {
+            "inning": 3,
+            "is_top": false,
+            "batter_name": "Player",
+            "pitcher_name": "yamamoto",
+            "result": "STRIKEOUT",
+            "runs_scored": 0
+          },
+          {
+            "inning": 3,
+            "is_top": false,
+            "batter_name": "Player",
+            "pitcher_name": "yamamoto",
+            "result": "SINGLE",
+            "runs_scored": 0
+          },
+          {
+            "inning": 3,
+            "is_top": false,
+            "batter_name": "Player",
+            "pitcher_name": "yamamoto",
+            "result": "SINGLE",
+            "runs_scored": 0
+          },
+          {
+            "inning": 3,
+            "is_top": false,
+            "batter_name": "Player",
+            "pitcher_name": "yamamoto",
+            "result": "STRIKEOUT",
+            "runs_scored": 0
+          },
+          {
+            "inning": 3,
+            "is_top": false,
+            "batter_name": "Player",
+            "pitcher_name": "yamamoto",
+            "result": "STRIKEOUT",
+            "runs_scored": 0
+          }
+        ]
+      }
+    }
+  ],
+  "last_updated": "2026-09-17T09:52:45.370581"
 }

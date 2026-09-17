@@ -10,14 +10,17 @@ overlay belongs to home runs, including on the barreled-but-barely-late
 """
 
 import math
+import random
 
 import pytest
 
+from strikefactor.gameplay import spray
 from strikefactor.gameplay.hit_animation import (
     FT_TO_PX_X,
     FT_TO_PX_Y,
     HOME,
     HitAnimation,
+    _pick_shape,
     _wall_r_at,
 )
 
@@ -35,7 +38,7 @@ class _StubGame:
         self.batter = _StubBatter(hand)
 
 
-def _make(hand="R", timing=0.5, voff=0.0, quality=0.3):
+def _make(hand="R", timing=0.5, voff=0.0, quality=0.3, seed=7):
     """A foul, mistimed by `timing` in [-1, 1] — negative early, positive late.
 
     `timing` used to be `foul_timing_norm`, which the animation read directly
@@ -44,16 +47,37 @@ def _make(hand="R", timing=0.5, voff=0.0, quality=0.3):
     round and hooks the ball toward the pull-side pole, a late one leaves it
     open and slices it the other way. Same physical claim the old constant
     encoded, one model earlier — see `spray`.
+
+    **It goes through `spray.foul_departure_deg` on the way**, which is the
+    seam this file now guards. The bat's bearing is not where a foul ends up:
+    a tipped ball keeps a perfectly fair-looking bearing and still deflects
+    into foul ground, so the engine resolves the deflection at the handoff
+    (`PitchSimulation._compute_foul_contact_metrics`) and hands the animation
+    a bearing that is already foul. This helper does exactly what the engine
+    does — building the animation on the raw bat bearing instead would test a
+    call the game never makes, and the assertions below would be asking the
+    animation to invent a direction again.
+
+    **Seeded**, because the trajectory shape is drawn from
+    `ball_flight.launch_angle_deg`'s jitter and `voff=3.0` — the offset the
+    foul-HR cases use — sits at 24.5 deg, right on the LINER/FLY band edge,
+    so it comes out GROUNDER about 3% of the time and fails the foul-HR
+    gate. That was always true (the animation drew the same jitter
+    internally), and it left this file quietly dependent on whatever had
+    consumed the global RNG before it. Nothing here is a test *of* that
+    scatter, so it is pinned.
     """
-    spray_deg = -timing * 70.0
+    random.seed(seed)
+    bat_deg = -timing * 70.0
+    shape = _pick_shape("FOUL", voff)
     return HitAnimation(
         _StubGame(hand),
         outcome="FOUL",
         on_complete=lambda: None,
         vertical_offset=voff,
         quality=quality,
-        batted_ball_type=None,
-        spray_deg=spray_deg,
+        batted_ball_type=shape,
+        spray_deg=spray.foul_departure_deg(bat_deg, quality, shape),
     )
 
 
@@ -79,6 +103,13 @@ def test_foul_outcome_is_not_coerced_to_in_play():
     assert anim.outcome == "FOUL"
     assert anim._needs_secure is False
     assert anim.classified_outcome == "FOUL"
+
+
+def test_foul_initializes_wall_visibility_state():
+    """Fouls share draw's wall check without running `_setup_hit`."""
+    anim = _make()
+    assert anim._is_wall_candidate is False
+    assert anim._ball_behind_wall() is False
 
 
 def test_foul_finishes_on_timeout_without_securing():

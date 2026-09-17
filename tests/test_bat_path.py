@@ -585,11 +585,28 @@ def test_difficulty_and_swing_type_do_not_reach_the_swings_shape():
     opinion about how close they had to come.
     """
     from strikefactor.gameplay import bat_contact as bc
-    assert bc.margin_ft(1.4) > bc.margin_ft(1.0) > bc.margin_ft(0.7)
-    assert bc.margin_ft(1.0, power=True) < bc.margin_ft(1.0)
+    assert bc.spatial_assist_ft(1.4) > bc.spatial_assist_ft(1.0) > bc.spatial_assist_ft(0.7)
+    assert bc.spatial_assist_ft(1.0, power=True) < bc.spatial_assist_ft(1.0)
     assert (bc.timing_assist_s(1.5) > bc.timing_assist_s(1.0)
             > bc.timing_assist_s(0.4))
     assert bc.foul_threshold(1.5) < bc.foul_threshold(1.0) < bc.foul_threshold(0.4)
+
+
+def test_a_translated_swing_moves_rigidly_without_changing_its_shape():
+    """Spatial forgiveness must be visible without changing swing direction."""
+    base = bp.swing((0.2, 2.8), "R")
+    dx, dz = 0.11, -0.07
+    moved = bp.translated_swing(base, (dx, dz))
+
+    assert moved.contact_axis == base.contact_axis
+    assert moved.contact_depth_ft == base.contact_depth_ft
+    for t_s in (0.0, bp.SWING_DURATION_S * 0.6, bp.TOTAL_DURATION_S):
+        before, after = base.state_at(t_s), moved.state_at(t_s)
+        for a, b in ((before.knob_ft, after.knob_ft),
+                     (before.barrel_ft, after.barrel_ft),
+                     (before.sweet_spot_ft, after.sweet_spot_ft)):
+            assert b == pytest.approx((a[0] + dx, a[1], a[2] + dz))
+        assert after.speed_mph == pytest.approx(before.speed_mph)
 
 
 def _manager_args():

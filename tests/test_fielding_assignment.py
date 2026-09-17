@@ -21,6 +21,7 @@ import random
 import pytest
 
 from strikefactor.gameplay import hit_animation as ha
+from strikefactor.gameplay import infield_timing
 from strikefactor.gameplay.hit_animation import (
     COVER_ROLE_PRIORITY,
     FIELDER_HOMES,
@@ -187,6 +188,24 @@ def test_pitcher_covers_when_the_first_baseman_fields_it(monkeypatch):
         assert primary == "1B"
         assert covers == {"P"}, f"3-1 play covered by {covers}"
     assert clean > 15, f"only {clean}/25 clean plays — too few to judge"
+
+
+def test_first_baseman_soft_tosses_to_the_pitcher(monkeypatch):
+    """The timing model and animation share the slower 3-1 feed speed."""
+    _aim(monkeypatch, FIELDER_HOMES["1B"])
+    anim = _make()
+    first_baseman = anim.fielders["1B"]
+    catch_ft = ha._to_field_ft(first_baseman.pos)
+
+    timing = anim._resolve_ground_ball(
+        first_baseman, unassisted=False, cover_role="P")
+    soft_toss_fts = min(anim.defense.throw_fts,
+                        infield_timing.FIRST_BASE_SOFT_TOSS_FTS)
+
+    assert timing.throw_flight_s == pytest.approx(
+        infield_timing.throw_time_s(catch_ft, soft_toss_fts))
+    assert timing.throw_flight_s > infield_timing.throw_time_s(
+        catch_ft, anim.defense.throw_fts)
 
 
 def test_first_baseman_covers_when_anyone_else_fields_it(monkeypatch):

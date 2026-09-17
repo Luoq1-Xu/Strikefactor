@@ -230,7 +230,7 @@ def test_the_ball_lands_at_the_speed_it_was_flying(shape, monkeypatch):
     monkeypatch.setattr(ha, "_pick_hit_landing",
                         lambda *a, **k: (ha.HOME[0] + 150, ha.HOME[1] - 220))
     # Stubbing the landing is not on its own enough to pin this ball down.
-    # A FLY whose carry reaches `WALL_REACH_FT` becomes a wall candidate, and
+    # A ball whose carry reaches the fence becomes a wall candidate, and
     # that branch never calls `_pick_hit_landing` — it aims its own landing
     # past the fence, and the in-flight detector then kills the arc at the
     # wall. Both samples below would sit past the end of a flight that
@@ -238,7 +238,8 @@ def test_the_ball_lands_at_the_speed_it_was_flying(shape, monkeypatch):
     # it on 7% of RNG seeds — the same shape of ordering-dependence as the
     # one `exit_velocity_mph` had. Put the fence out of reach: this test is
     # about the ordinary flight-to-roll handoff, not about the wall.
-    monkeypatch.setattr(ha, "WALL_REACH_FT", 1e9)
+    monkeypatch.setattr(ha.park, "fence_verdict",
+                        lambda *a, **k: ha.park.SHORT_OF_WALL)
     anim = _make(shape, quality=0.85)
     assert not anim._is_wall_candidate
     flight_end = _flight_end_px_ms(anim, monkeypatch)
@@ -342,8 +343,7 @@ def test_flight_time_agrees_with_the_pure_model():
         anim = _make(shape, quality=0.82)
         landing_ft = ha._ft_dist(anim._hit_end[0] - ha.HOME[0],
                                  anim._hit_end[1] - ha.HOME[1])
-        expected = ball_flight.flight_time_s(
-            shape, anim.exit_velocity_mph, landing_ft)
+        expected = ball_flight.flight_time_s(ball_flight.launch_angle_for_shape(shape), anim.exit_velocity_mph, landing_ft)
         assert anim.flight_time_s == pytest.approx(expected, rel=1e-9)
 
 
@@ -382,7 +382,7 @@ def test_a_batted_ball_has_exactly_one_exit_velocity(monkeypatch):
     landing_ft = ha._ft_dist(anim._hit_end[0] - ha.HOME[0],
                              anim._hit_end[1] - ha.HOME[1])
     assert anim.flight_time_s == pytest.approx(
-        ball_flight.flight_time_s("FLY", anim.exit_velocity_mph, landing_ft),
+        ball_flight.flight_time_s(ball_flight.launch_angle_for_shape("FLY"), anim.exit_velocity_mph, landing_ft),
         rel=1e-9)
 
 @pytest.mark.parametrize("shape", sorted(ha.IN_PLAY_LANDING_FT))

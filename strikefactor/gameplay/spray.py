@@ -229,6 +229,101 @@ def is_foul(spray_deg):
     return abs(spray_deg) > FOUL_LINE_DEG
 
 
+# --- Where a foul actually went -------------------------------------------
+
+# `is_foul` above answers *whether*; these answer *where*, and they exist
+# because for half of all fouls nothing did.
+#
+# **A glancing blow deflects the ball, and that was not modelled anywhere.**
+# `bat_contact.Contact.is_foul` has two limbs and only one of them leaves a
+# bearing behind: a ball hooked past the pole has `spray_deg` outside the
+# lines and is done, but a ball that was merely *tipped* — topped, caught on
+# the handle, fouled straight back — keeps whatever bearing the bat had, which
+# is usually a perfectly fair one. Something then has to say where it went,
+# and until this existed the thing that said so was `hit_animation._setup_foul`,
+# in render code, out of `random`.
+#
+# What that cost, measured over 600 real fouls: the swing replay drew
+# `spray_deg` while the animation flew its own invention, and the two
+# disagreed by a median of **40.7 degrees**. 271 of the 600 were drawn by the
+# replay as a *fair* ray under a FOUL banner, and on 272 the animation put the
+# ball behind the plate while the replay pointed forward. One identical
+# contact animated at eight different bearings across eight plays, so the
+# replay could not have matched it even if it had tried — which also broke
+# this module's own promise that spray is deterministic given the swing.
+#
+# So the deflection is stated here, once, in real degrees, deterministically,
+# and both the animation and the replay read it. There is no jitter term for
+# the same reason `spray_angle_deg` has none: the spread already comes from
+# the player's own quality and aim. If scatter is ever wanted it has to be
+# drawn *once* upstream and carried, the way `exit_velocity_mph` is.
+#
+# The severity ramp is `_setup_foul`'s own expression, lifted unchanged, so
+# this is a move rather than a retune. Its shape is the useful part: a ball
+# already foul *by direction* keeps its own bearing, so the two limbs meet
+# continuously at the line, and a ball foul by *quality* is pushed further out
+# the more glancing the contact was.
+FOUL_OFF_MAX_DEG = 45.0           # how far past the line a fully glancing blow goes
+FOUL_OFF_MIN_DEG = 2.0            # a ball a degree past the pole draws a degree past it
+FOUL_GROUNDER_MIN_OFF_DEG = 10.0  # a chopper has to clearly leave fair ground
+# A pop-up comes down near where it was struck, so it is behind the plate
+# rather than out past a pole: 165 deg (nearly straight back over the catcher)
+# when the bat was square, swinging round to 120 as the bat turns.
+FOUL_POP_BACK_DEG = (120.0, 165.0)
+
+
+def foul_severity(spray_deg, quality):
+    """How badly this foul left fair territory, 0 to 1.
+
+    0 is a ball a hair the wrong side of a pole; 1 is one sprayed as far foul
+    as the model goes. `max` of the two limbs rather than a sum: they are two
+    independent ways to be foul (see `is_foul`) and a ball is as foul as the
+    worse of them, not as foul as both put together.
+    """
+    past = max(0.0, abs(spray_deg) - FOUL_LINE_DEG)
+    q = max(0.0, min(1.0, quality or 0.0))
+    return min(1.0, max(past, (1.0 - q) * FOUL_OFF_MAX_DEG) / FOUL_OFF_MAX_DEG)
+
+
+def foul_departure_deg(spray_deg, quality, shape="LINER"):
+    """The bearing a ball *already ruled foul* actually left on.
+
+    Same units and sign as `spray_angle_deg` — degrees from centre field,
+    pull-positive — so it drops into every place that reads a bearing, and
+    `is_foul` is true of the result by construction. That is the property that
+    makes the picture and the verdict unable to disagree: whatever draws this
+    number draws a ball in foul ground.
+
+    `shape` is the trajectory shape (`ball_flight.shape_for_launch_angle`), and
+    only two of the four change the answer. A pop-up is a ball hit almost
+    straight up, so it comes down behind the plate rather than out past a pole;
+    a chopper needs a floor under it or it draws rolling up the line in fair
+    ground on a play nobody made.
+
+    Deterministic, and the sign is taken as `spray_deg >= 0`. The animation
+    used to take it as `spray_field_rad > 90 deg`, which is false at exactly
+    90 — so every dead-centre foul went to the first-base side.
+    """
+    side = 1.0 if spray_deg >= 0.0 else -1.0
+    severity = foul_severity(spray_deg, quality)
+    if shape == "POP_UP":
+        lo, hi = FOUL_POP_BACK_DEG
+        turned = min(1.0, abs(spray_deg) / FOUL_LINE_DEG)
+        return side * (hi - (hi - lo) * turned)
+    # **A deflection can only push the ball further foul, never straighten
+    # it.** `foul_severity` saturates at 1 because the foul-HR gate needs a
+    # bounded number, but a ball the bat genuinely sent 128 deg round is not a
+    # ball at 90 — that would be the render layer's old cap, which threw away
+    # the one part of the bearing that was never in doubt. So the bat's own
+    # excess past the line is a floor here, and the glancing-blow term is what
+    # can add to it.
+    off = max(severity * FOUL_OFF_MAX_DEG, abs(spray_deg) - FOUL_LINE_DEG)
+    off = max(FOUL_OFF_MIN_DEG, off)
+    if shape == "GROUNDER":
+        off = max(off, FOUL_GROUNDER_MIN_OFF_DEG)
+    return side * (FOUL_LINE_DEG + off)
+
+
 # --- The one frame conversion ---------------------------------------------
 
 def field_angle_deg(spray_deg, spin):

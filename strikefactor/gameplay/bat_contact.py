@@ -77,17 +77,15 @@ a real hitter also stops squaring it up.
 the ball over a span of instants, and "first touch" among them is not the one
 the player means by having hit the ball, so the sweep takes the global minimum.
 
-**There are two assists and one tolerance, and they are three different
-things.** `margin_ft` is the tolerance: it widens the bat, so it can only move
-the hit-or-miss verdict, and what it lets through scores badly for it. The two
-assists *move* the bat — `aim_at_pitch` in space, by a difficulty-scaled
-fraction of the player's aim error capped at `MAX_ASSIST_FT`; `resolve_contact`
-in time, by up to `timing_assist_s` of their timing error. Because they move it
-they lift contact *quality*, which is what lets them reach getting hits rather
-than only making contact, and it is why the timing one has to be charged for
-explicitly. `bat_path` still never sees the pitch — what the aim assist changes
-is which point on the cursor's ray the player is taken to have meant, and what
-the timing assist changes is when the swing they made is taken to have started.
+**Every forgiveness moves the bat; none widens it.** `aim_at_pitch` corrects a
+difficulty-scaled fraction of the player's aim error before the swing is built;
+`resolve_contact` may slide that swing in time, then rigidly translate a near
+miss in x/z. Both corrections are bounded and charged back into quality. The
+final sweep is always against the real bat and ball surfaces, so a returned
+contact is also a frame the renderer can draw honestly. `bat_path` still never
+sees the pitch — it supplies the kinematic swing and the shared solid geometry,
+while this module owns the difficulty adjustments made when that swing meets a
+particular trajectory.
 """
 
 import math
@@ -118,14 +116,15 @@ _BRACKET_ALONGS = tuple(i / BRACKET_STATIONS for i in range(BRACKET_STATIONS + 1
 
 # Difficulty knobs, converted here so the callers pass real quantities.
 #
-# The bat's own tolerance beyond its physical surface, before `contact_zone_size`
-# (1.4 at ROOKIE down to 0.7 at HALL_OF_FAME) scales it. An absolute margin
+# How far the spatial contact assist may move the swing, before
+# `contact_zone_size`
+# (1.4 at ROOKIE down to 0.7 at HALL_OF_FAME) scales it. An absolute distance
 # rather than a multiple of the bat's radius: a 40% fatter barrel is only three
 # quarters of an inch, which is too small to be the difficulty dial the setting
 # is documented as.
 #
 # The multiplier *scales* this rather than offsetting it, and that is a fix.
-# Written as `(mult - 1.0) * K` the margin was exactly 0.0 at AMATEUR and
+# Written as `(mult - 1.0) * K` the old margin was exactly 0.0 at AMATEUR and
 # negative above it, so the default difficulty asked the player to put a mouse
 # cursor inside the real 2.75 in that a bat and a ball are between them — 22 px,
 # on a moving target — and PROFESSIONAL and up asked for less room than physics
@@ -139,10 +138,10 @@ _BRACKET_ALONGS = tuple(i / BRACKET_STATIONS for i in range(BRACKET_STATIONS + 1
 # so a tube 5.7 ft long was also about 0.9 ft of hidden **vertical** tolerance
 # — it was doing a large part of this constant's job without saying so.
 # Measured: doubling the timing budget moves the contact rate by 1.4 points
-# while the margin moves it strongly, so the contacts the slide model lost were
+# while this assist moves it strongly, so the contacts the slide model lost were
 # aim errors, not timing errors, and this is where they belong. 2.4 in at
 # AMATEUR, which is what holds the whiff rate across the whole ladder.
-BASE_MARGIN_FT = 0.20
+BASE_SPATIAL_ASSIST_FT = 0.20
 # How much of the player's timing error the engine slides the swing to remove,
 # before `contact_timing_window` (1.5 down to 0.4) scales it.
 #
@@ -192,7 +191,7 @@ TIMING_CHARGE_SIGMA_FLOOR_S = 0.020
 # swing's shape. Most of it comes free, since `power_timing_window` is tighter
 # than `contact_timing_window` at every difficulty; this is the part that is
 # not, so a power swing stays harder even where the two windows agree.
-POWER_MARGIN_FT = -0.035
+POWER_SPATIAL_ASSIST_FT = -0.035
 
 # Contact quality. Both sigmas are stated in the units the geometry produces,
 # which is the point of the rewrite: `vertical_offset` used to be screen pixels
@@ -284,6 +283,16 @@ class Contact:
     # the difficulty that granted the slide, and recomputing it downstream
     # would let the charge and the budget come from two different tables.
     charge_sigma_s: float = TIMING_CHARGE_SIGMA_FLOOR_S
+    # The bounded x/z correction applied to the swing before the final,
+    # strictly physical sweep.  This replaces the old invisible collision
+    # margin: forgiveness moves the bat and is therefore visible in replay.
+    spatial_shift_ft: tuple = (0.0, 0.0)
+    spatial_charge_sigma_ft: float = BASE_SPATIAL_ASSIST_FT
+    resolved_aim_ft: tuple = None
+    # Exact winning state from the collision sweep.  These make the replay
+    # identity testable without reverse-engineering a state from the ball.
+    knob_ft: tuple = None
+    barrel_ft: tuple = None
 
     @property
     def depth_ft(self):
@@ -301,10 +310,9 @@ class Contact:
     def surface_gap_ft(self):
         """Real feet of daylight between the bat's surface and the ball's.
 
-        Bounded by `margin_ft` — two inches at ROOKIE, one and a half at
-        AMATEUR — because that is now the only forgiveness with a distance in
-        it. `gap_ft` is this minus the margin, so it is <= 0 on every contact
-        by construction and this is <= the margin on every contact.
+        Non-positive on every returned contact. Difficulty forgiveness moves
+        the swing before the final sweep; it no longer widens the bat with an
+        invisible shell.
 
         It used to run to *feet*: the timing cushion was a reach along the
         ball's flight line worth `cushion x ball speed`, 5.8 ft at ROOKIE
@@ -320,7 +328,7 @@ class Contact:
 
     @property
     def sweet_spot_score(self):
-        return math.exp(-0.5 * ((self.along - bat_path.SWEET_SPOT_FRAC)
+        return math.exp(-0.5 * ((self.along - bat_path.CONTACT_SWEET_SPOT_FRAC)
                                 / SWEET_SIGMA) ** 2)
 
     @property
@@ -343,8 +351,14 @@ class Contact:
         return math.exp(-0.5 * (self.shift_s / self.charge_sigma_s) ** 2)
 
     @property
+    def spatial_score(self):
+        """Quality cost of the aim correction that made contact physical."""
+        shift = math.hypot(*self.spatial_shift_ft)
+        return math.exp(-0.5 * (shift / self.spatial_charge_sigma_ft) ** 2)
+
+    @property
     def _scores(self):
-        return (self.sweet_spot_score, self.centre_score, self.timing_score)
+        return self.sweet_spot_score, self.centre_score, self.timing_score
 
     @property
     def quality(self):
@@ -356,10 +370,11 @@ class Contact:
         `_compute_contact_quality` used for timing and alignment, deliberately:
         it keeps the distribution `contact_audio.EV_CALIBRATION` is fitted
         against recognisable rather than replacing it wholesale. Times what the
-        timing assist cost, which is the one part of the swing the geometry is
-        not shown.
+        *spatial* assist cost, which is the one part of the swing the geometry
+        is not shown: the bat was moved to where the solver put it, so the
+        sweep sees a clean intersection and cannot charge for the move.
 
-        The two do not double-charge: inside the assist budget the slide
+        The terms do not double-charge: inside the assist budget the slide
         cancels the error and `timing_score` is the whole penalty, outside it
         the charge saturates and the residual error is what the geometry sees.
 
@@ -371,9 +386,20 @@ class Contact:
         produced, which is the end of the scale `contact_audio.EV_CALIBRATION`
         is anchored on. As a third independent way to be off it is the same
         kind of thing as the other two and is weighted like them.
+
+        **`spatial_score` is still on the outside, and that is a known
+        inconsistency rather than a distinction.** It is the timing charge's
+        sibling — both answer "how much forgiveness did this swing borrow" —
+        so by the argument above it belongs in the mean as a fourth factor.
+        It is left out because moving it shifts the quality distribution
+        (measured: median 0.679 -> 0.749 over a realistic player model, with
+        ~21% of contacts taking a shift), and that distribution is what
+        `contact_audio.EV_CALIBRATION` and the four quantile-anchored sites
+        in CLAUDE.md are pinned to. Moving it means re-deriving all five in
+        the same pass; do not change it on its own.
         """
         a, b, c = self._scores
-        return (a * b * c) ** (1.0 / 3.0)
+        return (a * b * c) ** (1.0 / 3.0) * self.spatial_score
 
     @property
     def spray_deg(self):
@@ -409,9 +435,10 @@ class Contact:
         return self.quality < threshold or spray.is_foul(self.spray_deg)
 
 
-def margin_ft(zone_size_mult, power=False):
-    """The bat's effective surface beyond its own, at this difficulty."""
-    return BASE_MARGIN_FT * zone_size_mult + (POWER_MARGIN_FT if power else 0.0)
+def spatial_assist_ft(zone_size_mult, power=False):
+    """Maximum visible x/z correction available at this difficulty."""
+    return max(0.0, (BASE_SPATIAL_ASSIST_FT * zone_size_mult
+                     + (POWER_SPATIAL_ASSIST_FT if power else 0.0)))
 
 
 def timing_assist_s(timing_window_mult):
@@ -574,11 +601,10 @@ def aim_at_pitch(cursor_ft, trajectory, handedness, *, assist=0.0):
     `assist = 0` it is the pure translation it has always been, and every test
     of the translation runs at that default.
 
-    It is deliberately *not* a tolerance. `margin_ft` says "close enough
-    counts as contact, and scores badly for it"; the assist moves the bat,
-    so it lifts quality too. That is what makes it reach getting *hits* rather
-    than only making contact, and it is why it belongs on the aim rather than on
-    the ellipsoid.
+    It is deliberately *not* a tolerance. The assist moves the bat instead of
+    declaring empty space to be contact. That is what makes it reach getting
+    *hits* rather than only making contact, and it is why it belongs on the aim
+    rather than on an enlarged collision solid.
     """
     plate = trajectory.position_at(trajectory.travel_time)
     cx, cz = _assist_correction(
@@ -655,7 +681,7 @@ def _golden_min(f, lo, hi, iterations, key=None):
     return (c, fc) if kc < kd else (d, fd)
 
 
-def _gap_at(swing, trajectory, swing_start_s, t_s, margin, precise=True):
+def _gap_at(swing, trajectory, swing_start_s, t_s, precise=True):
     """How close the bat came to the ball at swing time `t_s`.
 
     Returns `(gap, along, state, ball)`. Negative gap is contact.
@@ -665,17 +691,14 @@ def _gap_at(swing, trajectory, swing_start_s, t_s, margin, precise=True):
     agree to well under an inch, which is far finer than the 2 ms the bracket
     is wide.
 
-    Plain isotropic separation: the surface of the bat at that station, plus
-    `margin`, against the surface of the ball, in real feet. There is no
-    direction the bat is more forgiving in any more. The timing budget is spent
-    by sliding the whole swing (see `resolve_contact`), which is a statement
-    about *when* the swing happened rather than about how wide the bat is, so
-    what is left here is the honest question.
+    Plain isotropic separation between the physical surfaces, in real feet.
+    Difficulty never enters this function: assists move the swing before it is
+    sampled, so every non-positive result is a drawable intersection.
     """
     state = swing.state_at(t_s)
     ball = trajectory.position_at(swing_start_s + t_s)
 
-    knob, tip = state.knob_ft, state.barrel_ft
+    knob, tip = bat_path.bat_solid_axis(state)
     axis = tuple(tip[j] - knob[j] for j in range(3))
 
     # Unpacked into scalars because this is the innermost thing in the game:
@@ -686,7 +709,7 @@ def _gap_at(swing, trajectory, swing_start_s, t_s, margin, precise=True):
     rx = ball[0] - knob[0]
     ry = ball[1] - knob[1]
     rz = ball[2] - knob[2]
-    slack = margin + BALL_RADIUS_FT
+    slack = BALL_RADIUS_FT
     bat_radius_ft = bat_path.bat_radius_ft
 
     def gap_at_along(along):
@@ -716,6 +739,80 @@ def _gap_at(swing, trajectory, swing_start_s, t_s, margin, precise=True):
     return best_gap, best_along, state, ball
 
 
+def _best_approach(swing, trajectory, start_s, allowance=0.0):
+    """Return the refined closest physical approach, or ``None`` if remote."""
+    n = max(2, int(round(bat_path.TOTAL_DURATION_S / COARSE_STEP_S)))
+    step = bat_path.TOTAL_DURATION_S / n
+    best_i, best = 0, None
+    for i in range(n + 1):
+        got = _gap_at(swing, trajectory, start_s, i * step, precise=False)
+        if best is None or got[0] < best[0]:
+            best_i, best = i, got
+    if best[0] > allowance + COARSE_WHIFF_MARGIN_FT:
+        return None
+    t_s, result = _golden_min(
+        lambda t: _gap_at(swing, trajectory, start_s, t),
+        max(0.0, (best_i - 1) * step),
+        min(bat_path.TOTAL_DURATION_S, (best_i + 1) * step),
+        REFINE_ITERATIONS,
+        key=lambda got: got[0])
+    # The minimizer approaches an exact authored contact pose from either
+    # side. Preserve that semantic landmark instead of reporting it a few
+    # microseconds into the follow-through because of bracket arithmetic.
+    if abs(t_s - bat_path.SWING_DURATION_S) < 1e-5:
+        t_s = bat_path.SWING_DURATION_S
+        result = _gap_at(swing, trajectory, start_s, t_s)
+    return t_s, result
+
+
+def _apply_spatial_assist(swing, trajectory, start_s, best, allowance):
+    """Move the bat visibly toward a near miss, then re-sweep strictly.
+
+    The old difficulty margin declared empty space to be contact.  This fixed
+    point spends the same budget as an actual x/z movement of the swing.  It
+    returns the corrected swing, its closest approach and the accumulated
+    world-space correction; failure means the allowance could not create a
+    physical intersection.
+    """
+    shift_x = shift_z = 0.0
+    current = best
+    for _ in range(10):
+        t_s, (gap, along, state, ball) = current
+        if gap <= 0.0:
+            corrected = bat_path.translated_swing(
+                swing, (shift_x, shift_z))
+            return corrected, current, (shift_x, shift_z)
+
+        axis_point, _ = bat_path.bat_solid_point(state, along)
+        dx = ball[0] - axis_point[0]
+        dz = ball[2] - axis_point[2]
+        lateral = math.hypot(dx, dz)
+        if lateral <= 1e-9:
+            return None
+
+        # Move only the remaining surface separation, with a minute overshoot
+        # to avoid losing contact to the numerical minimizer's last decimal.
+        step = min(gap + 1e-6,
+                   max(0.0, allowance - math.hypot(shift_x, shift_z)))
+        if step <= 0.0:
+            return None
+        move_x, move_z = dx / lateral * step, dz / lateral * step
+        shift_x += move_x
+        shift_z += move_z
+        if math.hypot(shift_x, shift_z) > allowance + 1e-9:
+            return None
+
+        corrected = bat_path.translated_swing(swing, (shift_x, shift_z))
+        current = _best_approach(corrected, trajectory, start_s,
+                                 allowance=max(0.0, allowance
+                                               - math.hypot(shift_x, shift_z)))
+        if current is None:
+            return None
+    if current[1][0] <= 0.0:
+        return corrected, current, (shift_x, shift_z)
+    return None
+
+
 def resolve_contact(swing, trajectory, swing_start_s, *,
                     zone_size_mult=1.0, timing_window_mult=1.0, power=False):
     """Sweep `swing` against `trajectory` and return the `Contact`, or None.
@@ -741,7 +838,7 @@ def resolve_contact(swing, trajectory, swing_start_s, *,
     arrived early is still moving when the ball gets there and can still catch
     it off the end. That stretch of path exists precisely so this can see it.
     """
-    margin = margin_ft(zone_size_mult, power)
+    allowance = spatial_assist_ft(zone_size_mult, power)
 
     # Slide toward on-time, never past it and never further than the budget.
     budget = timing_assist_s(timing_window_mult)
@@ -749,30 +846,25 @@ def resolve_contact(swing, trajectory, swing_start_s, *,
     shift = -max(-budget, min(budget, error))
     start_s = swing_start_s + shift
 
-    n = max(2, int(round(bat_path.TOTAL_DURATION_S / COARSE_STEP_S)))
-    step = bat_path.TOTAL_DURATION_S / n
-    best_i, best = 0, None
-    for i in range(n + 1):
-        got = _gap_at(swing, trajectory, start_s, i * step, margin,
-                      precise=False)
-        if best is None or got[0] < best[0]:
-            best_i, best = i, got
-    # The coarse walk can only be trusted to bracket, so a near miss is
-    # re-asked precisely before it is called a whiff.
-    if best[0] > COARSE_WHIFF_MARGIN_FT:
+    best = _best_approach(swing, trajectory, start_s, allowance=allowance)
+    if best is None:
         return None
 
-    # Golden-section refine inside the bracketing samples. The coarse step is
-    # 1 ms and the bat covers ~1.3 in in that time, which is half a ball.
-    t_s, (gap, along, state, ball) = _golden_min(
-        lambda t: _gap_at(swing, trajectory, start_s, t, margin),
-        max(0.0, (best_i - 1) * step),
-        min(bat_path.TOTAL_DURATION_S, (best_i + 1) * step),
-        REFINE_ITERATIONS,
-        key=lambda got: got[0])
+    corrected = swing
+    spatial_shift = (0.0, 0.0)
+    if best[1][0] > 0.0:
+        assisted = _apply_spatial_assist(
+            swing, trajectory, start_s, best, allowance)
+        if assisted is None:
+            return None
+        corrected, best, spatial_shift = assisted
+
+    t_s, (gap, along, state, ball) = best
+    if gap > 0.0:
+        return None
     pitch_t = start_s + t_s
 
-    knob, tip = state.knob_ft, state.barrel_ft
+    knob, tip = bat_path.bat_solid_axis(state)
     axis = tuple(tip[j] - knob[j] for j in range(3))
     axis_point = tuple(knob[j] + axis[j] * along for j in range(3))
     return Contact(
@@ -786,7 +878,12 @@ def resolve_contact(swing, trajectory, swing_start_s, *,
         bat_speed_mph=state.speed_mph,
         shift_s=shift,
         attack_deg=spray.attack_direction_deg(axis, swing.spin),
-        pose_attack_deg=spray.attack_direction_deg(swing.contact_axis,
-                                                   swing.spin),
+        pose_attack_deg=spray.attack_direction_deg(corrected.contact_axis,
+                                                   corrected.spin),
         charge_sigma_s=timing_charge_sigma_s(timing_window_mult),
+        spatial_shift_ft=spatial_shift,
+        spatial_charge_sigma_ft=max(allowance, CENTRE_SIGMA_FT),
+        resolved_aim_ft=swing.aim_ft,
+        knob_ft=state.knob_ft,
+        barrel_ft=state.barrel_ft,
     )
