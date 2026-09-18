@@ -1,8 +1,8 @@
 """Terminal renderer.
 
 Reads the same metric functions the figures do, so `--terminal` and the PNGs
-can never disagree. Uses `rich` when available (it is pinned in
-requirements.txt) and degrades to plain ASCII when it is not.
+can never disagree. Uses `rich` when available (it is a runtime dependency in
+pyproject.toml) and degrades to plain ASCII when it is not.
 """
 
 import shutil

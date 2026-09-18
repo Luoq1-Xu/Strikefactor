@@ -4,7 +4,8 @@ from dataclasses import dataclass
 from strikefactor import config
 from strikefactor.utils.pitch_physics import DEFAULT_CAMERA
 
-from .pitch_locations import get_archetypes
+from .at_bat_plan import choose_plan
+from .pitch_locations import INTENTS, get_archetypes
 
 
 @dataclass
@@ -26,6 +27,7 @@ class PitchIntent:
     archetype: str        # named location archetype, or '' if generic
     batter_hand: str
     platoon: str          # same | opp
+    plan: str = ''        # at-bat plan in force, or '' for NO_PLAN
 
 # ANSI color codes for terminal output
 class Colors:
@@ -181,6 +183,9 @@ class Pitcher:
         # for the break multiplier and by the DB extractor for intent logging.
         self.last_intent = None
         self._last_archetype = None
+        # The approach for the current plate appearance (at_bat_plan.py),
+        # rolled on its first pitch by get_pitch_target and held until it ends.
+        self.plan = None
         # Derive 3D release position from the sprite's visual release point
         # so the ball always appears from where the pitcher's hand is in the sprite
         y0 = 60.5 - arm_extension
@@ -492,6 +497,12 @@ class Pitcher:
         pitch_class = self.PITCH_CLASS.get(pitch_type, 'breaking')
         count_state = self._get_count_state()
 
+        # game.pitchnumber is reset to 0 when a plate appearance ends, so 0
+        # here means the batter has just stepped in: pick this at-bat's plan.
+        game = getattr(self, '_game_ref', None)
+        if self.plan is None or getattr(game, 'pitchnumber', 0) == 0:
+            self.plan = choose_plan(self.pitcher_key)
+
         intent_kind, intent_x, intent_y = self._choose_intent(
             pitch_type, pitch_class, count_state
         )
@@ -517,6 +528,7 @@ class Pitcher:
             archetype=getattr(self, '_last_archetype', None) or '',
             batter_hand=batter_hand,
             platoon=self.get_platoon(batter_hand),
+            plan=self.plan.name,
         )
         return exec_x, exec_y
 
@@ -542,7 +554,7 @@ class Pitcher:
         """'same' when pitcher and batter share handedness, else 'opp'."""
         return 'same' if batter_hand == self.throws else 'opp'
 
-    def _archetype_target(self, pitch_type, intent, count_state, batter_hand):
+    def _archetype_target(self, pitch_type, pitch_class, intent, count_state, batter_hand):
         """Pick a named location archetype for this intent. None if undefined."""
         archetypes = get_archetypes(
             self.pitcher_key, pitch_type, self.get_platoon(batter_hand)
@@ -552,6 +564,8 @@ class Pitcher:
             return None
 
         weights = [a['weight'] * a.get('counts', {}).get(count_state, 1.0)
+                   * self.plan.archetype_multiplier(
+                       count_state, pitch_class, a['in_away'], a['height'])
                    for a in candidates]
         if sum(weights) <= 0:
             return None
@@ -581,12 +595,15 @@ class Pitcher:
             probs[0] -= shift
             probs[2] += shift
 
-        intent = random.choices(['zone', 'edge', 'chase', 'waste'], weights=probs, k=1)[0]
+        mults = self.plan.intent_multipliers(count_state)
+        probs = [p * mults.get(kind, 1.0) for p, kind in zip(probs, INTENTS)]
+
+        intent = random.choices(INTENTS, weights=probs, k=1)[0]
 
         # Named archetypes take priority; the generic geometry below is the
         # fallback for any (pitch, platoon, intent) with no archetype defined.
         batter_hand = self.get_batter_hand()
-        spot = self._archetype_target(pitch_type, intent, count_state, batter_hand)
+        spot = self._archetype_target(pitch_type, pitch_class, intent, count_state, batter_hand)
         if spot is not None:
             self._last_archetype = spot[0]
             return intent, spot[1], spot[2]

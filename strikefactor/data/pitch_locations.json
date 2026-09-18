@@ -23,6 +23,42 @@
     "geometry. 'counts' multiplies the weight in the named count states."
   ],
 
+  "plans": {
+    "_readme": [
+      "At-bat plans (pitchers/at_bat_plan.py): one approach per plate appearance,",
+      "rolled when the batter steps in and held until the at-bat ends.",
+      "Phases, from Pitcher._get_count_state: get_ahead (0-0, 1-0, 0-1, 1-1, 2-2),",
+      "put_away (0-2, 1-2), behind (2-0, 2-1, 3-0, 3-1, 3-2).",
+      "'intent' multiplies the zone/edge/chase/waste probabilities for that phase.",
+      "'in_away' / 'height' are pulls on the archetype weights in archetype",
+      "coordinates (+in_away = toward the batter, +height = up): weight *=",
+      "exp(pull_x * in_away + pull_z * height). A pull may be one number or",
+      "{pitch_class: number} with '*' as the default, so a ladder can send the",
+      "fastball up and the breaking ball down in the same phase.",
+      "Each pitcher's mix is the '_plans' entry under 'pitchers'."
+    ],
+    "ladder": {
+      "get_ahead": {"intent": {"edge": 1.2},                          "height": {"fastball": 0.7, "*": 0.0}},
+      "put_away":  {"intent": {"zone": 0.8, "chase": 1.25},           "height": {"fastball": 1.1, "cutter": 0.3, "*": -0.9}},
+      "behind":    {"height": {"fastball": 0.4, "*": 0.0}}
+    },
+    "east_west": {
+      "get_ahead": {"intent": {"zone": 0.85, "edge": 1.45}},
+      "put_away":  {"intent": {"zone": 0.9, "edge": 1.3},             "in_away": -0.8},
+      "behind":    {"intent": {"edge": 1.2}}
+    },
+    "jam_then_expand": {
+      "get_ahead": {"intent": {"zone": 1.1},                          "in_away": {"fastball": 1.1, "cutter": 0.9, "*": 0.4}},
+      "put_away":  {"intent": {"zone": 0.7, "chase": 1.3},            "in_away": -0.9},
+      "behind":    {"in_away": 0.5}
+    },
+    "steal_early": {
+      "get_ahead": {"intent": {"zone": 1.5, "edge": 0.9, "chase": 0.6}, "height": {"*": 0.3, "fastball": 0.0}},
+      "put_away":  {"intent": {"zone": 1.1, "edge": 0.9},             "height": {"fastball": 1.1, "cutter": 0.3, "*": -0.6}},
+      "behind":    {"intent": {"zone": 1.2}}
+    }
+  },
+
   "defaults": {
     "FF": {
       "same": [
@@ -163,6 +199,7 @@
 
   "pitchers": {
     "sale": {
+      "_plans": {"east_west": 0.45, "jam_then_expand": 0.25, "ladder": 0.15, "steal_early": 0.15},
       "SL": {
         "_note": "Sale's sweeper is his out pitch. vs RHB (opp) it is a back-foot weapon far more than the backdoor look the old code always produced.",
         "opp": [
@@ -177,6 +214,7 @@
       }
     },
     "sasaki": {
+      "_plans": {"jam_then_expand": 0.40, "ladder": 0.30, "steal_early": 0.20, "east_west": 0.10},
       "FS": {
         "_note": "Elite vertical splitter -- works straight down off the fastball rather than fading, and is buried below the zone more often than a typical splitter.",
         "same": [
@@ -197,7 +235,14 @@
         ]
       }
     },
+    "yamamoto": {
+      "_plans": {"east_west": 0.35, "steal_early": 0.30, "ladder": 0.20, "jam_then_expand": 0.15}
+    },
+    "mcclanahan": {
+      "_plans": {"ladder": 0.35, "jam_then_expand": 0.30, "east_west": 0.20, "steal_early": 0.15}
+    },
     "degrom": {
+      "_plans": {"ladder": 0.40, "steal_early": 0.35, "east_west": 0.15, "jam_then_expand": 0.10},
       "SL": {
         "_note": "Tight, hard slider -- lives on the outer edge to RHB and gets used in the zone more than a sweeper would.",
         "same": [

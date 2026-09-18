@@ -5,13 +5,21 @@ A pygame baseball batting simulator that puts you in the batter's box against el
 ## 🎮 Getting Started
 
 ### Setup
+StrikeFactor uses [uv](https://docs.astral.sh/uv/) to manage Python and its
+dependencies. Install uv once (`curl -LsSf https://astral.sh/uv/install.sh | sh`
+or `brew install uv`), then from the repository root:
+
 ```bash
-pip install -r requirements.txt
-python -m strikefactor
+uv run strikefactor
 ```
 
-Run from the repository root. (`python strikefactor/main.py` no longer works —
-`strikefactor` is a proper package now, so it must be launched as a module.)
+That's all you need. The first run installs Python 3.12 if necessary, creates `.venv`, and
+installs the exact versions pinned in `uv.lock`. Later runs start immediately.
+Use `uv sync` to update the environment after pulling changes.
+
+Without uv: `pip install -e .` then `python -m strikefactor` (Python 3.12+).
+`python strikefactor/main.py` does not work: `strikefactor` is a package and
+must be launched as one.
 
 ### How to Play
 1. **Choose your mode** - Select Arcade or Sandbox from the main menu
@@ -245,12 +253,16 @@ Power swings increase extra-base hit potential but require more precise timing. 
 
 ## 🔧 Requirements
 
-- Python 3.12+
-- pygame-ce
-- pygame_gui
-- pandas
-- numpy
-- scikit-learn
-- matplotlib/seaborn
+- Python 3.12+ (uv installs it for you)
+- Runtime: pygame-ce, pygame_gui, numpy, pandas, matplotlib, scikit-learn, rich.
+  They are declared in `pyproject.toml` and locked in `uv.lock`.
+
+For development, `uv sync` also installs the dev tools (pytest, pytest-xdist, ruff):
+
+```bash
+uv run pytest            # test suite
+uv run ruff check .      # lint
+uv run python pitch_analysis.py   # offline pitch analysis figures + report
+```
 
 Have fun!

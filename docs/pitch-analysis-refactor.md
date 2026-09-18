@@ -205,7 +205,7 @@ on every cell and carry no information on their own.
 
 ## 6. Terminal mode
 
-`rich` 13.7.1 is already in `requirements.txt`.
+`rich` is already a runtime dependency (`pyproject.toml`).
 
 ```
 python pitch_analysis.py                        # unchanged: PNGs + report.html

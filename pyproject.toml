@@ -10,18 +10,25 @@ requires-python = ">=3.12"
 
 # Runtime dependencies actually imported by the game and the analysis package.
 # scikit-learn is not imported directly — it is required to unpickle the SVC
-# umpire model in ai/ai_umpire.pkl.
+# umpire model in ai/ai_umpire.pkl, and it is pinned to the release that pickle
+# was written with: scikit-learn raises InconsistentVersionWarning ("might lead
+# to breaking code or invalid results") when an estimator is unpickled under
+# any other version. Re-save the pickle before moving this pin.
 dependencies = [
     "pygame-ce>=2.5.1",
     "pygame_gui>=0.6.12",
     "numpy>=1.26",
     "pandas>=2.2",
     "matplotlib>=3.9",
-    "scikit-learn>=1.4",
+    "scikit-learn~=1.4.2",
     "rich>=13.7",
 ]
 
-[project.optional-dependencies]
+# Development tools. A dependency group rather than an extra so that `uv sync`
+# installs it by default and it never ships as part of the package; exact
+# versions are pinned in uv.lock. Without uv: `pip install -e . --group dev`
+# (pip >= 25.1).
+[dependency-groups]
 dev = [
     "pytest>=8.0",
     # Required, not optional: `addopts` below runs the suite in parallel, so a
