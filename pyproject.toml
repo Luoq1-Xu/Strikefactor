@@ -1,0 +1,125 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "strikefactor"
+version = "0.1.0"
+description = "A pygame-based baseball batting simulator with AI-controlled pitchers."
+requires-python = ">=3.12"
+
+# Runtime dependencies actually imported by the game and the analysis package.
+# scikit-learn is not imported directly — it is required to unpickle the SVC
+# umpire model in ai/ai_umpire.pkl, and it is pinned to the release that pickle
+# was written with: scikit-learn raises InconsistentVersionWarning ("might lead
+# to breaking code or invalid results") when an estimator is unpickled under
+# any other version. Re-save the pickle before moving this pin.
+dependencies = [
+    "pygame-ce>=2.5.1",
+    "pygame_gui>=0.6.12",
+    "numpy>=1.26",
+    "pandas>=2.2",
+    "matplotlib>=3.9",
+    "scikit-learn~=1.4.2",
+    "rich>=13.7",
+]
+
+# Development tools. A dependency group rather than an extra so that `uv sync`
+# installs it by default and it never ships as part of the package; exact
+# versions are pinned in uv.lock. Without uv: `pip install -e . --group dev`
+# (pip >= 25.1).
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    # Required, not optional: `addopts` below runs the suite in parallel, so a
+    # dev environment without it fails on an unrecognised `-n`.
+    "pytest-xdist>=3.2",
+    "ruff>=0.6",
+]
+
+[project.scripts]
+strikefactor = "strikefactor.__main__:main"
+
+[tool.setuptools]
+# Only the resources listed under package-data ship. `include-package-data`
+# is off so a VCS plugin can never sweep in whatever else is on disk under
+# strikefactor/ — which, in a checkout that predates the data directory, is a
+# player's database, stores, archives and backups (see strikefactor/paths.py).
+include-package-data = false
+
+[tool.setuptools.package-data]
+# Read-only resources, resolved at runtime with config.get_path(). Player data
+# is written to strikefactor.paths.data_dir() and never lives here.
+strikefactor = [
+    "assets/**/*.png",
+    "assets/**/*.mp3",
+    "assets/theme.json",
+    "ai/*.pkl",                          # umpire model + seed pitch-selection AIs
+    "data/pitch_locations.json",
+    "data/pitcher_attributes.json",
+    "ui/font/*.ttf",
+]
+
+[tool.setuptools.packages.find]
+include = ["strikefactor*", "analysis*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+# The repository root, so `tools.sim` — the headless ball-in-play simulator
+# shared by the suite and `python -m tools.calibrate_defense` — imports the
+# same way from both. `tools` is deliberately not in `packages.find` above:
+# it is developer tooling and must not ship with the game, which means an
+# editable install's finder does not expose it and this has to.
+pythonpath = ["."]
+filterwarnings = ["ignore::DeprecationWarning"]
+# NOTE: SDL is forced to its dummy video/audio drivers in tests/conftest.py,
+# before pygame is imported, so the suite needs no display.
+#
+# The suite is ~900 tests but its runtime is not spread across them: a handful
+# of Monte Carlo fielding tests run thousands of full `HitAnimation`s and
+# account for the great majority of the wall clock, while ~850 tests finish in
+# under 5 ms each. That shape is what picks `worksteal` over the alternatives.
+# `--dist loadfile` pins each file to one worker, which leaves the slowest
+# *file* as an irreducible critical path (32 s, nearly all of it
+# test_infield_hit_verdict.py); `--dist load` splits per test but deals them
+# out up front, so a worker handed two long tests still finishes last (27 s).
+# `worksteal` rebalances as workers go idle, which is exactly the case here —
+# a few very long tests among many instant ones. Measured on 12 cores:
+# 115 s serial before this, 83 s serial after the sweep caching, 22 s here.
+#
+# Run a single test or a debugger with `-n0`, which disables xdist entirely:
+# breakpoints and `-s` do not work through a worker process.
+addopts = ["-n", "auto", "--dist", "worksteal"]
+
+[tool.ruff]
+target-version = "py312"
+line-length = 110
+exclude = [".venv", "analysis_output", "strikefactor/data/gameday_archives"]
+
+[tool.ruff.lint]
+# Deliberately a starter set, chosen so `ruff check` is GREEN today and can act
+# as a real gate. Everything selected here is clean as of the Phase 0 cleanup.
+select = [
+    "E4",   # imports
+    "E7",
+    "E9",
+    "F",    # pyflakes: undefined names, unused imports
+    "I",    # import sorting
+]
+ignore = [
+    "E741",  # ambiguous variable names (l, I) — present throughout the drawing code
+]
+# Phase 5 (hygiene sweep) turns these on and fixes the ~70 findings they raise:
+#   "B"   bugbear   — 2x mutable-argument-default in helpers.StatSwing,
+#                     2x unused loop variable
+#   "UP"  pyupgrade — typing.List -> list, Optional[X] -> X | None,
+#                     redundant open() modes
+#   "E731" lambda-assignment in pitch_simulation._start_hit_animation
+# They are left off rather than ignored so re-enabling is one deliberate edit.
+
+[tool.ruff.lint.per-file-ignores]
+# Re-exports.
+"__init__.py" = ["F401"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["strikefactor", "analysis"]

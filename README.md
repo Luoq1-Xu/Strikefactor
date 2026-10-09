@@ -5,10 +5,35 @@ A pygame baseball batting simulator that puts you in the batter's box against el
 ## 🎮 Getting Started
 
 ### Setup
+StrikeFactor uses [uv](https://docs.astral.sh/uv/) to manage Python and its
+dependencies. Install uv once (`curl -LsSf https://astral.sh/uv/install.sh | sh`
+or `brew install uv`), then from the repository root:
+
 ```bash
-pip install -r requirements.txt
-python strikefactor/main.py
+uv run strikefactor
 ```
+
+That's all you need. The first run installs Python 3.12 if necessary, creates `.venv`, and
+installs the exact versions pinned in `uv.lock`. Later runs start immediately.
+Use `uv sync` to update the environment after pulling changes.
+
+Without uv: `pip install -e .` then `python -m strikefactor` (Python 3.12+).
+`python strikefactor/main.py` does not work: `strikefactor` is a package and
+must be launched as one.
+
+### Where your data lives
+Settings, key bindings, the pitchers' trained AIs, the pitch database and your
+stats and GameDay history are kept in a per-user data directory, never in the
+repository:
+
+- macOS: `~/Library/Application Support/StrikeFactor`
+- Windows: `%APPDATA%\StrikeFactor`
+- Linux: `$XDG_DATA_HOME/strikefactor` (usually `~/.local/share/strikefactor`)
+
+Set `STRIKEFACTOR_DATA_DIR` to keep it somewhere else. The game prints the
+directory it is using at startup. Data saved by older versions inside
+`strikefactor/` is copied over automatically the first time you launch; the
+originals are left where they were.
 
 ### How to Play
 1. **Choose your mode** - Select Arcade or Sandbox from the main menu
@@ -30,7 +55,7 @@ Face a single inning of continuous at-bats against your selected pitcher. Access
 Full 9-inning baseball simulation featuring:
 - Player batting in bottom innings
 - Simulated opponent at-bats in top innings with a 9-batter lineup
-- Starting pitcher (Yamamoto) with reliever substitutions (Sasaki, deGrom, McClanahan) based on pitch count, innings pitched, and runs allowed
+- Starting pitcher with reliever substitutions based on pitch count, innings pitched, and runs allowed
 - Pitcher fatigue system that increases hit probability from pitch 50 onward
 - Momentum bonuses for consecutive hits (up to +8%)
 - Clutch bonuses with runners in scoring position (+3%)
@@ -78,11 +103,38 @@ Each pitcher has a pre-trained Q-learning AI model that adapts pitch selection b
 | **Z** | Cycle Strikezone Modes |
 | **M** | Toggle Umpire Sound |
 | **B** | Toggle Batter Visibility |
-| **V** | View Pitches (review pitch locations) |
-| **T** | Toggle Track/Analytics Display |
+| **V** | Review — PitchViz history and trajectory comparison |
+| **T** | Review — gameplay-camera pitch flight |
+| **R** | Review — latest swing, side/overhead analysis |
+| **F** | Review — latest recorded ball/fielding play |
 | **ESC** | Return to Main Menu |
 
 All key bindings (except swing controls) can be customized in the settings menu.
+
+**Unified Review:** click **REVIEW**, or use V/T/R/F to enter the same workspace
+at a specific view. It is available between pitches, on completed-play screens,
+and from inning/game results. Escape closes it without advancing the game.
+
+- Click a history **row** to focus a pitch; use its **checkbox** to include it
+  in PitchViz/Pitch Flight comparisons. Type and inning/session filters affect
+  the list; Select Filtered adds those pitches, while Clear clears all comparisons.
+- V/T/R/F switch views without changing the focused pitch. Outside Review,
+  R/F find the latest eligible swing/play—even after a subsequent take or miss.
+  A missing swing or recording is explained rather than replaced by another pitch.
+- Space plays/pauses or restarts at the end; Left/Right scrub; Home/End seek;
+  Up/Down select pitches. Use the timeline and event buttons to inspect contact,
+  catches, misplays, wall impacts and throws. Hide History for a larger view.
+- Tab or the camera button toggles Swing's side/overhead views. PitchViz and
+  Pitch Flight default to 0.25×; Swing defaults to 1/12×. In these views, 1× is
+  real pitch time: a 0.41-second pitch takes 1.64 seconds at 0.25×.
+  Fielding defaults to 0.5× the **original animation**.
+  1/2/3 select the displayed speeds. Loop and Restart are available in every view.
+- History is session-local, including earlier GameDay innings. Fielding clips
+  use a bounded cache (up to eight clips / 14,400 captured frames); the latest
+  complete clip is retained. Expired clips keep their pitch metadata. No saved
+  replay or audio playback is included.
+
+See [docs/unified-review.md](docs/unified-review.md) for the data and playback contracts.
 
 ## ⚙️ Settings
 
@@ -153,7 +205,7 @@ Every pitch is recorded to a SQLite database (`strikefactor.db`) with:
 ### Statistics Tracking
 - Hit location heatmap (9-segment strikezone breakdown)
 - Batting average by zone
-- Career statistics saved to `batting_stats.json` (cumulative all-time stats)
+- Career statistics saved to `batting_stats.json` in your data directory (cumulative all-time stats)
 - Triple slash line (BA/OBP/SLG) and OPS
 - In-game stats: hits, walks, strikeouts, runs
 
@@ -215,12 +267,16 @@ Power swings increase extra-base hit potential but require more precise timing. 
 
 ## 🔧 Requirements
 
-- Python 3.12+
-- pygame-ce
-- pygame_gui
-- pandas
-- numpy
-- scikit-learn
-- matplotlib/seaborn
+- Python 3.12+ (uv installs it for you)
+- Runtime: pygame-ce, pygame_gui, numpy, pandas, matplotlib, scikit-learn, rich.
+  They are declared in `pyproject.toml` and locked in `uv.lock`.
+
+For development, `uv sync` also installs the dev tools (pytest, pytest-xdist, ruff):
+
+```bash
+uv run pytest            # test suite
+uv run ruff check .      # lint
+uv run python pitch_analysis.py   # offline pitch analysis figures + report
+```
 
 Have fun!

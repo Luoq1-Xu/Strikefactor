@@ -1,6 +1,8 @@
-from .pitcher import Pitcher
 import random
+
 import pygame
+
+from .pitcher import Pitcher
 
 
 class Sale(Pitcher):
@@ -13,7 +15,9 @@ class Sale(Pitcher):
                          'Chris Sale',
                          1100,
                          6.7,
-                         command=0.80)
+                         command=0.80,
+                         throws='L',
+                         pitch_command={'FF': 0.84, 'SI': 0.82, 'SL': 0.78, 'CH': 0.70})
         self.load_img(loadfunc, 'assets/images/sale/LEFTY', 9)
         self.add_pitch_type(self.FF, 'FF')
         self.add_pitch_type(self.SL, 'SL')
@@ -43,29 +47,29 @@ class Sale(Pitcher):
             self.draw(self.screen, 9, 16, 22)
 
     def SL(self, simulation_func):
-        speed_mph = random.gauss(79.0, 1.0)
-        pfx_x = random.gauss(11.0, 0.5)
+        speed_mph = random.gauss(79.4, 1.0)
+        pfx_x = random.gauss(15.0, 1.0)
         pfx_z = random.gauss(0.0, 0.5)
         target_x, target_y = self.get_pitch_target('SL')
         simulation_func(self.release_point, 'chrissale', speed_mph, pfx_x, pfx_z, target_x, target_y, 'SL')
 
     def FF(self, simulation_func):
-        speed_mph = random.gauss(94.8, 0.25)
+        speed_mph = random.gauss(96.0, 0.25)
         pfx_x = random.gauss(-9.0, 1.0)
         pfx_z = random.gauss(15.0, 1.0)
         target_x, target_y = self.get_pitch_target('FF')
         simulation_func(self.release_point, 'chrissale', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FF')
 
     def SI(self, simulation_func):
-        speed_mph = random.gauss(93.9, 0.25)
+        speed_mph = random.gauss(95.4, 0.25)
         pfx_x = random.gauss(-8.0, 1.0)
         pfx_z = random.gauss(5.0, 1.0)
         target_x, target_y = self.get_pitch_target('SI')
         simulation_func(self.release_point, 'chrissale', speed_mph, pfx_x, pfx_z, target_x, target_y, 'SI')
 
     def CH(self, simulation_func):
-        speed_mph = random.gauss(87.0, 0.50)
-        pfx_x = random.gauss(-17.0, 1.0)
+        speed_mph = random.gauss(88.2, 0.50)
+        pfx_x = random.gauss(-18.0, 1.0)
         pfx_z = random.gauss(8.0, 1.0)
         target_x, target_y = self.get_pitch_target('CH')
         simulation_func(self.release_point, 'chrissale', speed_mph, pfx_x, pfx_z, target_x, target_y, 'CH')

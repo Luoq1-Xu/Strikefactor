@@ -1,8 +1,12 @@
-import pygame
 import json
 from enum import Enum
-from config import get_path
-from typing import Dict, Callable, Optional, Set
+from typing import Callable, Dict, Optional, Set
+
+import pygame
+
+from strikefactor import paths
+from strikefactor.utils.io import atomic_write_json
+
 
 class KeyAction(Enum):
     TOGGLE_UI = "toggle_ui"
@@ -14,11 +18,14 @@ class KeyAction(Enum):
     MAIN_MENU = "main_menu"
     TOGGLE_TRACK = "toggle_track"
     CHALLENGE = "challenge"
+    TOGGLE_HUD_MODE = "toggle_hud_mode"
+    SWING_REPLAY = "swing_replay"
+    FIELDING_REPLAY = "fielding_replay"
 
 class KeyBindingManager:
     def __init__(self, settings_manager):
         self.settings_manager = settings_manager
-        self.settings_file = get_path("key_bindings.json")
+        self.settings_file = paths.data_path(paths.KEY_BINDINGS_FILE)
 
         self.default_bindings = {
             KeyAction.TOGGLE_UI.value: pygame.K_h,
@@ -29,7 +36,10 @@ class KeyBindingManager:
             KeyAction.VIEW_PITCHES.value: pygame.K_v,
             KeyAction.MAIN_MENU.value: pygame.K_ESCAPE,
             KeyAction.TOGGLE_TRACK.value: pygame.K_t,
-            KeyAction.CHALLENGE.value: pygame.K_c
+            KeyAction.CHALLENGE.value: pygame.K_c,
+            KeyAction.TOGGLE_HUD_MODE.value: pygame.K_u,
+            KeyAction.SWING_REPLAY.value: pygame.K_r,
+            KeyAction.FIELDING_REPLAY.value: pygame.K_f
         }
 
         self.current_bindings = self.load_bindings()
@@ -46,16 +56,16 @@ class KeyBindingManager:
                     if key not in bindings:
                         bindings[key] = value
                 return bindings
-        except (json.JSONDecodeError, FileNotFoundError):
+        except (json.JSONDecodeError, FileNotFoundError) as e:
+            if isinstance(e, json.JSONDecodeError):
+                print(f"Warning: key bindings file {self.settings_file} is corrupt "
+                      f"({e}); falling back to defaults.")
             return self.default_bindings.copy()
 
     def save_bindings(self):
-        """Save current key bindings to file."""
-        try:
-            with open(self.settings_file, 'w') as f:
-                json.dump(self.current_bindings, f, indent=2)
-        except Exception as e:
-            print(f"Failed to save key bindings: {e}")
+        """Save current key bindings to file (atomically, so a mid-write crash
+        can't truncate the file and silently reset all bindings)."""
+        atomic_write_json(self.settings_file, self.current_bindings)
 
     def bind_key(self, action: KeyAction, key_code: int):
         """Bind a key to an action."""
@@ -101,10 +111,13 @@ class KeyBindingManager:
             KeyAction.TOGGLE_SOUND: "Toggle Sound",
             KeyAction.TOGGLE_BATTER: "Toggle Batter",
             KeyAction.QUICK_PITCH: "Quick Pitch",
-            KeyAction.VIEW_PITCHES: "View Pitches",
+            KeyAction.VIEW_PITCHES: "Review: PitchViz",
             KeyAction.MAIN_MENU: "Main Menu",
-            KeyAction.TOGGLE_TRACK: "Toggle Track",
-            KeyAction.CHALLENGE: "ABS Challenge"
+            KeyAction.TOGGLE_TRACK: "Pitch Flight",
+            KeyAction.CHALLENGE: "ABS Challenge",
+            KeyAction.TOGGLE_HUD_MODE: "Toggle HUD Mode",
+            KeyAction.SWING_REPLAY: "Review: Swing",
+            KeyAction.FIELDING_REPLAY: "Review: Fielding"
         }
         return action_names.get(action, action.value.replace('_', ' ').title())
 
@@ -112,8 +125,14 @@ class KeyBindingManager:
         """Register a callback function for an action."""
         self.action_callbacks[action] = callback
 
-    def handle_key_down(self, key_code: int):
-        """Handle key press events."""
+    def handle_key_down(self, key_code: int) -> bool:
+        """Handle key press events.
+
+        Returns True if the key was bound to an action (and was therefore
+        consumed), so the caller can avoid dispatching the same keypress to
+        the active game state as well. Stops at the first matching action so a
+        duplicate binding can't fire several callbacks on one press.
+        """
         self.pressed_keys.add(key_code)
 
         for action in KeyAction:
@@ -122,6 +141,8 @@ class KeyBindingManager:
                     self.action_callbacks[action]()
                 else:
                     self._handle_default_action(action)
+                return True
+        return False
 
     def handle_key_up(self, key_code: int):
         """Handle key release events."""
@@ -139,10 +160,6 @@ class KeyBindingManager:
             current = self.settings_manager.get_setting("umpire_sound")
             self.settings_manager.set_setting("umpire_sound", not current)
 
-    def is_key_pressed(self, key_code: int) -> bool:
-        """Check if a key is currently pressed."""
-        return key_code in self.pressed_keys
-
     def is_ui_visible(self) -> bool:
         """Check if UI should be visible."""
         return self.ui_visible
@@ -150,22 +167,6 @@ class KeyBindingManager:
     def set_ui_visibility(self, visible: bool):
         """Set UI visibility state."""
         self.ui_visible = visible
-
-    def get_all_bindings(self) -> Dict[str, tuple]:
-        """Get all current bindings as (action_name, key_name) tuples."""
-        bindings = {}
-        for action in KeyAction:
-            key_code = self.get_key_for_action(action)
-            action_name = self.get_action_name(action)
-            key_name = self.get_key_name(key_code)
-            bindings[action.value] = (action_name, key_name)
-        return bindings
-
-    def unbind_key(self, action: KeyAction):
-        """Remove binding for an action."""
-        if action.value in self.current_bindings:
-            del self.current_bindings[action.value]
-            self.save_bindings()
 
     def reset_to_defaults(self):
         """Reset all key bindings to default values."""

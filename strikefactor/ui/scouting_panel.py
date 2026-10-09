@@ -1,10 +1,8 @@
 """Scouting Report Panel - displays pitcher stats and arsenal during gameplay."""
 
 import pygame
-import pygame_gui
-from pygame_gui.elements import UIPanel, UILabel
 from pygame_gui.core import ObjectID
-
+from pygame_gui.elements import UILabel, UIPanel
 
 # Pitch type full names
 PITCH_NAMES = {
@@ -15,6 +13,7 @@ PITCH_NAMES = {
     'CB': 'Curveball',
     'CU': 'Curveball',
     'CH': 'Changeup',
+    'FO': 'Forkball',
     'FS': 'Splitter',
     'KC': 'Knuckle Curve'
 }
@@ -28,7 +27,8 @@ PITCH_VELOCITIES = {
     'CB': '73-81',
     'CU': '73-81',
     'CH': '83-89',
-    'FS': '85-90',
+    'FO': '84-87',
+    'FS': '90-92',
     'KC': '75-82'
 }
 
@@ -266,9 +266,3 @@ class ScoutingReportPanel(UIPanel):
 
             self.stat_labels[stat_name].set_text(f'{formatted}{color_indicator}')
 
-    def toggle(self):
-        """Toggle panel visibility."""
-        if self.visible:
-            self.hide()
-        else:
-            self.show()

@@ -18,9 +18,6 @@ import math
 # Gravity constant (ft/s^2)
 GRAVITY = 32.174
 
-# Mound distance (ft)
-MOUND_DISTANCE = 60.5
-
 # Realistic air drag deceleration (ft/s^2).
 # A 95 mph fastball typically arrives at ~85 mph, losing ~10 mph over ~0.4s.
 # decel ≈ (139.3 - 124.7) / 0.4 ≈ 30 ft/s²
@@ -48,13 +45,6 @@ class PitchTrajectory:
         y = self.y0 + self.vy0 * t + 0.5 * self.ay * t * t
         z = self.z0 + self.vz0 * t + 0.5 * self.az * t * t
         return x, y, z
-
-    def velocity_at(self, t):
-        """Get 3D velocity at time t (seconds)."""
-        vx = self.vx0 + self.ax * t
-        vy = self.vy0 + self.ay * t
-        vz = self.vz0 + self.az * t
-        return vx, vy, vz
 
     @property
     def travel_time(self):
@@ -84,6 +74,32 @@ class PitchTrajectory:
                     self._travel_time = min(candidates) if candidates else 0.0
 
         return self._travel_time
+
+    def time_at_depth(self, y_ft):
+        """When the ball was `y_ft` in front of the plate, in seconds.
+
+        `travel_time` is this at `y_ft = 0`; the general form is needed
+        because the bat meets the ball a couple of feet out in front, so
+        "when should the barrel have been there" is a question about a depth
+        the pitch reaches before the plate. Unclamped on purpose — past the
+        plate the model still describes a real ball heading for the mitt, and
+        that extrapolation is exactly what a late swing is.
+
+        Of the two roots the near one is on the way in; the far one is the
+        ball being decelerated back out again by the drag term, which is not
+        a thing that happens to a pitch.
+        """
+        a = 0.5 * self.ay
+        b = self.vy0
+        c = self.y0 - y_ft
+        if abs(a) < 1e-10:
+            return self.travel_time if abs(b) < 1e-10 else -c / b
+        disc = b * b - 4 * a * c
+        if disc < 0:
+            return -b / (2 * a)
+        root = math.sqrt(disc)
+        return min(((-b + root) / (2 * a), (-b - root) / (2 * a)),
+                   key=lambda t: abs(t - self.travel_time))
 
     @property
     def travel_time_ms(self):
@@ -202,19 +218,25 @@ class UmpireCamera:
             return 0
         return real_radius_ft * self.scale_y / depth
 
+    @property
+    def ft_per_px_z(self):
+        """Vertical feet per screen pixel at the plate.
+
+        The one conversion that keeps a height stated in real feet and one
+        stated in the engine's pixels agreeing. It lives on the camera because
+        it is a fact about the projection, and because it was written out
+        independently in two gameplay modules that have to produce the same
+        number or the batted-ball model and the swing replay start describing
+        different swings.
+        """
+        return self.cam_dist / self.scale_y
+
     def screen_to_world_at_plate(self, screen_x, screen_y):
         """Convert screen pixel coordinates to real-world feet at the plate (y=0)."""
         depth_at_plate = self.cam_dist  # y=0, so depth = cam_dist
         x_ft = (self.screen_center_x - screen_x) * depth_at_plate / self.scale_x
         z_ft = self.cam_height - (screen_y - self.screen_center_y) * depth_at_plate / self.scale_y
         return x_ft, z_ft
-
-    def world_to_screen_at_plate(self, x_ft, z_ft):
-        """Convert real-world feet at plate to screen pixel coordinates."""
-        result = self.project(x_ft, 0.0, z_ft)
-        if result is None:
-            return 0.0, 0.0
-        return result[0], result[1]
 
 
 # Default camera calibrated to match existing strike zone:

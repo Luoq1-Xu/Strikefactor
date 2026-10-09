@@ -1,11 +1,11 @@
 """Lap Log Panel - displays lap history during gameplay."""
 
-import pygame
-import pygame_gui
-from pygame_gui.elements import UIPanel, UILabel, UIButton
-from pygame_gui.elements.ui_scrolling_container import UIScrollingContainer
-from pygame_gui.core import ObjectID
 from datetime import datetime
+
+import pygame
+from pygame_gui.core import ObjectID
+from pygame_gui.elements import UIButton, UILabel, UIPanel
+from pygame_gui.elements.ui_scrolling_container import UIScrollingContainer
 
 
 class LapLogPanel(UIPanel):
@@ -237,9 +237,3 @@ class LapLogPanel(UIPanel):
         """Return the close button for event handling."""
         return self.close_btn
 
-    def toggle(self):
-        """Toggle panel visibility."""
-        if self.visible:
-            self.hide()
-        else:
-            self.show()

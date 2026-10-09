@@ -1,4 +1,4 @@
-from config import CHALLENGES_PER_SIDE
+from strikefactor.config import CHALLENGES_PER_SIDE
 
 
 class ChallengeManager:
@@ -41,6 +41,24 @@ class ChallengeManager:
     def reset_all(self) -> None:
         for side in self._remaining:
             self._remaining[side] = self._per_side
+
+    def remaining_by_side(self) -> dict[str, int]:
+        """Return the finite challenge counts for a GameDay save."""
+        return dict(self._remaining)
+
+    def restore_remaining(self, counts: dict[str, int] | None) -> None:
+        """Restore saved counts; older sessions without them start full.
+
+        Ignore unknown sides and invalid values from a damaged or hand-edited
+        session instead of letting them grant extra challenges.
+        """
+        self.reset_all()
+        if not isinstance(counts, dict):
+            return
+        for side in self._sides:
+            value = counts.get(side)
+            if type(value) is int and 0 <= value <= self._per_side:
+                self._remaining[side] = value
 
     @property
     def per_side(self) -> int:

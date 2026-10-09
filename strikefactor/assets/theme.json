@@ -120,18 +120,6 @@
         }
     },
 
-    "@settings_button":
-    {
-        "font":
-        {
-            "name": "8bitoperator_jve",
-            "size": "24",
-            "bold": "0",
-            "italic": "0",
-            "regular_path": "8bitoperator_jve.ttf"
-        }
-    },
-
     "window.#title_bar":
     {
         "font":
@@ -144,101 +132,26 @@
         }
     },
 
-    "@box_score_panel":
-    {
-        "colours":
-        {
-            "dark_bg": "#0a0e14",
-            "normal_border": "#3a5a3a"
-        },
-        "misc":
-        {
-            "shape": "rounded_rectangle",
-            "shape_corner_radius": "4",
-            "border_width": "2",
-            "shadow_width": "1"
-        }
-    },
-
-    "@box_score_header":
-    {
-        "colours":
-        {
-            "normal_text": "#8a9a8a"
-        },
-        "font":
-        {
-            "name": "8bitoperator_jve",
-            "size": "16",
-            "bold": "0",
-            "italic": "0",
-            "regular_path": "8bitoperator_jve.ttf"
-        },
-        "misc":
-        {
-            "text_shadow": "0"
-        }
-    },
-
-    "@box_score_opp":
-    {
-        "colours":
-        {
-            "normal_text": "#ffc864"
-        },
-        "font":
-        {
-            "name": "8bitoperator_jve",
-            "size": "16",
-            "bold": "1",
-            "italic": "0",
-            "regular_path": "8bitoperator_jve.ttf"
-        },
-        "misc":
-        {
-            "text_shadow": "0"
-        }
-    },
-
-    "@box_score_plr":
-    {
-        "colours":
-        {
-            "normal_text": "#96ff96"
-        },
-        "font":
-        {
-            "name": "8bitoperator_jve",
-            "size": "16",
-            "bold": "1",
-            "italic": "0",
-            "regular_path": "8bitoperator_jve.ttf"
-        },
-        "misc":
-        {
-            "text_shadow": "0"
-        }
-    },
 
     "@broadcast_button":
     {
         "colours":
         {
-            "normal_bg": "#0F0F19DC",
-            "hovered_bg": "#1E1E2DF0",
-            "disabled_bg": "#0F0F1990",
-            "selected_bg": "#0F0F19DC",
-            "active_bg": "#0F0F19DC",
-            "normal_text": "#DCDCDC",
+            "normal_bg": "#000000",
+            "hovered_bg": "#1A1A1A",
+            "disabled_bg": "#000000",
+            "selected_bg": "#1A1A1A",
+            "active_bg": "#1A1A1A",
+            "normal_text": "#FFFFFF",
             "hovered_text": "#FFFFFF",
             "selected_text": "#FFFFFF",
-            "disabled_text": "#46465A",
-            "active_text": "#8C8CA0",
-            "normal_border": "#46465A",
-            "hovered_border": "#8C8CA0",
-            "disabled_border": "#2A2A38",
-            "selected_border": "#46465A",
-            "active_border": "#46465A",
+            "disabled_text": "#555555",
+            "active_text": "#FFFFFF",
+            "normal_border": "#888888",
+            "hovered_border": "#FFFFFF",
+            "disabled_border": "#333333",
+            "selected_border": "#FFFFFF",
+            "active_border": "#FFFFFF",
             "normal_text_shadow": "#00000000",
             "hovered_text_shadow": "#00000000",
             "disabled_text_shadow": "#00000000",
@@ -255,8 +168,7 @@
         },
         "misc":
         {
-            "shape": "rounded_rectangle",
-            "shape_corner_radius": "3",
+            "shape": "rectangle",
             "border_width": "1",
             "shadow_width": "0"
         }

@@ -5,19 +5,19 @@ Records swing decisions by zone quadrant, pitch type, and count to help
 the AI exploit patterns in the player's behavior.
 """
 
+from strikefactor import config
+
 
 class BatterProfile:
     """Tracks batter swing tendencies during a game session."""
 
-    # Zone quadrants relative to strike zone center (630, 485)
-    ZONE_CENTER_X = 630
-    ZONE_CENTER_Y = 485
-
-    # Strike zone boundaries
-    ZONE_LEFT = 565
-    ZONE_RIGHT = 695
-    ZONE_TOP = 410
-    ZONE_BOTTOM = 560
+    # Strike zone geometry — single source in config.py.
+    ZONE_CENTER_X = config.ZONE_CENTER_X
+    ZONE_CENTER_Y = config.ZONE_CENTER_Y
+    ZONE_LEFT = config.ZONE_LEFT
+    ZONE_RIGHT = config.ZONE_RIGHT
+    ZONE_TOP = config.ZONE_TOP
+    ZONE_BOTTOM = config.ZONE_BOTTOM
 
     def __init__(self):
         self.reset()
@@ -138,18 +138,59 @@ class BatterProfile:
             return 0.3  # Default assumption, not enough data
         return self.chase_swings / self.chase_pitches
 
-    def get_zone_swing_rate(self, quadrant):
-        """Get swing rate for a specific zone quadrant."""
-        swings, seen = self.zone_swings[quadrant]
-        if seen < 2:
-            return 0.5
-        return swings / seen
-
     def get_first_pitch_swing_rate(self):
         """Get first pitch swing rate."""
         if self.first_pitch_count < 2:
             return 0.3
         return self.first_pitch_swings / self.first_pitch_count
+
+    def to_dict(self) -> dict:
+        """Serialize the profile's aggregates to a JSON-safe dict.
+
+        Used by PitchDatabaseService.save_batter_profile so tendencies
+        survive across launches, segregated by (game_mode, difficulty).
+        """
+        return {
+            "version": 1,
+            "zone_swings": self.zone_swings,
+            "pitch_type_swings": self.pitch_type_swings,
+            "chase_swings": self.chase_swings,
+            "chase_pitches": self.chase_pitches,
+            "first_pitch_swings": self.first_pitch_swings,
+            "first_pitch_count": self.first_pitch_count,
+            "count_swings": self.count_swings,
+        }
+
+    def from_dict(self, data: dict):
+        """Restore aggregates from a previously to_dict()'d payload.
+
+        Resets first so missing keys behave like a fresh profile, then
+        copies in whatever was persisted. Unknown keys are ignored.
+        """
+        self.reset()
+        if not isinstance(data, dict):
+            return
+        # zone_swings / count_swings are dicts of [int, int]; coerce list
+        # values back to lists so increments work.
+        zs = data.get("zone_swings")
+        if isinstance(zs, dict):
+            for k, v in zs.items():
+                if k in self.zone_swings and isinstance(v, (list, tuple)) and len(v) == 2:
+                    self.zone_swings[k] = [int(v[0]), int(v[1])]
+        pts = data.get("pitch_type_swings")
+        if isinstance(pts, dict):
+            for k, v in pts.items():
+                if isinstance(v, (list, tuple)) and len(v) == 2:
+                    self.pitch_type_swings[k] = [int(v[0]), int(v[1])]
+        cs = data.get("count_swings")
+        if isinstance(cs, dict):
+            for k, v in cs.items():
+                if k in self.count_swings and isinstance(v, (list, tuple)) and len(v) == 2:
+                    self.count_swings[k] = [int(v[0]), int(v[1])]
+        self.chase_swings = int(data.get("chase_swings", 0))
+        self.chase_pitches = int(data.get("chase_pitches", 0))
+        self.first_pitch_swings = int(data.get("first_pitch_swings", 0))
+        self.first_pitch_count = int(data.get("first_pitch_count", 0))
 
     def get_pitch_bonuses(self, available_pitches, count_state):
         """Calculate Q-value bonuses for each pitch type based on batter tendencies.
@@ -166,7 +207,7 @@ class BatterProfile:
             swing_rate = self.get_swing_rate(pitch)
 
             # If batter chases a lot (>45%), reward chase pitches (breaking balls)
-            if chase_rate > 0.45 and pitch in ('SL', 'CB', 'SLD', 'FS', 'CH'):
+            if chase_rate > 0.45 and pitch in ('SL', 'CB', 'SLD', 'FS', 'FO', 'CH'):
                 bonus += (chase_rate - 0.35) * 1.5  # Up to ~0.3 bonus
 
             # If batter rarely swings at this pitch type, it's less effective as a chase
@@ -184,7 +225,7 @@ class BatterProfile:
             # First-pitch aggression exploitation
             if count_state == 'first_pitch':
                 fp_rate = self.get_first_pitch_swing_rate()
-                if fp_rate > 0.60 and pitch in ('SL', 'CB', 'SLD', 'FS'):
+                if fp_rate > 0.60 and pitch in ('SL', 'CB', 'SLD', 'FS', 'FO'):
                     bonus += 0.2  # Aggressive batter → start with breaking ball
                 elif fp_rate < 0.25 and pitch in ('FF', 'SI'):
                     bonus += 0.15  # Passive batter → steal first-pitch strike
@@ -192,14 +233,3 @@ class BatterProfile:
             bonuses[pitch] = bonus
 
         return bonuses
-
-    def get_location_bias(self, handedness='R'):
-        """Get location bias suggestions based on batter weaknesses.
-
-        Returns a dict with quadrant swing rates so the pitcher's targeting
-        can exploit weak zones.
-        """
-        rates = {}
-        for quadrant in self.zone_swings:
-            rates[quadrant] = self.get_zone_swing_rate(quadrant)
-        return rates

@@ -1,5 +1,8 @@
-import pygame
 import os
+
+import pygame
+
+from strikefactor.config import ABS_PINK
 
 
 class Scorebug:
@@ -10,18 +13,20 @@ class Scorebug:
     BAR_HEIGHT = 42
     BAR_WIDTH = 1280
 
-    # Colors
-    BG_COLOR = (15, 15, 25, 220)
-    TEXT_COLOR = (220, 220, 220)
-    LABEL_COLOR = (140, 140, 160)
-    BALL_COLOR = (80, 220, 80)
-    STRIKE_COLOR = (227, 75, 80)
-    OUT_COLOR = (227, 75, 80)
-    DOT_OFF_COLOR = (55, 55, 65)
-    BASE_ON_COLOR = (255, 220, 50)
-    BASE_OFF_COLOR = (70, 70, 80)
-    DIVIDER_COLOR = (70, 70, 90)
-    FLASH_COLOR = (40, 40, 55, 220)
+    # Colors — strict black/white/gray palette.
+    BG_COLOR = (0, 0, 0, 230)
+    TEXT_COLOR = (240, 240, 240)
+    LABEL_COLOR = (140, 140, 140)
+    # Active indicators are all white. Off state is dark gray.
+    BALL_COLOR = (240, 240, 240)
+    STRIKE_COLOR = (240, 240, 240)
+    OUT_COLOR = (240, 240, 240)
+    DOT_OFF_COLOR = (50, 50, 50)
+    BASE_ON_COLOR = (240, 240, 240)
+    BASE_OFF_COLOR = (50, 50, 50)
+    DIVIDER_COLOR = (90, 90, 90)
+    FLASH_COLOR = (30, 30, 30, 220)
+    FLASH_DURATION_MS = 500
 
     # Section X positions
     BASES_X = 12
@@ -46,7 +51,9 @@ class Scorebug:
         self.last_pitch_type = ""
         self.last_pitch_speed = 0.0
         self.last_pitch_outcome = ""
-        self._flash_timer = 0
+        # Flash highlight is time-based (ms) so its duration is independent of
+        # the configurable display FPS.
+        self._flash_until = 0
 
         # Pre-render background surface
         self._bg_surface = pygame.Surface((self.BAR_WIDTH, self.BAR_HEIGHT), pygame.SRCALPHA)
@@ -61,7 +68,7 @@ class Scorebug:
         self.last_pitch_type = pitch_type
         self.last_pitch_speed = speed_mph
         self.last_pitch_outcome = outcome
-        self._flash_timer = 30  # ~0.5s at 60fps
+        self._flash_until = pygame.time.get_ticks() + self.FLASH_DURATION_MS
 
     def draw(self, screen):
         """Draw the scorebug overlay."""
@@ -92,10 +99,6 @@ class Scorebug:
         self._draw_divider(screen, 1002, y)
         self._draw_stats(screen, y_center)
 
-        # Tick flash timer
-        if self._flash_timer > 0:
-            self._flash_timer -= 1
-
     def _draw_divider(self, screen, x, y):
         """Draw a thin vertical divider."""
         pygame.draw.line(screen, self.DIVIDER_COLOR, (x, y + 6), (x, y + self.BAR_HEIGHT - 6), 1)
@@ -118,7 +121,7 @@ class Scorebug:
             color = self.BASE_ON_COLOR if bases[i] == 'yellow' else self.BASE_OFF_COLOR
             points = [(bx, by - size), (bx + size, by), (bx, by + size), (bx - size, by)]
             pygame.draw.polygon(screen, color, points)
-            pygame.draw.polygon(screen, (30, 30, 40), points, 1)
+            pygame.draw.polygon(screen, (30, 30, 30), points, 1)
 
     def _draw_score(self, screen, y_center):
         """Draw score. GameDay shows both teams + inning, otherwise just runs."""
@@ -133,15 +136,10 @@ class Scorebug:
             inn_text = self.label_font.render(f"{half}{inning}", True, self.LABEL_COLOR)
             screen.blit(inn_text, (x, y_center - 18))
 
-            # Scores
-            # After inning ends, current inning runs are already folded into player_score
-            # so only add scoreKeeper (current inning) when the inning is still active
-            if self.game.inning_ended:
-                player_total = gm.player_score
-            else:
-                player_total = gm.player_score + self.game.scoreKeeper.get_score()
+            # Scores. player_score is folded incrementally per at-bat via
+            # record_player_at_bat, so it's always live.
             opp_text = self.small_font.render(f"OPP {gm.opponent_score}", True, self.TEXT_COLOR)
-            you_text = self.small_font.render(f"YOU {player_total}", True, self.TEXT_COLOR)
+            you_text = self.small_font.render(f"YOU {gm.player_score}", True, self.TEXT_COLOR)
             screen.blit(opp_text, (x, y_center - 4))
             screen.blit(you_text, (x + 65, y_center - 4))
         else:
@@ -220,8 +218,6 @@ class Scorebug:
         else:
             side = "home"
 
-        from config import ABS_PINK
-
         label = self.label_font.render("ABS", True, self.LABEL_COLOR)
         screen.blit(label, (x, y_center - 17))
 
@@ -254,11 +250,12 @@ class Scorebug:
         """Draw last pitch type + speed + outcome with brief highlight."""
         x = self.LAST_PITCH_X
 
-        # Flash highlight background
-        if self._flash_timer > 0:
-            alpha = int(220 * (self._flash_timer / 30))
+        # Flash highlight background (fades out over FLASH_DURATION_MS)
+        remaining = self._flash_until - pygame.time.get_ticks()
+        if remaining > 0:
+            alpha = int(220 * (remaining / self.FLASH_DURATION_MS))
             flash = pygame.Surface((245, self.BAR_HEIGHT), pygame.SRCALPHA)
-            flash.fill((40, 50, 70, alpha))
+            flash.fill((60, 60, 60, alpha))
             screen.blit(flash, (x - 5, y))
 
         if not self.last_pitch_type:
@@ -292,7 +289,9 @@ class Scorebug:
 
         runs = self.game.scoreKeeper.get_score()
         ops = self.game.field_renderer.get_ops()
-        ops_str = f"{ops:.3f}" if ops < 1 else f"{ops:.3f}"
+        # Drop the leading zero for sub-1.000 OPS (baseball convention),
+        # keep it for 1.000+.
+        ops_str = f"{ops:.3f}"[1:] if ops < 1 else f"{ops:.3f}"
 
         stats_text = (
             f"R:{runs}  "

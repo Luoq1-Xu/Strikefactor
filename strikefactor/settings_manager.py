@@ -1,7 +1,10 @@
 import json
 import os
 from enum import Enum
-from config import get_path
+
+from strikefactor import paths
+from strikefactor.utils.io import atomic_write_json
+
 
 class DifficultyLevel(Enum):
     ROOKIE = "rookie"
@@ -10,13 +13,105 @@ class DifficultyLevel(Enum):
     ALL_STAR = "all_star"
     HALL_OF_FAME = "hall_of_fame"
 
+# Define difficulty multipliers that affect game mechanics.
+#
+# `aim_assist` is the fraction of the player's aim error that the
+# in-swing adjustment removes before the bat is built — a hitter reads
+# the ball late and adjusts the barrel's plane on the way to it, so the
+# bat does not end up exactly where they set out to put it. Converted in
+# `bat_contact.aim_at_pitch`, which caps the correction at
+# `MAX_ASSIST_FT` so a genuinely bad guess still misses. Unlike the
+# window and zone multipliers it moves the *bat* rather than widening
+# its tolerance, so it lifts contact quality as well as hit-or-miss.
+#
+# **It is the only dial on this table that produces balls in play**, and that
+# is worth stating because the table reads as though `contact_zone_size` were
+# the headline. Swept alone at AMATEUR over a player model fitted to recorded
+# play (aim scatter 0.75 ft/axis, timing N(+19, 48) ms):
+#
+#   contact_zone_size 0.7 -> 2.5   fair 24.4% -> 25.0%   (whiff 34% -> 17%,
+#                                                         foul 42% -> 58%)
+#   aim_assist        0.20 -> 0.95 fair  8.3% -> 39.0%
+#
+# A 3.6x change in the bat's tolerance moves balls in play by 0.6 points and
+# converts whiffs into fouls one for one — a marginal contact admitted by a
+# wider tolerance has a large `vertical_offset_ft` by construction, so it lands
+# under the foul threshold. Only moving the bat can raise quality.
+#
+# The easy end was raised off that measurement: AMATEUR 0.65 -> 0.80 lands the
+# default at whiff 27% / foul 34% / fair 38% against MLB's 24/38/38, and drops
+# fouls by 11 points while barely moving whiffs. The response saturates around
+# 0.85-0.90, which is why ROOKIE only goes to 0.90 and why it already played
+# well on pitches in the zone. PROFESSIONAL and up are untouched, so the notch
+# from AMATEUR to PROFESSIONAL is now the steepest on the ladder (fair 38% ->
+# 15%); closing that is a separate decision about the hard end.
+DIFFICULTY_MULTIPLIERS = {
+    DifficultyLevel.ROOKIE: {
+        "aim_assist": 0.90,                # Reads the ball best
+        "contact_timing_window": 1.5,      # 50% larger timing window
+        "power_timing_window": 1.3,        # 30% larger timing window
+        "contact_zone_size": 1.4,          # 40% larger contact zone
+        "out_probability_modifier": 0.7,   # 30% fewer outs
+        "strike_zone_tolerance": 1.2,      # More forgiving strike zone
+        "foul_ball_chance": 1.3            # More foul balls (second chances)
+    },
+    DifficultyLevel.AMATEUR: {
+        "aim_assist": 0.80,                # Balanced in-swing adjustment
+        "contact_timing_window": 1.0,      # Normal timing window
+        "power_timing_window": 1.0,        # Normal timing window
+        "contact_zone_size": 1.0,          # Normal contact zone
+        "out_probability_modifier": 1.0,   # Normal out rates
+        "strike_zone_tolerance": 1.0,      # Normal strike zone
+        "foul_ball_chance": 1.0            # Normal foul ball rate
+    },
+    DifficultyLevel.PROFESSIONAL: {
+        "aim_assist": 0.50,                # Half the aim error survives
+        "contact_timing_window": 0.8,      # 20% smaller timing window
+        "power_timing_window": 0.7,        # 30% smaller timing window
+        "contact_zone_size": 0.9,          # 10% smaller contact zone
+        "out_probability_modifier": 1.2,   # 20% more outs
+        "strike_zone_tolerance": 0.9,      # Tighter strike zone
+        "foul_ball_chance": 0.8            # Fewer foul balls
+    },
+    DifficultyLevel.ALL_STAR: {
+        "aim_assist": 0.35,                # Little help reading the ball
+        "contact_timing_window": 0.6,      # 40% smaller timing window
+        "power_timing_window": 0.5,        # 50% smaller timing window
+        "contact_zone_size": 0.8,          # 20% smaller contact zone
+        "out_probability_modifier": 1.4,   # 40% more outs
+        "strike_zone_tolerance": 0.8,      # Much tighter strike zone
+        "foul_ball_chance": 0.7            # Fewer foul balls
+    },
+    DifficultyLevel.HALL_OF_FAME: {
+        "aim_assist": 0.20,                # Almost no adjustment
+        "contact_timing_window": 0.4,      # 60% smaller timing window
+        "power_timing_window": 0.3,        # 70% smaller timing window
+        "contact_zone_size": 0.7,          # 30% smaller contact zone
+        "out_probability_modifier": 1.6,   # 60% more outs
+        "strike_zone_tolerance": 0.7,      # Very tight strike zone
+        "foul_ball_chance": 0.6            # Much fewer foul balls
+    }
+}
+
+
 class SettingsManager:
     # FPS option constants
     DISPLAY_FPS_OPTIONS = [60, 120]
     ENGINE_FPS_OPTIONS = [60, 120]  # 60 is baseline for original physics
 
+    HUD_MODES = ["legacy", "broadcast", "minimal"]
+
+    # How good the nine gloves behind the pitcher are. Deliberately a separate
+    # axis from `difficulty`: difficulty is about the bat (aim assist, timing
+    # windows, the foul threshold), this is about the glove. Kept as plain
+    # strings here rather than importing `gameplay.defense`, for the same
+    # reason HUD_MODES is a list of strings — settings must not depend on the
+    # gameplay layer, which already depends on settings. The two lists are
+    # pinned to each other by tests/test_defense.py.
+    DEFENSE_LEVELS = ["sandlot", "minors", "league", "gold_glove"]
+
     def __init__(self):
-        self.settings_file = get_path("settings.json")
+        self.settings_file = paths.data_path(paths.SETTINGS_FILE)
         self.default_settings = {
             "difficulty": DifficultyLevel.AMATEUR.value,
             "umpire_sound": True,
@@ -25,8 +120,11 @@ class SettingsManager:
             "batter_handedness": "R",
             "display_mode": "windowed",  # "windowed" or "fullscreen"
             "display_fps": 60,           # Options: 60, 120
-            "engine_fps": 60,            # Options: 60, 120, 240, 360 (60 = original physics)
-            "abs_enabled": True          # MLB-style ball/strike challenge system
+            "engine_fps": 60,            # Options: 60, 120 (60 = original physics)
+            "abs_enabled": True,         # MLB-style ball/strike challenge system
+            "foul_animation_enabled": True,  # Play the hit animation for foul balls
+            "hud_mode": "legacy",        # "legacy" | "broadcast" | "minimal"
+            "defense_strength": "league" # How good the defense behind the pitcher is
         }
         self.current_settings = self.load_settings()
 
@@ -36,6 +134,10 @@ class SettingsManager:
             if os.path.exists(self.settings_file):
                 with open(self.settings_file, 'r') as f:
                     settings = json.load(f)
+                # Migrate legacy boolean minimal_hud → hud_mode string.
+                if "hud_mode" not in settings:
+                    settings["hud_mode"] = "minimal" if settings.get("minimal_hud") else "legacy"
+                settings.pop("minimal_hud", None)
                 # Ensure all default keys exist
                 for key, value in self.default_settings.items():
                     if key not in settings:
@@ -43,17 +145,16 @@ class SettingsManager:
                 return settings
             else:
                 return self.default_settings.copy()
-        except (json.JSONDecodeError, FileNotFoundError):
+        except (json.JSONDecodeError, FileNotFoundError) as e:
+            if isinstance(e, json.JSONDecodeError):
+                print(f"Warning: settings file {self.settings_file} is corrupt "
+                      f"({e}); falling back to defaults.")
             return self.default_settings.copy()
 
     def save_settings(self):
-        """Save current settings to file."""
-        try:
-            os.makedirs(os.path.dirname(self.settings_file), exist_ok=True)
-            with open(self.settings_file, 'w') as f:
-                json.dump(self.current_settings, f, indent=2)
-        except Exception as e:
-            print(f"Failed to save settings: {e}")
+        """Save current settings to file (atomically, so a mid-write crash
+        can't truncate the file and silently reset all preferences)."""
+        atomic_write_json(self.settings_file, self.current_settings)
 
     def get_setting(self, key):
         """Get a specific setting value."""
@@ -85,54 +186,19 @@ class SettingsManager:
                 print(f"Invalid difficulty level: {difficulty_level}")
 
     def get_difficulty_multipliers(self):
-        """Get difficulty-specific game multipliers."""
-        difficulty = self.get_difficulty()
+        """Get difficulty-specific game multipliers.
 
-        # Define difficulty multipliers that affect game mechanics
-        multipliers = {
-            DifficultyLevel.ROOKIE: {
-                "contact_timing_window": 1.5,      # 50% larger timing window
-                "power_timing_window": 1.3,        # 30% larger timing window
-                "contact_zone_size": 1.4,          # 40% larger contact zone
-                "out_probability_modifier": 0.7,   # 30% fewer outs
-                "strike_zone_tolerance": 1.2,      # More forgiving strike zone
-                "foul_ball_chance": 1.3            # More foul balls (second chances)
-            },
-            DifficultyLevel.AMATEUR: {
-                "contact_timing_window": 1.0,      # Normal timing window
-                "power_timing_window": 1.0,        # Normal timing window
-                "contact_zone_size": 1.0,          # Normal contact zone
-                "out_probability_modifier": 1.0,   # Normal out rates
-                "strike_zone_tolerance": 1.0,      # Normal strike zone
-                "foul_ball_chance": 1.0            # Normal foul ball rate
-            },
-            DifficultyLevel.PROFESSIONAL: {
-                "contact_timing_window": 0.8,      # 20% smaller timing window
-                "power_timing_window": 0.7,        # 30% smaller timing window
-                "contact_zone_size": 0.9,          # 10% smaller contact zone
-                "out_probability_modifier": 1.2,   # 20% more outs
-                "strike_zone_tolerance": 0.9,      # Tighter strike zone
-                "foul_ball_chance": 0.8            # Fewer foul balls
-            },
-            DifficultyLevel.ALL_STAR: {
-                "contact_timing_window": 0.6,      # 40% smaller timing window
-                "power_timing_window": 0.5,        # 50% smaller timing window
-                "contact_zone_size": 0.8,          # 20% smaller contact zone
-                "out_probability_modifier": 1.4,   # 40% more outs
-                "strike_zone_tolerance": 0.8,      # Much tighter strike zone
-                "foul_ball_chance": 0.7            # Fewer foul balls
-            },
-            DifficultyLevel.HALL_OF_FAME: {
-                "contact_timing_window": 0.4,      # 60% smaller timing window
-                "power_timing_window": 0.3,        # 70% smaller timing window
-                "contact_zone_size": 0.7,          # 30% smaller contact zone
-                "out_probability_modifier": 1.6,   # 60% more outs
-                "strike_zone_tolerance": 0.7,      # Very tight strike zone
-                "foul_ball_chance": 0.6            # Much fewer foul balls
-            }
-        }
-
-        return multipliers.get(difficulty, multipliers[DifficultyLevel.AMATEUR])
+        Reads `DIFFICULTY_MULTIPLIERS` rather than rebuilding it, so the table
+        has exactly one definition. A second hand-written copy of the AMATEUR
+        row lived in `HitOutcomeManager._get_difficulty_multipliers` as its
+        no-settings fallback, and it silently went stale the moment
+        `aim_assist` was added here — `resolve_aim` raised `KeyError` for any
+        caller constructed without a `SettingsManager`. Returns a fresh dict:
+        callers used to get one per call, and handing out the shared table
+        would let one of them mutate every later reader's copy.
+        """
+        return dict(DIFFICULTY_MULTIPLIERS.get(
+            self.get_difficulty(), DIFFICULTY_MULTIPLIERS[DifficultyLevel.AMATEUR]))
 
     def get_difficulty_description(self, difficulty_level=None):
         """Get human-readable description of difficulty level."""
@@ -157,7 +223,7 @@ class SettingsManager:
     def get_engine_fps(self):
         """Get engine/physics FPS setting."""
         fps = self.get_setting("engine_fps")
-        return fps if fps in self.ENGINE_FPS_OPTIONS else 120
+        return fps if fps in self.ENGINE_FPS_OPTIONS else 60
 
     def cycle_display_fps(self):
         """Cycle to next display FPS option."""
@@ -175,11 +241,43 @@ class SettingsManager:
         self.set_setting("engine_fps", next_fps)
         return next_fps
 
+    def get_batter_handedness(self) -> str:
+        """The saved batter side, 'R' or 'L', defaulting to 'R' if invalid."""
+        hand = self.get_setting("batter_handedness")
+        return hand if hand in ("R", "L") else "R"
+
+    def get_display_mode(self) -> str:
+        """'windowed' or 'fullscreen', defaulting to windowed if invalid."""
+        mode = self.get_setting("display_mode")
+        return mode if mode in ("windowed", "fullscreen") else "windowed"
+
+    def get_defense_level(self) -> str:
+        """Return the current defense level, defaulting to league if invalid."""
+        level = self.get_setting("defense_strength")
+        return level if level in self.DEFENSE_LEVELS else "league"
+
+    def cycle_defense_level(self) -> str:
+        """Advance sandlot -> minors -> league -> gold glove -> sandlot."""
+        current = self.get_defense_level()
+        idx = self.DEFENSE_LEVELS.index(current)
+        next_level = self.DEFENSE_LEVELS[(idx + 1) % len(self.DEFENSE_LEVELS)]
+        self.set_setting("defense_strength", next_level)
+        return next_level
+
+    def get_hud_mode(self) -> str:
+        """Return the current HUD mode, defaulting to legacy if invalid."""
+        mode = self.get_setting("hud_mode")
+        return mode if mode in self.HUD_MODES else "legacy"
+
+    def cycle_hud_mode(self) -> str:
+        """Advance to the next HUD mode in legacy → broadcast → minimal → legacy."""
+        current = self.get_hud_mode()
+        idx = self.HUD_MODES.index(current)
+        next_mode = self.HUD_MODES[(idx + 1) % len(self.HUD_MODES)]
+        self.set_setting("hud_mode", next_mode)
+        return next_mode
+
     def reset_to_defaults(self):
         """Reset all settings to default values."""
         self.current_settings = self.default_settings.copy()
         self.save_settings()
-
-    def get_all_settings(self):
-        """Get all current settings."""
-        return self.current_settings.copy()

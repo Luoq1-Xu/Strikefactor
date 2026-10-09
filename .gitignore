@@ -58,11 +58,18 @@ docs/_build/
 *.swp
 .DS_Store
 
-# StrikeFactor runtime data
-strikefactor/data/strikefactor.db
-strikefactor/data/strikefactor.db-wal
-strikefactor/data/strikefactor.db-shm
+# StrikeFactor player data lives in the per-user data directory
+# (strikefactor/paths.py), never in the repository. These catch copies left in
+# the old in-package locations, so they can't be committed again.
+strikefactor/data/strikefactor.db*
 strikefactor/data/backups/
+strikefactor/data/archives/
+strikefactor/data/gameday_archives/
+strikefactor/data/batting_stats*.json
+strikefactor/data/lap_history.json
+strikefactor/data/gameday_history.json
+strikefactor/data/gameday_sessions.json
+strikefactor/data/.legacy-layout-migrated.json
 
 # Generated analysis output
 analysis_output/
@@ -70,3 +77,7 @@ analysis_output/
 # User-local config
 settings.json
 key_bindings.json
+
+# Stale AI model backups (e.g. sasaki_ai.pkl.pre-fo-merge)
+*.pkl.pre-*
+

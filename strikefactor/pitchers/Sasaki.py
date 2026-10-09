@@ -1,6 +1,8 @@
-from .pitcher import Pitcher
 import random
+
 import pygame
+
+from .pitcher import Pitcher
 
 
 class Sasaki(Pitcher):
@@ -13,7 +15,9 @@ class Sasaki(Pitcher):
                          'Roki Sasaki',
                          1100,
                          7.1,
-                         command=0.60)
+                         command=0.60,
+                         throws='R',
+                         pitch_command={'FF': 0.72, 'SL': 0.55, 'FS': 0.52})
         self.load_img(loadfunc, 'assets/images/sasaki/', 14)
         self.add_pitch_type(self.FF, "FF")
         self.add_pitch_type(self.FS, "FS")
@@ -52,21 +56,25 @@ class Sasaki(Pitcher):
             self.draw(self.screen, 14, -9, 12)
 
     def FF(self, simulation_func):
-        speed_mph = random.gauss(97.1, 0.8)
+        speed_mph = random.gauss(97.8, 0.8)
         pfx_x = random.gauss(7.0, 1.0)
-        pfx_z = random.gauss(16.0, 1.0)
+        pfx_z = random.gauss(16.1, 1.0)
         target_x, target_y = self.get_pitch_target('FF')
         simulation_func(self.release_point, 'rokisasaki', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FF')
 
     def FS(self, simulation_func):
-        speed_mph = random.gauss(85.4, 1.0)
-        pfx_x = random.gauss(10.0, 1.0)
-        pfx_z = random.gauss(-2.0, 1.0)
+        # Single splitter, merged from the old FS/FO pair — they were the same
+        # real pitch with near-identical shapes, which split usage two ways and
+        # looked identical out of the hand. Sits at the harder end of the pair
+        # with slightly tighter break.
+        speed_mph = random.gauss(90.2, 1.0)
+        pfx_x = random.gauss(8.0, 1.1)
+        pfx_z = random.gauss(1.2, 1.0)
         target_x, target_y = self.get_pitch_target('FS')
         simulation_func(self.release_point, 'rokisasaki', speed_mph, pfx_x, pfx_z, target_x, target_y, 'FS')
 
     def SL(self, simulation_func):
-        speed_mph = random.gauss(86.0, 1.0)
+        speed_mph = random.gauss(86.6, 1.0)
         pfx_x = random.gauss(-1.0, 1.0)
         pfx_z = random.gauss(-2.0, 1.0)
         target_x, target_y = self.get_pitch_target('SL')

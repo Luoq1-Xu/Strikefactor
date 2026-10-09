@@ -9,9 +9,8 @@ handling and calls into these methods.
 
 import pygame
 
-from gameplay.gameday_manager import GameDayManager, ALL_PITCHERS
-from ui.scouting_panel import COLOR_GRAY
-
+from strikefactor.gameplay.gameday_manager import ALL_PITCHERS, GameDayManager
+from strikefactor.ui.scouting_panel import COLOR_GRAY
 
 # Pitcher handedness is encoded only in sprite paths (e.g. ".../sale/LEFTY"),
 # so keep a small static map here rather than reaching into each pitcher class.
@@ -27,12 +26,13 @@ PITCHER_HANDEDNESS = {
 class PitcherCarousel:
     """Cyclic selector over the gameday pitcher roster."""
 
-    CARD_BG = (20, 28, 38)
-    CARD_BORDER = (90, 120, 160)
-    ACCENT = (255, 210, 90)
-    LABEL_COLOR = (180, 195, 210)
-    SEPARATOR = (60, 75, 95)
-    PORTRAIT_BG = (10, 16, 24)
+    # Monochrome palette to match the refreshed GameDay screens.
+    CARD_BG = (8, 8, 8)
+    CARD_BORDER = (90, 90, 90)
+    ACCENT = (240, 240, 240)
+    LABEL_COLOR = (140, 140, 140)
+    SEPARATOR = (60, 60, 60)
+    PORTRAIT_BG = (0, 0, 0)
 
     def __init__(self, pitcher_manager, ui_manager, default: str = 'yamamoto'):
         self.pitcher_manager = pitcher_manager
@@ -67,9 +67,10 @@ class PitcherCarousel:
         if pitcher is None:
             return
 
-        # Card background + border
-        pygame.draw.rect(screen, self.CARD_BG, rect, border_radius=12)
-        pygame.draw.rect(screen, self.CARD_BORDER, rect, width=3, border_radius=12)
+        # Card background + thin border (no rounded corners — matches the
+        # rest of the refreshed gameday chrome).
+        pygame.draw.rect(screen, self.CARD_BG, rect)
+        pygame.draw.rect(screen, self.CARD_BORDER, rect, width=1)
 
         self._draw_portrait(screen, pitcher, rect)
         self._draw_info(screen, pitcher, pitcher_name, rect)
@@ -84,7 +85,8 @@ class PitcherCarousel:
             panel_w,
             rect.height - 2 * panel_margin,
         )
-        pygame.draw.rect(screen, self.PORTRAIT_BG, panel_rect, border_radius=8)
+        pygame.draw.rect(screen, self.PORTRAIT_BG, panel_rect)
+        pygame.draw.rect(screen, self.SEPARATOR, panel_rect, width=1)
 
         sprites = getattr(pitcher, 'sprites', None)
         if not sprites:
@@ -137,7 +139,7 @@ class PitcherCarousel:
         record = GameDayManager.load_history_record_vs(pitcher_name)
         if record['total'] > 0:
             record_text = (f"Your record: {record['wins']}W - "
-                           f"{record['losses']}L - {record['ties']}T")
+                           f"{record['losses']}L")
             record_color = self.ACCENT
         else:
             record_text = "Your record: (never faced)"

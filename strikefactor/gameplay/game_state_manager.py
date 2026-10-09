@@ -4,10 +4,21 @@ Manages state transitions and coordinates between different game states.
 """
 
 from typing import Dict, Optional
+
 from .game_states import (
-    GameState, ModeSelectState, MenuState, GameplayState, SummaryState,
-    VisualizationState, ViewPitchesState, InningEndState, SandboxMenuState,
-    SandboxGameplayState, GameDayState, GameDayTransitionState
+    GameDayHistoryState,
+    GameDayResumeState,
+    GameDayState,
+    GameDayTransitionState,
+    GameplayState,
+    GameState,
+    InningEndState,
+    MenuState,
+    ModeSelectState,
+    SandboxGameplayState,
+    SandboxMenuState,
+    SummaryState,
+    VisualizationState,
 )
 
 
@@ -33,10 +44,11 @@ class GameStateManager:
             'gameplay': GameplayState(self.game),
             'summary': SummaryState(self.game),
             'visualization': VisualizationState(self.game),
-            'view_pitches': ViewPitchesState(self.game),
             'inning_end': InningEndState(self.game),
             'gameday': GameDayState(self.game),
-            'gameday_transition': GameDayTransitionState(self.game)
+            'gameday_transition': GameDayTransitionState(self.game),
+            'gameday_resume': GameDayResumeState(self.game),
+            'gameday_history': GameDayHistoryState(self.game)
         }
         
     def change_state(self, state_name: str):
@@ -57,10 +69,6 @@ class GameStateManager:
     def get_current_state(self) -> Optional[GameState]:
         """Get the current active state."""
         return self.current_state
-        
-    def get_current_state_name(self) -> str:
-        """Get the name of the current active state."""
-        return self.current_state_name
         
     def update(self, time_delta: float):
         """Update the current state."""
@@ -84,14 +92,12 @@ class GameStateManager:
             self.change_state('menu')
         elif menu_state_value == 'mode_select':
             self.change_state('mode_select')
-        elif menu_state_value == 'sandbox':
+        elif menu_state_value in ('sandbox', 'sandbox_menu'):
             self.change_state('sandbox_menu')
         elif menu_state_value == 100:
             self.change_state('summary')
         elif menu_state_value == 'visualise':
             self.change_state('visualization')
-        elif menu_state_value == 'view_pitches':
-            self.change_state('view_pitches')
         elif menu_state_value == 'inning_end':
             self.change_state('inning_end')
         elif isinstance(menu_state_value, str) and menu_state_value in ['Sale', 'Degrom', 'Yamamoto', 'Sasaki', 'Experimental']:
