@@ -91,10 +91,23 @@ def test_pitch_db_creates_schema_in_temp_dir(tmp_path):
 
 
 def test_roster_constant_matches_pitcher_modules():
-    """config.ALL_PITCHERS is meant to be the single source of truth."""
-    from strikefactor.data.pitch_database import PITCHER_HANDEDNESS
+    """config.ALL_PITCHERS is meant to be the single source of truth: one
+    pitcher class per roster key, and every one of them says which hand it
+    throws with, which is what the DB's pitcher_hand is read from."""
+    from strikefactor.pitchers.Degrom import Degrom
+    from strikefactor.pitchers.Mcclanahan import Mcclanahan
+    from strikefactor.pitchers.Sale import Sale
+    from strikefactor.pitchers.Sasaki import Sasaki
+    from strikefactor.pitchers.Yamamoto import Yamamoto
 
-    assert set(config.ALL_PITCHERS) == set(PITCHER_HANDEDNESS)
+    classes = (Degrom, Mcclanahan, Sale, Sasaki, Yamamoto)
+    assert set(config.ALL_PITCHERS) == {cls.__name__.lower() for cls in classes}
+
+    import pygame
+    screen = pygame.display.get_surface() or pygame.display.set_mode((1280, 720))
+    for cls in classes:
+        pitcher = cls(screen, lambda name, n: [pygame.Surface((1, 1))] * n)
+        assert pitcher.throws in ("L", "R"), cls.__name__
 
 
 def test_strikezone_constants_are_consistent():

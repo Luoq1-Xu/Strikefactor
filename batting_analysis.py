@@ -27,7 +27,7 @@ from matplotlib.gridspec import GridSpec
 # Filtering, palettes, and outcome groups are shared with pitch_analysis.py via
 # the analysis package so the two scripts can't drift apart again.
 from analysis import theme
-from analysis.data import DEFAULT_OUT_DIR, connect
+from analysis.data import DEFAULT_OUT_DIR, connect, pitch_columns, sac_fly_sql
 from analysis.filters import DIFFICULTY_LABEL, Filter, add_filter_args, filter_from_args
 
 OUT_DIR = DEFAULT_OUT_DIR
@@ -94,6 +94,10 @@ SZ_Z_MIN, SZ_Z_MAX = theme.SZ_Z_MIN, theme.SZ_Z_MAX
 # docs/pitch-analysis-refactor.md. The old `on_time = 0` test missed every
 # well-timed swing that still whiffed, understating Whiff% by ~40%.
 WHIFF_SQL = "(swing_type > 0 AND outcome IN ('strike','strikeout'))"
+
+# A sacrifice fly: a plate appearance and not an at-bat. The one definition,
+# shared with pitch_analysis.py, built for the columns this database has.
+SAC_FLY_SQL = sac_fly_sql(pitch_columns(conn))
 
 # Heatmap grid bounds (wider than zone to show chase area)
 GRID_X_MIN, GRID_X_MAX = -1.5, 1.5
@@ -417,7 +421,7 @@ def fig5_contact_vs_power():
     outcome_cats = {
         "Miss": lambda r: r["on_time"] == 0,
         "Foul": lambda r: r["on_time"] == 1,
-        "Out": lambda r: r["outcome"] in ("GROUNDOUT", "FLYOUT", "LINEOUT"),
+        "Out": lambda r: r["outcome"] in theme.BATTED_OUT_OUTCOMES,
         "Single": lambda r: r["outcome"] == "SINGLE",
         "XBH": lambda r: r["outcome"] in ("DOUBLE", "TRIPLE"),
         "HR": lambda r: r["outcome"] == "HOME RUN",
@@ -476,10 +480,11 @@ def fig5_contact_vs_power():
 # ═══════════════════════════════════════════════════════════════════════
 def fig6_outcomes_by_zone():
     w, p = pw()
+    batted_outcomes = theme.BATTED_OUT_OUTCOMES + theme.HIT_OUTCOMES
     rows = fetch(
         f"SELECT plate_x_ft, plate_z_ft, outcome FROM pitches "
-        f"WHERE outcome IN ('SINGLE','DOUBLE','TRIPLE','HOME RUN','GROUNDOUT','FLYOUT','LINEOUT'){w}",
-        p
+        f"WHERE outcome IN ({','.join('?' * len(batted_outcomes))}){w}",
+        (*batted_outcomes, *p)
     )
     if not rows:
         _no_data("Outcomes by zone", 6)
@@ -489,8 +494,8 @@ def fig6_outcomes_by_zone():
     fig.suptitle(f"Batted Ball Outcomes by Zone — {FILTER.label}",
                  fontsize=14, fontweight="bold")
 
-    out_types = ["GROUNDOUT", "FLYOUT", "LINEOUT"]
-    hit_types = ["SINGLE", "DOUBLE", "TRIPLE", "HOME RUN"]
+    out_types = theme.BATTED_OUT_OUTCOMES
+    hit_types = theme.HIT_OUTCOMES
 
     for outcome_list in [out_types, hit_types]:
         for outcome in outcome_list:
@@ -526,6 +531,11 @@ def fig6_outcomes_by_zone():
 # Sourced from analysis.theme so "POP UP" can't go missing here again: it was
 # absent from this tuple, silently dropping 86 at-bats from every denominator.
 TERMINAL = theme.TERMINAL_OUTCOMES
+# Walks are plate appearances but not at-bats. An error is an at-bat even
+# though it is neither a hit nor an out. A sacrifice fly is one of these
+# outcomes and not an at-bat, so it is taken off the count where it is made
+# (SAC_FLY_SQL) rather than out of this tuple.
+AT_BAT_OUTCOMES = theme.HIT_OUTCOMES + theme.OUT_OUTCOMES + theme.REACH_OUTCOMES
 
 
 def _terminal_counts():
@@ -537,6 +547,27 @@ def _terminal_counts():
         (*TERMINAL, *p)
     )
     return {r["outcome"]: r["c"] for r in rows}
+
+
+def _batting_average_rows(group_columns):
+    """Return hit and at-bat counts for one dashboard grouping.
+
+    Sacrifice flies are subtracted as their own sum rather than excluded
+    with `AND NOT`: the test is NULL on a row that cannot say, and `NOT NULL`
+    would drop that row's at-bat instead of keeping it.
+    """
+    w, p = pw()
+    columns = ", ".join(group_columns)
+    hit_slots = ",".join("?" * len(theme.HIT_OUTCOMES))
+    ab_slots = ",".join("?" * len(AT_BAT_OUTCOMES))
+    return fetch(
+        f"SELECT {columns}, "
+        f"SUM(CASE WHEN outcome IN ({hit_slots}) THEN 1 ELSE 0 END) AS hits, "
+        f"SUM(CASE WHEN outcome IN ({ab_slots}) THEN 1 ELSE 0 END) "
+        f"- SUM(CASE WHEN {SAC_FLY_SQL} THEN 1 ELSE 0 END) AS abs "
+        f"FROM pitches WHERE 1=1{w} GROUP BY {columns}",
+        (*theme.HIT_OUTCOMES, *AT_BAT_OUTCOMES, *p),
+    )
 
 
 def fig7_batting_dashboard():
@@ -560,7 +591,9 @@ def fig7_batting_dashboard():
     homers = tc.get("HOME RUN", 0)
     hits = singles + doubles + triples + homers
 
-    ab = pa - walks
+    sac_flies = fetch(
+        f"SELECT COUNT(*) c FROM pitches WHERE {SAC_FLY_SQL}{w}", p)[0]["c"]
+    ab = pa - walks - sac_flies
     total_bases = singles + 2 * doubles + 3 * triples + 4 * homers
     ba = hits / ab if ab > 0 else 0
     obp = (hits + walks) / pa if pa > 0 else 0
@@ -620,8 +653,9 @@ def fig7_batting_dashboard():
         f"SELECT COUNT(*) c FROM pitches WHERE outcome = 'foul'{w}", p)[0]["c"]
     oc["Hit"] = fetch(f"SELECT COUNT(*) c FROM pitches WHERE is_hit = 1{w}", p)[0]["c"]
     oc["Out (in play)"] = fetch(
-        f"SELECT COUNT(*) c FROM pitches WHERE outcome IN ('GROUNDOUT','FLYOUT','LINEOUT'){w}",
-        p)[0]["c"]
+        f"SELECT COUNT(*) c FROM pitches WHERE outcome IN "
+        f"({','.join('?' * len(theme.BATTED_OUT_OUTCOMES))}){w}",
+        (*theme.BATTED_OUT_OUTCOMES, *p))[0]["c"]
 
     oc = {k: v for k, v in oc.items() if v > 0}
     donut_colors = ["#3498db", "#e74c3c", "#c0392b", "#f39c12", "#2ecc71", "#95a5a6"]
@@ -681,12 +715,7 @@ def fig7_batting_dashboard():
 
     # ── Panel E: Batting avg by count ──
     ax_e = fig.add_subplot(gs[1, 1])
-    count_rows = fetch(
-        f"SELECT balls_before, strikes_before, "
-        f"SUM(CASE WHEN outcome IN ('SINGLE','DOUBLE','TRIPLE','HOME RUN') THEN 1 ELSE 0 END) as hits, "
-        f"SUM(CASE WHEN outcome IN ('SINGLE','DOUBLE','TRIPLE','HOME RUN','GROUNDOUT','FLYOUT','LINEOUT','strikeout') THEN 1 ELSE 0 END) as abs "
-        f"FROM pitches WHERE 1=1{w} "
-        f"GROUP BY balls_before, strikes_before", p)
+    count_rows = _batting_average_rows(("balls_before", "strikes_before"))
     count_order = ["0-0", "0-1", "0-2", "1-0", "1-1", "1-2", "2-0", "2-1", "2-2", "3-0", "3-1", "3-2"]
     count_map = {}
     for r in count_rows:
@@ -710,11 +739,7 @@ def fig7_batting_dashboard():
 
     # ── Panel F: Batting avg by pitch type ──
     ax_f = fig.add_subplot(gs[1, 2])
-    pt_rows = fetch(
-        f"SELECT pitch_type, "
-        f"SUM(CASE WHEN outcome IN ('SINGLE','DOUBLE','TRIPLE','HOME RUN') THEN 1 ELSE 0 END) as hits, "
-        f"SUM(CASE WHEN outcome IN ('SINGLE','DOUBLE','TRIPLE','HOME RUN','GROUNDOUT','FLYOUT','LINEOUT','strikeout') THEN 1 ELSE 0 END) as abs "
-        f"FROM pitches WHERE 1=1{w} GROUP BY pitch_type", p)
+    pt_rows = _batting_average_rows(("pitch_type",))
     pt_data = [(r["pitch_type"], safe_rate(r["hits"], r["abs"])) for r in pt_rows]
     pt_data = [(pt, avg) for pt, avg in pt_data if not np.isnan(avg)]
     pt_data.sort(key=lambda x: x[1], reverse=True)

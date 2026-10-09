@@ -174,16 +174,19 @@ def overview_section(ctx, console):
     if not line.empty:
         rows = [[
             r["display"], r["g"] or "—", metrics.fmt_ip(r["outs"]), r["bf"], r["h"],
-            r["r"], r["hr"], r["bb"], r["k"],
+            r["r"], r["er"], r["hr"], r["bb"], r["k"],
             metrics.fmt_num(r["era"]), metrics.fmt_num(r["whip"]),
             metrics.fmt_num(r["k_per_9"], 1),
         ] for _, r in line.iterrows()]
         console.print(_table(
-            ["Pitcher", "G", "IP", "BF", "H", "R", "HR", "BB", "K", "ERA", "WHIP", "K/9"],
+            ["Pitcher", "G", "IP", "BF", "H", "R", "ER", "HR", "BB", "K", "ERA", "WHIP", "K/9"],
             rows, title="Pitching Line — GameDay"))
         if not bool(line["runs_exact"].all()):
             _dim(console, "  R is per-pitch where logged, otherwise prorated by "
                           "batters faced within each game.")
+        if not bool(line["er_exact"].all()):
+            _dim(console, "  ER is the official scorer's where logged; on older "
+                          "rows every run is counted as earned.")
         dropped = line.attrs.get("dropped_pitches", 0)
         if dropped:
             _dim(console, f"  {dropped:,} pitches excluded — no game_id, so their "
@@ -300,8 +303,11 @@ def location_section(ctx, console):
             ["ABS challenges", f"{summary['challenged']:,}"],
         ]
         console.print(_table(["Umpire", "Value"], rows, title="Umpire Accuracy"))
-        if summary["challenged"] == 0:
-            _dim(console, "  No ABS challenge has ever been logged.")
+        if summary["challenge_tracked"] == 0:
+            _dim(console, "  No pitch in this slice could record an ABS challenge "
+                          "(rows before schema v11 are unknown).")
+        elif summary["challenged"] == 0:
+            _dim(console, "  No ABS challenge was made in this slice.")
 
 
 def _zone_grid(ctx, console, value, title, fmt="{:.0f}", sequential=False):

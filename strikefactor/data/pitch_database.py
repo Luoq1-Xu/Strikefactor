@@ -22,21 +22,9 @@ import sqlite3
 import uuid
 from datetime import datetime, timedelta
 
-from strikefactor import outcomes
+from strikefactor import outcomes, paths
 
-# Pitcher handedness — used to populate pitches.pitcher_hand. Kept here
-# rather than on the Pitcher class so the existing pitcher constructors
-# don't need a new arg.
-PITCHER_HANDEDNESS = {
-    "sale": "L",
-    "mcclanahan": "L",
-    "degrom": "R",
-    "yamamoto": "R",
-    "sasaki": "R",
-}
-
-
-SCHEMA_VERSION = 10  # Bumped when migrations are added; see PitchDB._migrate.
+SCHEMA_VERSION = 12  # Bumped when migrations are added; see PitchDB._migrate.
 
 # v5 renamed the pop-up outcome from "POP_UP" to "POP UP", so it reads like
 # every other recorded outcome ("HOME RUN", "LINEOUT"). Data written before v5
@@ -122,6 +110,7 @@ class PitchDB:
         batted_ball_type TEXT,
         fielder_role TEXT,
         play_margin_s REAL,
+        extra_base_margin_s REAL,
         spray_angle_deg REAL,
 
         -- Umpire / ABS
@@ -136,7 +125,8 @@ class PitchDB:
         outcome TEXT,
         is_strike INTEGER,
         is_hit INTEGER,
-        runs_scored_on_pitch INTEGER
+        runs_scored_on_pitch INTEGER,
+        earned_runs_on_pitch INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS pitch_trajectories (
@@ -261,13 +251,15 @@ class PitchDB:
     # *contact* by HitOutcomeManager, upstream of any fielding decision, so it
     # is an independent axis to slice on.
     #
-    # `play_margin_s` is the decisive race's margin in seconds, signed so
-    # positive favours the defense (see infield_timing.PlayTiming.margin_s).
-    # It is the falsifiable output of the timing model: a healthy distribution
-    # is centred well above zero with a visible bang-bang shoulder, and if it
-    # ever comes out bimodal-at-the-extremes the model has stopped deciding
-    # anything. NULL when no race was run — a ball nobody fielded, or a
-    # fly/liner caught in the air, has no throw to beat.
+    # `play_margin_s` is the infield race's margin in seconds — the throw to
+    # first against the batter-runner — signed so positive favours the
+    # defense (see infield_timing.PlayTiming.margin_s). It is the falsifiable
+    # output of the timing model: a healthy distribution is centred well above
+    # zero with a visible bang-bang shoulder, and if it ever comes out
+    # bimodal-at-the-extremes the model has stopped deciding anything. NULL
+    # when no infield race was run: a fly/liner caught in the air, a home run,
+    # or a ball that got past the infield, whose race is a base race and is
+    # recorded in `extra_base_margin_s` (v11) instead.
     V7_PITCHES_COLUMNS = [
         ("batted_ball_type", "TEXT"),
         ("fielder_role", "TEXT"),
@@ -334,6 +326,49 @@ class PitchDB:
         ("defense_strength", "TEXT"),
     ]
 
+    # v11: the base race, and ABS challenges that actually reach the row.
+    #
+    # `extra_base_margin_s` is the race that settled how far a batter-runner
+    # got on a ball past the infield (`extra_bases.final_base`): to the base
+    # they held short of, or to third on a triple. Signed like
+    # `play_margin_s` — `runner_s - defense_s`, positive favours the defense —
+    # and the physical race, not the coach's aggression margin on top of it.
+    # It is a column of its own rather than more rows of `play_margin_s`
+    # because it is a different race: filling that column with it would change
+    # what every existing row there means. The value was always computed; it
+    # was never recorded, so every double and triple before v11 had no margin
+    # at all. NULL when no base race ran, and on every row before v11.
+    #
+    # `abs_challenged` / `abs_overturned` existed from v2 and could never be
+    # set: the row is written 0.7 s after the call with the 1.8 s challenge
+    # window still open, and a challenge cannot be made until the pitch loop
+    # has returned. From v11 a verdict amends the row after the fact
+    # (`PitchDatabaseService.amend_abs_challenge`), and **`outcome` is the
+    # final call after review** — `ai_umpire_strike` keeps what the umpire
+    # said. Every row before v11 read 0 whether or not it was challenged, so
+    # the migration sets both to NULL there: unknown, not "no".
+    V11_PITCHES_COLUMNS = [
+        ("extra_base_margin_s", "REAL"),
+    ]
+
+    # v12: earned runs. `runs_scored_on_pitch` is every run that crossed the
+    # plate, and the pitching line had been charging all of them as earned,
+    # including the ones a REACHED ON ERROR let in. This is the official
+    # scorer's count instead (`helpers.ScoreKeeper`, Rule 9.16).
+    #
+    # It is the earned runs *credited* on this pitch, which is not a share of
+    # `runs_scored_on_pitch`: a runner an error moved up can score before the
+    # errorless inning would have scored him, and is ruled earned on the later
+    # pitch that would have brought him home. So a row can carry an earned run
+    # and no run. Only the sum over a half-inning compares with the runs.
+    #
+    # NULL on every row before v12, and it must not be back-filled from
+    # `runs_scored_on_pitch`: for rows after errors existed (v10) that would
+    # assert unearned runs were earned.
+    V12_PITCHES_COLUMNS = [
+        ("earned_runs_on_pitch", "INTEGER"),
+    ]
+
     # Backup policy
     BACKUP_DIR_NAME = "backups"
     BACKUP_MIN_INTERVAL = timedelta(hours=1)  # don't backup more than once per hour
@@ -341,6 +376,7 @@ class PitchDB:
 
     def __init__(self, db_path):
         self.db_path = db_path
+        os.makedirs(os.path.dirname(os.path.abspath(db_path)), exist_ok=True)
         self._auto_backup(db_path)
         self.conn = sqlite3.connect(db_path)
         self.conn.row_factory = sqlite3.Row
@@ -366,7 +402,8 @@ class PitchDB:
             for col, decl in (self.V2_PITCHES_COLUMNS + self.V3_PITCHES_COLUMNS
                              + self.V4_PITCHES_COLUMNS + self.V6_PITCHES_COLUMNS
                              + self.V7_PITCHES_COLUMNS + self.V8_PITCHES_COLUMNS
-                             + self.V9_PITCHES_COLUMNS + self.V10_PITCHES_COLUMNS):
+                             + self.V9_PITCHES_COLUMNS + self.V10_PITCHES_COLUMNS
+                             + self.V11_PITCHES_COLUMNS + self.V12_PITCHES_COLUMNS):
                 if col not in existing_pitches:
                     self.conn.execute(f"ALTER TABLE pitches ADD COLUMN {col} {decl}")
 
@@ -392,6 +429,14 @@ class PitchDB:
                         "UPDATE at_bats SET final_outcome = ? WHERE final_outcome = ?",
                         (new, old),
                     )
+
+            # v11: the ABS flags on every earlier row are structurally 0 —
+            # no challenge could ever reach the row — so they are unknown,
+            # not "not challenged". See V11_PITCHES_COLUMNS.
+            if version < 11:
+                self.conn.execute(
+                    "UPDATE pitches SET abs_challenged = NULL, abs_overturned = NULL"
+                )
 
             self.conn.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
 
@@ -490,6 +535,17 @@ class PitchDB:
         with self.conn:
             self.conn.execute(f"UPDATE games SET {sets} WHERE game_id = ?", params)
 
+    def amend_pitch(self, pitch_id, updates, at_bat_statements=()):
+        """Update one pitch row and apply `(sql, params)` at-bat statements,
+        in one transaction — a verdict that changes the pitch and not the
+        at-bat it closed would leave the two tables disagreeing."""
+        sets = ", ".join(f"{k} = ?" for k in updates)
+        with self.conn:
+            self.conn.execute(f"UPDATE pitches SET {sets} WHERE pitch_id = ?",
+                              list(updates.values()) + [pitch_id])
+            for sql, params in at_bat_statements:
+                self.conn.execute(sql, params)
+
     def upsert_batter_profile(self, profile_key, game_mode, difficulty, aggregates_json):
         with self.conn:
             self.conn.execute(
@@ -528,11 +584,14 @@ class PitchDataExtractor:
 
     @staticmethod
     def _classify_game_mode(sim):
-        if sim.game.in_gameday_mode:
-            return "gameday"
-        if getattr(sim.game, 'menu_state', None) == 'sandbox_gameplay':
-            return "sandbox"
-        return "arcade"
+        """The mode of the session the pitch was thrown in (`Game.game_mode`).
+
+        Read off the session rather than inferred from `menu_state`, which
+        names whatever screen is up and was the source of a Sandbox session
+        being filed as Arcade. A pitch is only ever thrown inside a session,
+        so the Arcade default is for the stub games tests build.
+        """
+        return getattr(sim.game, 'game_mode', None) or "arcade"
 
     @staticmethod
     def _difficulty_value(sim):
@@ -602,7 +661,11 @@ class PitchDataExtractor:
         ai_selection = getattr(sim.game, "pitch_chosen", None)
         ctx = sim.new_data_entry
         gd = PitchDataExtractor._gameday_context(sim)
-        pitcher_hand = PITCHER_HANDEDNESS.get((sim.pitchername or "").lower())
+        # The pitcher's own `throws`, stamped on the simulation. It used to be
+        # a lookup keyed by roster name ('sale') against `sim.pitchername`,
+        # which is the name the pitch methods pass ('chrissale') — so every
+        # pitcher but Yamamoto recorded NULL.
+        pitcher_hand = getattr(sim, "pitcher_hand", None)
         intent = getattr(sim, "pitch_intent", None)
 
         record = {
@@ -659,6 +722,7 @@ class PitchDataExtractor:
             "batted_ball_type": getattr(sim, "batted_ball_type", None),
             "fielder_role": getattr(sim, "fielder_role", None),
             "play_margin_s": getattr(sim, "play_margin_s", None),
+            "extra_base_margin_s": getattr(sim, "extra_base_margin_s", None),
             "spray_angle_deg": getattr(sim, "spray_angle_deg", None),
             "ai_umpire_strike": _nullable_int(getattr(sim, "ai_umpire_strike", None)),
             "truth_strike": _nullable_int(getattr(sim, "truth_strike", None)),
@@ -670,6 +734,7 @@ class PitchDataExtractor:
             "is_strike": int(sim.is_strike),
             "is_hit": int(sim.is_hit),
             "runs_scored_on_pitch": int(getattr(sim, "runs_scored_on_pitch", 0) or 0),
+            "earned_runs_on_pitch": int(getattr(sim, "earned_runs_on_pitch", 0) or 0),
         }
         return pitch_id, record
 
@@ -712,13 +777,13 @@ class PitchDatabaseService:
         return cls._instance
 
     def __init__(self):
-        db_path = os.path.join(os.path.dirname(__file__), "strikefactor.db")
-        self.db = PitchDB(db_path)
+        self.db = PitchDB(paths.db_path())
         self.session_id = str(uuid.uuid4())
         self.current_game_id = None
         self.current_ab_id = None
         self._ab_pitch_count = 0
         self._ab_pitcher = None
+        self._last_pitch = None
         self._ab_hand = None
 
     # --- Game lifecycle ---
@@ -756,6 +821,7 @@ class PitchDatabaseService:
         self.current_ab_id = None
         self._ab_pitch_count = 0
         self._ab_pitcher = None
+        self._last_pitch = None
         self._ab_hand = None
         return game_id
 
@@ -795,6 +861,7 @@ class PitchDatabaseService:
         self.current_ab_id = None
         self._ab_pitch_count = 0
         self._ab_pitcher = None
+        self._last_pitch = None
         self._ab_hand = None
         return game_id
 
@@ -816,13 +883,20 @@ class PitchDatabaseService:
         self.current_ab_id = None
         self._ab_pitch_count = 0
         self._ab_pitcher = None
+        self._last_pitch = None
         self._ab_hand = None
         return ended_id
 
     # --- Pitch / AB recording ---
 
     def record_pitch(self, sim):
-        """Record a single pitch from a completed PitchSimulation."""
+        """Record a single pitch from a completed PitchSimulation.
+
+        Returns the new row's `pitch_id`, or None if the write failed. The id
+        is how an ABS verdict finds the row afterwards — see
+        `amend_abs_challenge`.
+        """
+        self._last_pitch = None
         try:
             # Ensure an AB id exists for this pitch — generate lazily so that
             # even pitches outside a started_game (shouldn't happen, but
@@ -844,32 +918,130 @@ class PitchDatabaseService:
             self._ab_pitcher = sim.pitchername
             self._ab_hand = sim.new_data_entry.get("Handedness", "")
 
+            # The at-bat as it stands before this pitch can close it. An ABS
+            # overturn of this pitch may have to reopen it, and closing it
+            # clears the live tracking this is copied from.
+            self._last_pitch = dict(self._open_at_bat(), pitch_id=pitch_id,
+                                    closed_at_bat=False)
+
             # Check for terminal outcome
             outcome = getattr(sim, "outcome", "")
-            if outcome and outcomes.db_key(outcome) in PitchDataExtractor.TERMINAL_OUTCOMES:
+            if self._is_terminal(outcome):
                 self._record_at_bat(outcome)
+                self._last_pitch["closed_at_bat"] = True
+            return pitch_id
         except Exception as e:
             # Never let DB errors crash the game, but surface them so silent
             # data loss doesn't go unnoticed.
             print(f"[pitch_db] record_pitch failed: {e}")
+            return None
 
-    def _record_at_bat(self, final_outcome):
-        ab = {
+    @staticmethod
+    def _is_terminal(outcome):
+        return bool(outcome) and (outcomes.db_key(outcome)
+                                  in PitchDataExtractor.TERMINAL_OUTCOMES)
+
+    def _open_at_bat(self):
+        return {
             "ab_id": self.current_ab_id,
-            "session_id": self.session_id,
             "game_id": self.current_game_id,
-            "pitcher_name": self._ab_pitcher,
-            "batter_hand": self._ab_hand,
-            "pitch_count": self._ab_pitch_count,
+            "ab_pitch_count": self._ab_pitch_count,
+            "pitcher": self._ab_pitcher,
+            "hand": self._ab_hand,
+        }
+
+    def _at_bat_row(self, final_outcome, ab):
+        return {
+            "ab_id": ab["ab_id"],
+            "session_id": self.session_id,
+            "game_id": ab["game_id"],
+            "pitcher_name": ab["pitcher"],
+            "batter_hand": ab["hand"],
+            "pitch_count": ab["ab_pitch_count"],
             "final_outcome": final_outcome,
             "created_at": datetime.now().isoformat(),
         }
+
+    def _record_at_bat(self, final_outcome):
         try:
-            self.db.insert_at_bat(ab)
+            self.db.insert_at_bat(self._at_bat_row(final_outcome,
+                                                   self._open_at_bat()))
         except Exception as e:
             print(f"[pitch_db] insert_at_bat failed: {e}")
+        self._close_at_bat()
+
+    def _close_at_bat(self):
         self.current_ab_id = None
         self._ab_pitch_count = 0
+
+    def amend_abs_challenge(self, pitch_id, *, overturned, outcome=None,
+                            is_strike=None, runs_scored_on_pitch=None,
+                            earned_runs_on_pitch=None):
+        """Record an ABS challenge against the pitch it was made on.
+
+        After the fact because it has to be: the row is written with the
+        challenge window still open (see `PitchSimulation.cleanup`). On an
+        overturn the row takes the call as it now stands — `outcome` is the
+        final call after review, `ai_umpire_strike` keeps the umpire's — and
+        the at-bat that call closed, or did not, is put right in the same
+        transaction:
+
+            walk <-> strikeout              the at-bat's final_outcome
+            walk/strikeout -> ball/strike   the at-bat is reopened
+            ball/strike -> walk/strikeout   the at-bat is closed now
+
+        Only the most recently recorded pitch of the current game can be
+        amended. That costs nothing in play — the next pitch closes the
+        window — and it is what makes reopening an at-bat safe: nothing has
+        been recorded into it since. Returns True when the row was amended.
+        """
+        last = self._last_pitch
+        if pitch_id is None or last is None or last["pitch_id"] != pitch_id:
+            print(f"[pitch_db] ABS verdict for pitch {pitch_id} not recorded: "
+                  f"it is not the latest pitch of this game")
+            return False
+
+        updates = {"abs_challenged": 1, "abs_overturned": int(bool(overturned))}
+        statements = []
+        was_terminal = last["closed_at_bat"]
+        now_terminal = was_terminal
+        if overturned and outcome:
+            updates["outcome"] = outcome
+            if is_strike is not None:
+                updates["is_strike"] = int(bool(is_strike))
+            if runs_scored_on_pitch is not None:
+                updates["runs_scored_on_pitch"] = int(runs_scored_on_pitch)
+            if earned_runs_on_pitch is not None:
+                updates["earned_runs_on_pitch"] = int(earned_runs_on_pitch)
+            now_terminal = self._is_terminal(outcome)
+            if was_terminal and now_terminal:
+                statements.append(("UPDATE at_bats SET final_outcome = ? WHERE ab_id = ?",
+                                   (outcome, last["ab_id"])))
+            elif was_terminal:
+                statements.append(("DELETE FROM at_bats WHERE ab_id = ?",
+                                   (last["ab_id"],)))
+            elif now_terminal:
+                row = self._at_bat_row(outcome, last)
+                statements.append((
+                    f"INSERT INTO at_bats ({', '.join(row)}) "
+                    f"VALUES ({', '.join('?' for _ in row)})",
+                    list(row.values())))
+        try:
+            self.db.amend_pitch(pitch_id, updates, statements)
+        except Exception as e:
+            print(f"[pitch_db] ABS amend failed: {e}")
+            return False
+
+        # Bring the live at-bat tracking into line with the table.
+        if was_terminal and not now_terminal:
+            self.current_ab_id = last["ab_id"]
+            self._ab_pitch_count = last["ab_pitch_count"]
+            self._ab_pitcher = last["pitcher"]
+            self._ab_hand = last["hand"]
+        elif now_terminal and not was_terminal:
+            self._close_at_bat()
+        last["closed_at_bat"] = now_terminal
+        return True
 
     # --- BatterProfile persistence ---
 

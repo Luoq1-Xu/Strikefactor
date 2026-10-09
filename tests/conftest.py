@@ -6,13 +6,27 @@ device. This must stay at import time of conftest — pygame caches the driver
 choice on first init.
 """
 
+import atexit
 import os
+import shutil
+import tempfile
+
+import pytest
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 
+# The player's data directory (strikefactor/paths.py), pointed at a scratch
+# directory for the whole run — per process, so each xdist worker gets its
+# own. Assigned rather than defaulted: a developer's own STRIKEFACTOR_DATA_DIR
+# names their real data, and the suite must never write settings, stores or
+# pitch rows there. Set before anything imports the game, because the stores
+# resolve their file paths at import.
+_TEST_DATA_DIR = tempfile.mkdtemp(prefix="strikefactor-tests-")
+os.environ["STRIKEFACTOR_DATA_DIR"] = _TEST_DATA_DIR
+atexit.register(shutil.rmtree, _TEST_DATA_DIR, ignore_errors=True)
+
 import pygame  # noqa: E402  (must follow the env setup above)
-import pytest
 
 from tools import sim  # noqa: E402
 

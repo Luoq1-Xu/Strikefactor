@@ -196,10 +196,15 @@ def umpire(ctx):
     else:
         note(ax, "No graded calls")
 
-    if summary["challenged"] == 0:
+    if summary["challenge_tracked"] == 0:
         fig.text(0.5, -0.02,
-                 "No ABS challenge has ever been logged (abs_challenged is 0 for "
-                 "every pitch), so the challenge rows are structurally empty rather "
-                 "than filtered out.",
+                 "No pitch in this slice could record an ABS challenge: rows before "
+                 "schema v11 were written before a challenge could reach them, so "
+                 "the challenge rows are unknown rather than zero.",
+                 ha="center", fontsize=9, color=theme.MUTED, style="italic")
+    elif summary["challenged"] == 0:
+        fig.text(0.5, -0.02,
+                 f"No ABS challenge was made on the {summary['challenge_tracked']:,} "
+                 "pitches in this slice that could record one.",
                  ha="center", fontsize=9, color=theme.MUTED, style="italic")
     return save(fig, ctx, "08_umpire.png")

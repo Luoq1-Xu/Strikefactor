@@ -45,11 +45,12 @@ import shutil
 import sqlite3
 from datetime import datetime
 
+from strikefactor import paths
 from strikefactor.utils.io import atomic_write_json
 
-DATA_DIR = os.path.dirname(__file__)
-ARCHIVE_ROOT = os.path.join(DATA_DIR, 'archives')
-DB_PATH = os.path.join(DATA_DIR, 'strikefactor.db')
+DATA_DIR = paths.data_dir()
+ARCHIVE_ROOT = os.path.join(DATA_DIR, paths.ARCHIVES_DIR)
+DB_PATH = os.path.join(DATA_DIR, paths.DB_FILE)
 DB_ARCHIVE_NAME = 'strikefactor.db'
 MANIFEST_NAME = 'MANIFEST.json'
 

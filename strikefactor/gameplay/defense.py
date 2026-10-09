@@ -143,6 +143,16 @@ class DefenseProfile:
 #                 numbers above, and re-measure whenever the gains, the
 #                 mechanism split or the contact distribution change.
 #
+#                 Rescaled again 2026-09-28, per level this time, when
+#                 MISPLAY_HOP_GAIN went 0.8 -> 3.0 (see there). That change is
+#                 meant to move errors from soft contact to hard, not to add
+#                 any, so each rung was re-measured to hold its own ERR%
+#                 (n=10000, seed 808: 3.79 / 2.41 / 1.43 / 0.63 before). One
+#                 factor across the ladder held LEAGUE but lifted the other
+#                 three rungs by 7-8%, so each carries its own: x0.57 / x0.56 /
+#                 x0.62 / x0.61. The base now carries less of the routine play
+#                 and the hop term more.
+#
 # catch_muff_p    MLB outfielders convert well over 99% of balls they reach;
 #                 outright drops are a few tenths of a percent of fly balls.
 #
@@ -187,28 +197,28 @@ _PROFILES = {
         label="Sandlot",
         sprint_fts=23.0, reaction_min_s=0.260, reaction_max_s=0.480,
         throw_fts=98.0, release_scale=1.20,
-        field_misplay_p=0.044, catch_muff_p=0.0100, body_block=0.40,
+        field_misplay_p=0.025, catch_muff_p=0.0100, body_block=0.40,
         muff_recovery_s=1.80, through_turn_s=0.54,
     ),
     DefenseLevel.MINORS: DefenseProfile(
         label="Minors",
         sprint_fts=25.5, reaction_min_s=0.225, reaction_max_s=0.420,
         throw_fts=104.0, release_scale=1.09,
-        field_misplay_p=0.027, catch_muff_p=0.0050, body_block=0.55,
+        field_misplay_p=0.015, catch_muff_p=0.0050, body_block=0.55,
         muff_recovery_s=1.60, through_turn_s=0.48,
     ),
     DefenseLevel.LEAGUE: DefenseProfile(
         label="League",
         sprint_fts=27.0, reaction_min_s=0.200, reaction_max_s=0.380,
         throw_fts=110.0, release_scale=1.00,
-        field_misplay_p=0.017, catch_muff_p=0.0025, body_block=0.70,
+        field_misplay_p=0.0105, catch_muff_p=0.0025, body_block=0.70,
         muff_recovery_s=1.50, through_turn_s=0.45,
     ),
     DefenseLevel.GOLD_GLOVE: DefenseProfile(
         label="Gold Glove",
         sprint_fts=29.0, reaction_min_s=0.170, reaction_max_s=0.320,
         throw_fts=118.0, release_scale=0.88,
-        field_misplay_p=0.009, catch_muff_p=0.0012, body_block=0.85,
+        field_misplay_p=0.0055, catch_muff_p=0.0012, body_block=0.85,
         muff_recovery_s=1.30, through_turn_s=0.39,
     ),
 }
@@ -269,9 +279,31 @@ HOP_REF_MPH = 70.0                       # below this the hop is not a problem
 HOP_SPAN_MPH = 40.0                      # ...and by 110 it fully is
 
 MISPLAY_RANGING_GAIN = 1.5      # fully stretched: 2.5x as likely to be misplayed
-MISPLAY_HOP_GAIN = 0.8          # a scorched short hop
+MISPLAY_HOP_GAIN = 3.0          # a scorched short hop: 4x a routine one
 MISPLAY_CHARGE_MULT = 1.4       # the barehand play in on a slow roller
 MISPLAY_P_MAX = 0.35            # even the worst play is mostly made
+
+# MISPLAY_HOP_GAIN is how exit velocity reaches the error rate, and at its old
+# value of 0.8 it did nothing you could see in play. Nothing was wrong with the
+# term itself. The problem was which balls get reached how. Fielders take soft
+# grounders on the run, often charging in, so the ranging and charge gains
+# land on soft contact while the hop gain lands on hard, and the two cancelled.
+# Averaged over the grounders actually reached, the modulation of the base was
+# flat: 2.80x below 70 mph, 3.09x above 102 (LEAGUE, n=10000). A harder-hit
+# ball was no harder to handle.
+#
+# At 3.0 it shows through. Retuned together with field_misplay_p, which came
+# down to hold each level's ERR%, so the change moves errors from soft contact
+# to hard without adding any; the ground-ball hit rate did not move in any
+# exit-velocity bucket, nor IF-hit% overall. The *per-ball* error rate still
+# tops out mid-range rather than at the hardest contact, and it should: the
+# hardest grounders are the ones nobody reaches, and a ball nobody touched is
+# a hit. Read all of this
+# with `python -m tools.calibrate_defense --n 10000 --by-ev`.
+#
+# The value is a design choice, not a sourced one. The obvious source is
+# Statcast (`field_error` rate by `launch_speed` on ground balls), and this
+# number should be refitted against it when someone pulls that data.
 
 # Of the balls a fielder fails to glove, the share that are not stopped at all
 # and continue into the outfield. See `body_block`.
@@ -334,11 +366,19 @@ def misplay_prob(profile, ranging_ft=0.0, ev_mph=None, is_charging=False,
     or pop-up), as opposed to fielded off the ground.
     """
     base = profile.catch_muff_p if in_air else profile.field_misplay_p
+    # A ball in the air has no hop; it has hang time.
+    hop = 0.0 if in_air else hop_difficulty(ev_mph)
     p = base * (1.0 + MISPLAY_RANGING_GAIN * stretch(ranging_ft))
-    if not in_air:
-        p *= (1.0 + MISPLAY_HOP_GAIN * hop_difficulty(ev_mph))
+    p *= (1.0 + MISPLAY_HOP_GAIN * hop)
     if is_charging:
-        p *= MISPLAY_CHARGE_MULT
+        # "Charging" is geometric: the ball was taken 2 ft or more in front of
+        # the set position. On a slow roller that is the barehand play; on a
+        # 105 mph grounder it is a step in. So the penalty fades out over the
+        # same ramp the hop fades in, and the two never compound. They used
+        # to: 11% of reaches on 95+ mph grounders counted as charging, and
+        # with the hop gain at 3.0 the full product put SANDLOT's worst play
+        # over MISPLAY_P_MAX.
+        p *= 1.0 + (MISPLAY_CHARGE_MULT - 1.0) * (1.0 - hop)
     return min(MISPLAY_P_MAX, p)
 
 

@@ -12,10 +12,14 @@ import sqlite3
 import numpy as np
 import pandas as pd
 
+from strikefactor import paths
+
 from . import theme
 
 REPO_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DB_PATH = os.path.join(REPO_ROOT, "strikefactor", "data", "strikefactor.db")
+# The game's own pitch database, in the player's data directory. `paths` is a
+# pure module (no pygame), so reading it keeps the analysis runnable on its own.
+DB_PATH = paths.db_path()
 DEFAULT_OUT_DIR = os.path.join(REPO_ROOT, "analysis_output")
 
 _cache = {}
@@ -27,9 +31,50 @@ def connect(db_path=None):
         raise FileNotFoundError(
             f"Pitch database not found at {path}. Play a game first — the DB is "
             f"created on the first recorded pitch.")
-    conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    conn = sqlite3.connect(paths.sqlite_readonly_uri(path), uri=True)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def pitch_columns(conn):
+    """The pitches table's columns, as this particular database has them."""
+    return {row[1] for row in conn.execute("PRAGMA table_info(pitches)")}
+
+
+def sac_fly_sql(columns):
+    """SQL that is true on a row that was a sacrifice fly (Rule 9.08(d)).
+
+    A sacrifice fly is a plate appearance and not an at-bat. The game's scorer
+    rules on it (`strikefactor.helpers.ScoreKeeper`) and charges none, and
+    both scripts here used to charge one, so AVG and SLG ran below the game's.
+
+    The ruling is not a column, and does not need to be. Both halves of it
+    are facts a row already holds:
+
+      * a fly ball was caught and a run scored on it;
+      * a fly ball was dropped for an error with a runner on third and fewer
+        than two out, so he would have scored after the catch. An error on a
+        FLY is always the dropped catch (`HitAnimation._charge_error`), which
+        is what lets `batted_ball_type` stand in for the out it cost.
+
+    `columns` is the table's own (`pitch_columns`), because the connection is
+    read-only and an archive is never migrated: `runs_scored_on_pitch` arrived
+    in v2 and `batted_ball_type` in v7. A half that cannot be asked is left
+    out, and a row with NULL runs is not a sacrifice fly. Either way the row
+    stays an at-bat, which is what it was counted as before.
+
+    One statement of it for both scripts: `load_pitches` selects it as
+    `is_sac_fly`, and batting_analysis.py puts it in its own queries.
+    tests/test_scorekeeping.py pins it to the scorer play by play.
+    """
+    clauses = []
+    if "runs_scored_on_pitch" in columns:
+        clauses.append("(outcome = 'FLYOUT' AND runs_scored_on_pitch > 0)")
+    if {"batted_ball_type", "runner_3b", "outs_before"} <= set(columns):
+        reach = ", ".join(f"'{o}'" for o in theme.REACH_OUTCOMES)
+        clauses.append(f"(outcome IN ({reach}) AND batted_ball_type = 'FLY' "
+                       f"AND runner_3b = 1 AND outs_before < 2)")
+    return f"({' OR '.join(clauses)})" if clauses else "0"
 
 
 def load_pitches(db_path=None):
@@ -39,7 +84,9 @@ def load_pitches(db_path=None):
         return _cache[key]
 
     with connect(db_path) as conn:
-        df = pd.read_sql_query("SELECT * FROM pitches", conn)
+        df = pd.read_sql_query(
+            f"SELECT *, {sac_fly_sql(pitch_columns(conn))} AS is_sac_fly "
+            f"FROM pitches", conn)
 
     if df.empty:
         _cache[key] = df
@@ -104,6 +151,13 @@ def _derive(df):
     if "defense_strength" not in df.columns:
         df["defense_strength"] = pd.NA
 
+    # earned_runs_on_pitch arrived in schema v12, and an unmigrated archive
+    # lacks it for the same reason. NA, never a copy of runs_scored_on_pitch:
+    # which of an older row's runs were earned is not known, and the pitching
+    # line says so (`er_exact`) rather than have it decided here.
+    if "earned_runs_on_pitch" not in df.columns:
+        df["earned_runs_on_pitch"] = pd.NA
+
     outcome = df["outcome"]
     swing = df["swing_type"].fillna(0)
 
@@ -127,6 +181,9 @@ def _derive(df):
     df["is_chase"] = df["is_swing"] & ~df["in_zone"]
 
     df["is_terminal"] = outcome.isin(theme.TERMINAL_OUTCOMES)
+    # Selected by `load_pitches` (see `sac_fly_sql`). NULL where the row
+    # cannot say, which is not a sacrifice fly.
+    df["is_sac_fly"] = df["is_sac_fly"].fillna(0).astype(bool)
     df["is_in_play"] = outcome.isin(theme.IN_PLAY_OUTCOMES)
     df["is_hit_outcome"] = outcome.isin(theme.HIT_OUTCOMES)
     df["is_out"] = outcome.isin(theme.OUT_OUTCOMES)

@@ -4,8 +4,7 @@ import pygame
 import pygame_gui
 from pygame_gui.core import ObjectID
 
-from strikefactor.config import SCREEN_WIDTH, get_path, resource_path
-from strikefactor.helpers import StatSwing
+from strikefactor.config import SCREEN_WIDTH, get_path
 from strikefactor.ui.lap_log_panel import LapLogPanel
 from strikefactor.ui.scouting_panel import ScoutingReportPanel
 
@@ -61,9 +60,9 @@ class UIManager:
     def __init__(self, screen, screen_size, theme_path=None):
         self.screen = screen
         self.manager = self._create_ui_manager(screen_size, theme_path)
-        self.small_font = pygame.font.Font(resource_path(get_path("ui/font/8bitoperator_jve.ttf")), 28)
-        self.font = pygame.font.Font(resource_path(get_path("ui/font/8bitoperator_jve.ttf")), 48)  # +20% from 40
-        self.big_font = pygame.font.Font(resource_path(get_path("ui/font/8bitoperator_jve.ttf")), 84)  # +20% from 70
+        self.small_font = pygame.font.Font(get_path("ui/font/8bitoperator_jve.ttf"), 28)
+        self.font = pygame.font.Font(get_path("ui/font/8bitoperator_jve.ttf"), 48)  # +20% from 40
+        self.big_font = pygame.font.Font(get_path("ui/font/8bitoperator_jve.ttf"), 84)  # +20% from 70
         self.button_callbacks = {}
         self.key_binding_manager = None  # Will be set after initialization
         self.settings_manager = None  # Will be set after initialization
@@ -106,7 +105,7 @@ class UIManager:
             theme_data = json.load(f)
         
         # Update font paths in the theme
-        dynamic_font_path = resource_path(get_path('ui/font/8bitoperator_jve.ttf'))
+        dynamic_font_path = get_path('ui/font/8bitoperator_jve.ttf')
         for key, section in theme_data.items():
             if isinstance(section, dict) and "font" in section:
                 if section["font"].get("name") == "8bitoperator_jve":
@@ -136,10 +135,6 @@ class UIManager:
                 relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step), (sandbox_w, sandbox_h)),
                 text='BATTER', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
-            'visualise': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 2), (sandbox_w, sandbox_h)),
-                text='TRACK', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
             # Analysis group
             'scout': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((6, 296), (120, 28)),
@@ -158,10 +153,6 @@ class UIManager:
             'view_laps': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((68, 362), (58, 28)),
                 text='LOG', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'fielding_replay': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((6, 458), (120, 28)),
-                text='FIELD REPLAY', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             # System group
             'toggle_ump_sound': pygame_gui.elements.UIButton(
@@ -417,19 +408,8 @@ class UIManager:
             manager=self.manager,
             text=""
         )
-        self.scoreboard = pygame_gui.elements.UITextBox(
-            html_text="",
-            relative_rect=pygame.Rect((950, 30), (310, 260)),  # Enlarged: +60px width, +60px height
-            manager=self.manager
-        )
-        self.pitch_result = pygame_gui.elements.UITextBox(
-            html_text="",
-            relative_rect=pygame.Rect((950, 300), (310, 200)),  # Enlarged: +60px width, adjusted position
-            manager=self.manager
-        )
-        self.view_window = StatSwing((25, 25), self.manager, [], [])
         self.scouting_panel = ScoutingReportPanel(
-            position=(1000, 50),  # Same position as scoreboard
+            position=(1000, 50),
             manager=self.manager
         )
         self.lap_log_panel = LapLogPanel(
@@ -437,9 +417,6 @@ class UIManager:
             manager=self.manager
         )
         self.banner.hide()
-        self.view_window.hide()
-        self.scoreboard.hide()
-        self.pitch_result.hide()
         self.scouting_panel.hide()
         self.lap_log_panel.hide()
 
@@ -489,34 +466,14 @@ class UIManager:
         """Draws the UI manager and all UI elements to the screen."""
         self.manager.draw_ui(self.screen)
 
-    def update_pitch_info(self, pitch_trajectories, last_pitch_info):
-        """Updates pitch information in the view window (legacy method)."""
-        self.view_window.update_pitch_info(pitch_trajectories, last_pitch_info)
-
-    def update_pitch_info_enhanced(self, enhanced_records):
-        """Updates pitch information with enhanced record data for advanced visualization."""
-        self.view_window.update_pitch_info_enhanced(enhanced_records)
-
-    def show_view_window(self):
-        """Shows the pitch view window."""
-        self.view_window.show()
-
-    def hide_view_window(self):
-        """Hides the pitch view window."""
-        self.view_window.hide()
-
     def toggle_scouting_panel(self, pitcher=None):
-        """Toggle the scouting report panel visibility (replaces scoreboard when shown)."""
+        """Toggle the scouting report panel visibility."""
         if pitcher:
             self.scouting_panel.update_data(pitcher)
 
         if self.scouting_panel.visible:
-            # Hide scouting panel, show scoreboard
             self.scouting_panel.hide()
-            self.scoreboard.show()
         else:
-            # Show scouting panel, hide scoreboard
-            self.scoreboard.hide()
             self.scouting_panel.show()
 
     def update_scouting_panel(self, pitcher):
@@ -538,7 +495,6 @@ class UIManager:
         # Hide scouting panel if visible to avoid overlap
         if self.scouting_panel.visible:
             self.scouting_panel.hide()
-            self.scoreboard.show()
 
         if field_renderer:
             laps = field_renderer.get_lap_history()
@@ -593,10 +549,6 @@ class UIManager:
                     btn.set_text(pitch_name)
                 btn.show()
 
-    def update_view_window_fps(self, display_fps):
-        """Update the view window's display FPS for animation timing."""
-        self.view_window.set_display_fps(display_fps)
-
     def hide_banner(self):
         self.banner.hide()
 
@@ -638,9 +590,6 @@ class UIManager:
                 button.hide()
             # Keep banner visible - it should be unaffected by UI toggle
             # self.banner.hide()  # Commented out to keep banner visible
-            self.scoreboard.hide()
-            self.pitch_result.hide()
-            self.view_window.hide()
             self.scouting_panel.hide()
             self.lap_log_panel.hide()
             return
@@ -658,31 +607,12 @@ class UIManager:
                 self.buttons['toggle_ump_sound'].show()
                 self.buttons['view_pitches'].show()
                 self.buttons['toggle_batter'].show()
-                self.buttons['visualise'].show()
                 self.buttons['scout'].show()
                 self.buttons['lap_stats'].show()
                 self.buttons['view_laps'].show()
-            # Scorebug handles stats display during gameplay
-            self.scoreboard.hide()
-            self.pitch_result.hide()
         elif state == 'pitching':
             # All buttons are hidden during the pitch animation
             pass
-        elif state == 'view_pitches':
-            # Show the same buttons as in_game so they can toggle back
-            if self._is_legacy_hud():
-                self.buttons['strikezone'].show()
-                self.buttons['main_menu'].show()
-                self.buttons['toggle_ump_sound'].show()
-                self.buttons['view_pitches'].show()
-                self.buttons['toggle_batter'].show()
-                self.buttons['visualise'].show()
-                self.buttons['scout'].show()
-                self.buttons['lap_stats'].show()
-                self.buttons['view_laps'].show()
-            # Scorebug handles stats display
-            self.scoreboard.hide()
-            self.pitch_result.hide()
         elif state == 'main_menu':
             self.buttons['sale'].show()
             self.buttons['degrom'].show()
@@ -693,8 +623,6 @@ class UIManager:
             self.buttons['gameday'].show()
             self.buttons['back_to_mode_select'].show()
             self.banner.hide()
-            self.scoreboard.hide()
-            self.pitch_result.hide()
             self.scouting_panel.hide()
             self.lap_log_panel.hide()
         elif state == "visualise":
@@ -705,32 +633,24 @@ class UIManager:
                 self.buttons['toggle_ump_sound'].show()
                 self.buttons['view_pitches'].show()
                 self.buttons['toggle_batter'].show()
-                self.buttons['visualise'].show()
                 self.buttons['scout'].show()
                 self.buttons['lap_stats'].show()
                 self.buttons['view_laps'].show()
-            self.scoreboard.hide()
-            self.pitch_result.hide()
         elif state == 'summary':
             self.buttons['back_to_main_menu'].show()
             self.banner.hide()
-            self.scoreboard.hide()
-            self.pitch_result.hide()
             self.scouting_panel.hide()
             self.lap_log_panel.hide()
         elif state == 'inning_end':
             # Continue button always shown so the player can advance.
             self.buttons['continue_to_summary'].show()
             if self._is_legacy_hud():
-                self.buttons['visualise'].show()
                 self.buttons['strikezone'].show()
                 self.buttons['main_menu'].show()
                 self.buttons['lap_stats'].show()
                 self.buttons['view_laps'].show()
             self.scouting_panel.hide()
             self.lap_log_panel.hide()
-            self.scoreboard.hide()
-            self.pitch_result.hide()
         elif state == 'settings':
             # The body of this screen is drawn by ui/settings_panel.py; only
             # the footer nav is a widget.
@@ -738,14 +658,10 @@ class UIManager:
             self.buttons['key_bindings'].show()
             self.buttons['reset_settings'].show()
             self.banner.hide()
-            self.scoreboard.hide()
-            self.pitch_result.hide()
         elif state == 'key_bindings':
             self.buttons['back_from_keybinds'].show()
             self.buttons['reset_keybinds'].show()
             self.banner.hide()
-            self.scoreboard.hide()
-            self.pitch_result.hide()
         elif state == 'gameday_start':
             # Initial gameday screen with pitcher carousel
             self.buttons['start_gameday'].show()
@@ -760,8 +676,6 @@ class UIManager:
                     self.buttons['gameday_resume'].show()
             except Exception as e:
                 print(f"[gameday] resume-button visibility check failed: {e}")
-            self.scoreboard.hide()
-            self.pitch_result.hide()
             self.scouting_panel.hide()
             self.lap_log_panel.hide()
         elif state == 'gameday_resume':
@@ -769,8 +683,6 @@ class UIManager:
             self.buttons['gd_list_back'].show()
             self.buttons['gd_page_prev'].show()
             self.buttons['gd_page_next'].show()
-            self.scoreboard.hide()
-            self.pitch_result.hide()
             self.scouting_panel.hide()
             self.lap_log_panel.hide()
         elif state == 'gameday_history':
@@ -778,15 +690,11 @@ class UIManager:
             self.buttons['gd_list_back'].show()
             self.buttons['gd_page_prev'].show()
             self.buttons['gd_page_next'].show()
-            self.scoreboard.hide()
-            self.pitch_result.hide()
             self.scouting_panel.hide()
             self.lap_log_panel.hide()
         elif state == 'gameday_history_detail':
             # Single completed-game detail (linescore) — back only
             self.buttons['gd_list_back'].show()
-            self.scoreboard.hide()
-            self.pitch_result.hide()
             self.scouting_panel.hide()
             self.lap_log_panel.hide()
         elif state == 'gameday_transition':
@@ -794,8 +702,6 @@ class UIManager:
             self.buttons['next_inning'].show()
             self.buttons['view_game_log'].show()
             self.buttons['gameday_main_menu'].show()
-            self.scoreboard.hide()
-            self.pitch_result.hide()
             self.scouting_panel.hide()
             self.lap_log_panel.hide()
         elif state == 'gameday_simulation':
@@ -803,16 +709,12 @@ class UIManager:
             self.buttons['start_batting'].show()
             self.buttons['view_game_log'].show()
             self.buttons['gameday_main_menu'].show()
-            self.scoreboard.hide()
-            self.pitch_result.hide()
             self.scouting_panel.hide()
             self.lap_log_panel.hide()
         elif state == 'gameday_final':
             # Game over screen
             self.buttons['final_menu'].show()
             self.buttons['view_game_log'].show()
-            self.scoreboard.hide()
-            self.pitch_result.hide()
             self.scouting_panel.hide()
             self.lap_log_panel.hide()
         elif state == 'mode_select':
@@ -821,8 +723,6 @@ class UIManager:
             self.buttons['sandbox_mode'].show()
             self.buttons['settings'].show()
             self.banner.hide()
-            self.scoreboard.hide()
-            self.pitch_result.hide()
             self.scouting_panel.hide()
         elif state == 'sandbox_menu':
             # Sandbox mode menu - pitcher selection (matching arcade aesthetic)
@@ -833,8 +733,6 @@ class UIManager:
             self.buttons['sandbox_menu_mcclanahan'].show()
             self.buttons['back_to_mode_select'].show()
             self.banner.hide()
-            self.scoreboard.hide()
-            self.pitch_result.hide()
             self.scouting_panel.hide()
             self.lap_log_panel.hide()
         elif state == 'sandbox_gameplay':
@@ -855,33 +753,9 @@ class UIManager:
             self.buttons['sandbox_exit'].show()
             self.banner.hide()
             self.scouting_panel.hide()
-            self.scoreboard.hide()
-            self.pitch_result.hide()
-        elif state == 'sandbox_view_pitches':
-            # Sandbox mode view pitches - same sidebar layout
-            self.buttons['strikezone'].show()
-            self.buttons['toggle_batter'].show()
-            self.buttons['view_pitches'].show()
-            self.buttons['sandbox_pitcher_sale'].show()
-            self.buttons['sandbox_pitcher_degrom'].show()
-            self.buttons['sandbox_pitcher_sasaki'].show()
-            self.buttons['sandbox_pitcher_yamamoto'].show()
-            self.buttons['sandbox_pitcher_mcclanahan'].show()
-            self.buttons['sandbox_sound'].show()
-            self.buttons['sandbox_exit'].show()
-            self.banner.hide()
-            self.scouting_panel.hide()
-            self.scoreboard.hide()
-            self.pitch_result.hide()
 
-        # Legacy widget IDs remain for callers/themes, but the player gets one
-        # entry point. R/F remain remappable deep links into that workspace;
-        # T is the standalone pitch-flight view and has no button.
-        # These two hides are unconditional and run last, so a `.show()` added
-        # in a branch above cannot put either button back — delete the widget
-        # instead if one is ever meant to return.
-        self.buttons['visualise'].hide()
-        self.buttons['fielding_replay'].hide()
+        # R/F remain remappable deep links into Review; T opens the standalone
+        # pitch-flight view. The sidebar has only one review button.
         review = self.buttons['view_pitches']
         review.set_dimensions((self.SIDEBAR_W, self.SIDEBAR_H))
         review.set_relative_position(self._SHARED_SIDEBAR_POS[self._sidebar_layout]['view_pitches'])
@@ -890,6 +764,10 @@ class UIManager:
             right = self.buttons['next_inning'].rect.right
             review.set_dimensions((right - log.right - 10, log.height))
             review.set_relative_position((log.right + 10, log.y))
+        # In-game REVIEW is a side-panel button, so it follows the HUD rule
+        # like its neighbours; V/R/F still open Review under any HUD.
+        if state == 'in_game' and not self._is_legacy_hud():
+            return
         if state in ('in_game', 'sandbox_gameplay',
                      'gameday_transition', 'gameday_simulation', 'gameday_final'):
             self.buttons['view_pitches'].show()
@@ -922,9 +800,5 @@ class UIManager:
                 button.hide()
             # Keep banner visible - it should be unaffected by UI toggle
             # self.banner.hide()  # Commented out to keep banner visible
-            self.scoreboard.hide()
-            self.pitch_result.hide()
-            self.view_window.hide()
             self.scouting_panel.hide()
             self.lap_log_panel.hide()
-

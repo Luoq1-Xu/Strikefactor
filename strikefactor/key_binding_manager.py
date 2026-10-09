@@ -4,7 +4,7 @@ from typing import Callable, Dict, Optional, Set
 
 import pygame
 
-from strikefactor.config import get_path
+from strikefactor import paths
 from strikefactor.utils.io import atomic_write_json
 
 
@@ -25,7 +25,7 @@ class KeyAction(Enum):
 class KeyBindingManager:
     def __init__(self, settings_manager):
         self.settings_manager = settings_manager
-        self.settings_file = get_path("key_bindings.json")
+        self.settings_file = paths.data_path(paths.KEY_BINDINGS_FILE)
 
         self.default_bindings = {
             KeyAction.TOGGLE_UI.value: pygame.K_h,

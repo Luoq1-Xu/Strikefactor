@@ -121,9 +121,11 @@ Measured non-null fill rates over `pitches`:
 | `created_at` | 100% | 94-day trend |
 | `pitcher_hand` | 11.5% | Platoon splits — **backfillable** |
 
-`pitcher_hand` is only populated on recent rows, but is fully derivable from
-`PITCHER_HANDEDNESS` in `strikefactor/data/pitch_database.py`. The analysis
-layer backfills it so platoon splits cover the whole dataset.
+`pitcher_hand` is only populated on recent rows — the recorder's lookup was
+keyed by roster name rather than by the name stored in the row, so every pitcher
+but Yamamoto recorded NULL until it began reading `Pitcher.throws` — but it is
+fully derivable from the pitcher. The analysis layer backfills it
+(`theme.PITCHER_HAND`) so platoon splits cover the whole dataset.
 
 `abs_challenged` / `abs_overturned` are present but **all zero** — no challenge
 has ever been logged. Any ABS panel must say "no challenges recorded" rather

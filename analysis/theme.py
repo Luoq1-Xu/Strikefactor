@@ -52,10 +52,11 @@ PITCHER_DISPLAY = {
     "shanemcclanahan": "Shane McClanahan",
 }
 
-# pitches.pitcher_hand is only populated on recent rows (~11% of the table),
-# but handedness is a static property of the pitcher. Mirrors
-# PITCHER_HANDEDNESS in strikefactor/data/pitch_database.py, keyed by the name
-# actually stored in the DB so historical rows can be backfilled.
+# pitches.pitcher_hand was NULL for every pitcher but Yamamoto until the
+# recorder started reading `Pitcher.throws` (its old lookup was keyed by roster
+# name, not by the name stored here), but handedness is a static property of
+# the pitcher. Keyed by the name actually stored in the DB so those historical
+# rows can be backfilled at read time.
 PITCHER_HAND = {
     "chrissale": "L",
     "shanemcclanahan": "L",

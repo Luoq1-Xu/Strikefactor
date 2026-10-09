@@ -216,6 +216,67 @@ reaction band *through* the role bias drives the pitcher's toward zero, i.e. a
 pitcher breaking for first before contact. `test_every_fielder_can_still_break_to_a_base`
 is the successor.
 
+### A harder-hit ball was no harder to handle
+
+`misplay_prob` has always had an exit-velocity term: `1 + MISPLAY_HOP_GAIN ×
+hop_difficulty(EV)`, 1.0× at 70 mph rising to 1.8× at 110. A unit test holds the
+fielder still and confirms it. **In play it did nothing.** Fielders take soft
+grounders on the run, often charging in, so the ranging gain (up to 2.5×) and
+the charge gain (1.4×) landed on soft contact while the hop gain landed on hard.
+Averaged over the grounders actually reached, the base's modulation was flat
+(LEAGUE, n = 10000):
+
+| EV (mph) | <70 | 70–80 | 80–88 | 88–95 | 95–102 | 102+ |
+|---|---|---|---|---|---|---|
+| mean modulation of the base | 2.80× | 2.86× | 2.91× | 2.84× | 2.89× | 3.09× |
+
+Changed 2026-09-28:
+
+- **`MISPLAY_HOP_GAIN` 0.8 → 3.0.** A scorched short hop is now 4× a routine one
+  at the same spot.
+- **The charge penalty fades as the hop comes in**, `1 + 0.4 × (1 − hop)`.
+  "Charging" is a geometric test (the ball was taken 2 ft or more in front of the
+  set position), and 11% of reaches on 95+ mph grounders passed it. For those
+  balls it was a step in, not the barehand play the penalty is for. Compounded
+  in full with the new gain, SANDLOT's worst play reached `MISPLAY_P_MAX`
+  exactly. Balls in the air have no hop, so both terms reduce to what they were.
+- **`field_misplay_p` re-measured per level to hold each rung's ERR%:**
+  0.044 / 0.027 / 0.017 / 0.009 → 0.025 / 0.015 / 0.0105 / 0.0055. One factor
+  across the ladder held LEAGUE but lifted the other three rungs by 7–8%.
+
+LEAGUE, n = 10000, seed 808 (`python -m tools.calibrate_defense --n 10000 --by-ev`):
+
+| EV (mph) | <70 | 70–80 | 80–88 | 88–95 | 95–102 | 102+ |
+|---|---|---|---|---|---|---|
+| reached | 59% | 80% | 78% | 71% | 64% | 57% |
+| misplay probability per reach, before | 4.8% | 4.9% | 4.9% | 4.8% | 4.9% | 5.3% |
+| misplay probability per reach, after | 2.9% | 3.8% | 4.7% | 5.3% | 5.9% | 6.7% |
+| grounder ERR%, before | 1.44 | 2.60 | 3.15 | 3.21 | 2.54 | 1.56 |
+| grounder ERR%, after | 0.86 | 1.82 | 2.92 | 3.43 | 2.78 | 2.33 |
+| grounder hit% (both) | 8.0 | 12.0 | 22.1 | 32.7 | 36.9 | 44.9 |
+
+Across the ladder ERR% went 3.79 / 2.41 / 1.43 / 0.63 → 3.76 / 2.29 / 1.41 /
+0.66, all within sampling noise, and GB-hit% and IF-hit% moved by at most 0.2
+points at any level. The change moves errors from soft contact to hard and adds
+none.
+
+Three things to know when reading this:
+
+- **The per-ball rate still peaks mid-range, and it should.** Reach falls from
+  80% to 57% across the buckets. The hardest grounders are the ones nobody
+  touches, and a ball nobody touched is a hit. The per-reach row answers "is a
+  harder-hit ball harder to handle".
+- **Read the per-reach curve off `Model p%`, not `Misp/reach%`.** At seed 808
+  the realised count ran about 1.3σ under the model in the top two buckets, at
+  both LEAGUE and GOLD GLOVE. That is one piece of bad luck, not two
+  confirmations: the levels replay the same random stream. Seeds 909 and 1234
+  pooled to the model. `HitAnimation._misplay_p` exists for this, and
+  `test_a_harder_hit_grounder_is_harder_to_handle_on_the_plays_reached` reads it:
+  1.75× hard over soft on its sample, against 1.08× before.
+- **It costs the batter nothing.** An error only turns a would-be out into a
+  reach (the `[p_out, p_out_clean)` window), so this moves that consolation from
+  weak contact to hard contact without changing any hit rate.
+
 ---
 
 ## 4. Calibration
@@ -282,6 +343,18 @@ through-ball is charged an error only in proportion to `p_out_clean` — which i
 *lower* for a slow defense that was not going to make the play anyway. A
 sufficiently bad defense gets charged fewer errors and given more hits, which is
 exactly how a scorer rules it.
+
+**`MISPLAY_HOP_GAIN` = 3.0 is a design value, not a sourced one.** The source
+would be Statcast: the `field_error` rate by `launch_speed` on ground balls. It
+should be refitted against that when someone pulls it, reading the per-reach
+curve from `--by-ev` rather than the per-ball rate (see §3).
+
+**Line drives have no exit-velocity term.** A liner caught in the air goes
+through `catch_muff_p` like a fly ball does, and at LEAGUE liners produce almost
+no errors (about 1 in 540). If a 105 mph liner should sometimes pop out of an
+infielder's glove, key that on the seconds between contact and the glove rather
+than on EV. A fly ball comes down at the same speed however hard it was hit.
+An airborne-only change must leave every ground-ball number identical.
 
 **Not modelled:** throwing errors that advance a runner an extra base (they need
 a live-ball state *after* the throw animation, which `HitAnimation` does not

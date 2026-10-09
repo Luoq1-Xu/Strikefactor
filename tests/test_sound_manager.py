@@ -9,7 +9,7 @@ import os
 
 import pytest
 
-from strikefactor.config import get_path, resource_path
+from strikefactor.config import get_path
 from strikefactor.engine.contact_audio import CONTACT_LADDER
 from strikefactor.engine.sound_manager import SoundManager
 
@@ -152,7 +152,7 @@ def test_every_registered_sound_file_exists_on_disk():
     """Catches renames that update code but not the asset, and vice versa."""
     missing = []
     for key, filename in SoundManager.SOUND_FILES.items():
-        path = resource_path(get_path(os.path.join("assets/sounds", filename)))
+        path = get_path(os.path.join("assets/sounds", filename))
         if not os.path.exists(path):
             missing.append(f"{key} -> {filename}")
     assert not missing, f"missing sound assets: {missing}"

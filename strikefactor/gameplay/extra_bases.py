@@ -131,39 +131,51 @@ def final_base(ball_xy_ft, retrieved_at_s, is_outfielder=True,
     """How far the batter-runner gets. Returns (base, margin_s).
 
     The runner advances one base at a time, and stops at the first base
-    they cannot reach with `AGGRESSION_MARGIN_S` to spare. `margin_s` is
-    for the last base they *attempted* — positive means they beat the
-    throw there — so it is the number worth recording as the play's
-    margin.
+    they cannot reach with `AGGRESSION_MARGIN_S` to spare.
+
+    `margin_s` is the race that settled how far they got: to the base they
+    held short of, to third on a triple, or to the base whose tag beat
+    them. It is signed the way `infield_timing.PlayTiming.margin_s` is —
+    `runner_s - defense_s`, positive favours the defense — and it is the
+    physical race, not the coach's decision about it: the runner who
+    arrives 0.3 s ahead of the throw and holds anyway reads -0.3, not a
+    shortfall against `AGGRESSION_MARGIN_S`. That is what makes it
+    comparable with the infield margin and recordable beside it.
+
+    It used to be two different races depending on the hit — the declined
+    race to second on a single, but the *won* race to second on a double —
+    and in the aggression-shifted, runner-positive sign. Nothing read it,
+    which is how the difference survived.
+
+    None only if no race was run at all, which needs a `min_base` of 3.
 
     `min_base` is the floor a ball that reached the wall gets: it is past
     every outfielder by definition, so it cannot be a single no matter how
     the carom comes back.
     """
     base = max(1, min_base)
-    margin = None
+    margin_s = None
     while base < 3:
         nxt = base + 1
         runner_s = home_to_base_s(nxt, handedness, sprint_fts,
                                   difficulty_offset_s)
         defense_s = defense_to_base_s(nxt, ball_xy_ft, retrieved_at_s,
                                       is_outfielder, defense)
-        m = defense_s - runner_s - AGGRESSION_MARGIN_S
-        if m <= 0:
-            # Not enough daylight — hold. The margin at the base they
-            # stopped at is what the play was decided by.
-            if margin is None:
-                margin = m
+        margin_s = runner_s - defense_s
+        # The runner's daylight beyond what a coach needs to send them.
+        daylight = defense_s - runner_s - AGGRESSION_MARGIN_S
+        if daylight <= 0:
+            # Not enough daylight — hold. This race is the one that
+            # decided the hit.
             break
-        margin = m
         base = nxt
-        if rng is not None and rng.random() > p_out_from_margin(m, SIGMA_TAG_S):
+        if rng is not None and rng.random() > p_out_from_margin(daylight, SIGMA_TAG_S):
             # Sent anyway and thrown out — the runner reached the base but
             # the tag beat them. Still counts as reaching it for the hit's
             # classification; the out is not modelled here (see the module
             # note on double plays in infield_timing).
             break
-    return base, (margin if margin is not None else 0.0)
+    return base, margin_s
 
 
 __all__ = [

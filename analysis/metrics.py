@@ -184,15 +184,20 @@ def _outcome_metrics(g):
     # all three, because a metric with no readout is one nobody checks.
     roe = sum(counts.get(o, 0) for o in theme.REACH_OUTCOMES)
 
+    # A sacrifice fly is a plate appearance and not an at-bat, as the game
+    # scores it (`data.sac_fly_sql`). It is still a ball in play, so `bip` is
+    # taken from plate appearances: AB - K - HR + SF, BABIP's own denominator.
+    sf = int((g["is_terminal"] & g["is_sac_fly"]).sum())
+
     h = s1 + d2 + t3 + hr
-    ab = pa - bb
-    bip = ab - k - hr
+    ab = pa - bb - sf
+    bip = pa - bb - k - hr
     tb = s1 + 2 * d2 + 3 * t3 + 4 * hr
 
     avg = _safe_div(h, ab)
     slg = _safe_div(tb, ab)
     return {
-        "pa": pa, "ab": ab, "h": h, "bb": bb, "k": k, "hr": hr,
+        "pa": pa, "ab": ab, "sf": sf, "h": h, "bb": bb, "k": k, "hr": hr,
         "singles": s1, "doubles": d2, "triples": t3,
         "go": go, "ao": ao, "tb": tb, "bip": bip,
         "roe": roe, "roe_pct": _safe_div(roe, bip),
@@ -202,7 +207,8 @@ def _outcome_metrics(g):
         "ops": _safe_div(h + bb, pa) + slg,
         "iso": slg - avg,
         "babip": _safe_div(h - hr, bip) if bip > 0 else 0.0,
-        # Simplified wOBA — no HBP/SF/IBB are tracked by the game.
+        # Simplified wOBA — no HBP/IBB are tracked by the game. Its
+        # denominator is AB + BB + SF, which is every plate appearance here.
         "woba": _safe_div(0.69 * bb + 0.89 * s1 + 1.27 * d2 + 1.62 * t3 + 2.10 * hr, pa),
         "k_pct": _safe_div(k, pa),
         "bb_pct": _safe_div(bb, pa),
@@ -247,6 +253,12 @@ def pitching_line(ctx):
     Within the kept slice, runs come per-pitch from ``runs_scored_on_pitch``
     where present, else prorated from the game's final score by batters faced;
     ``runs_exact`` flags which method was used.
+
+    Earned runs are the official scorer's, from ``earned_runs_on_pitch`` (v12).
+    A row from before that column carries no ruling, and its runs are all
+    counted as earned: that is what this line said of every run before the
+    scorer existed, and it is an upper bound, never an invented zero.
+    ``er_exact`` flags a line with no such rows. ERA is over earned runs.
     """
     gd = ctx.pitches[ctx.pitches["game_mode"] == "gameday"]
     if gd.empty:
@@ -281,15 +293,24 @@ def pitching_line(ctx):
         # publishing a line that says a pitcher allowed 21 homers and 9 runs.
         r = max(r, hr)
 
+        # The scorer's ruling where there is one; elsewhere every run counts.
+        # Taken as "all runs, less the unearned ones on ruled rows" so the
+        # prorated and floored runs above stay earned too.
+        earned = g["earned_runs_on_pitch"]
+        ruled = earned.notna()
+        er_exact = bool(ruled.all())
+        er = r - int(scored[ruled].fillna(0).sum() - earned[ruled].sum())
+
         ip = outs / 3
         games = int(g["game_id"].nunique())
         rows.append({
             "pitcher": name,
             "display": theme.pitcher_display(name),
             "g": int(games), "outs": outs, "ip": ip, "bf": bf,
-            "h": h, "r": r, "er": r, "hr": hr, "bb": bb, "k": k,
+            "h": h, "r": r, "er": er, "hr": hr, "bb": bb, "k": k,
             "runs_exact": runs_exact,
-            "era": _safe_div(r * 9, ip),
+            "er_exact": er_exact,
+            "era": _safe_div(er * 9, ip),
             "whip": _safe_div(h + bb, ip),
             "k_per_9": _safe_div(k * 9, ip),
             "bb_per_9": _safe_div(bb * 9, ip),
@@ -686,7 +707,11 @@ def umpire_accuracy(ctx):
     miscalled = graded[graded["ai_umpire_strike"] != graded["truth_strike"]]
     stolen = miscalled[miscalled["ai_umpire_strike"] == 1]   # ball called strike
     lost = miscalled[miscalled["ai_umpire_strike"] == 0]     # strike called ball
-    challenged = int(df["abs_challenged"].fillna(0).sum())
+    # NULL is "not recorded", not "not challenged": until schema v11 the row
+    # was written before a challenge could be made, so every flag read 0 and
+    # the migration cleared them. Counts are over the rows that could record
+    # a challenge, and how many those are is reported beside them.
+    tracked = df["abs_challenged"].notna()
     summary = {
         "graded": len(graded),
         "coverage_pct": 100 * len(graded) / len(df),
@@ -694,8 +719,9 @@ def umpire_accuracy(ctx):
         "accuracy_pct": 100 * (1 - len(miscalled) / len(graded)),
         "stolen_strikes": len(stolen),
         "lost_strikes": len(lost),
-        "challenged": challenged,
-        "overturned": int(df["abs_overturned"].fillna(0).sum()),
+        "challenge_tracked": int(tracked.sum()),
+        "challenged": int(df.loc[tracked, "abs_challenged"].sum()),
+        "overturned": int(df.loc[tracked, "abs_overturned"].sum()),
     }
     return summary, miscalled
 

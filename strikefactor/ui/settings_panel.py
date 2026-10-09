@@ -27,6 +27,7 @@ from strikefactor.gameplay import defense
 from strikefactor.key_binding_manager import KeyAction
 from strikefactor.settings_manager import DifficultyLevel
 from strikefactor.ui import gameday_theme as gdt
+from strikefactor.ui import pointer
 
 # ── Vertical rhythm ──────────────────────────────────────────────────────
 # One cursor walks the page; these are the only spacings involved. The
@@ -316,7 +317,7 @@ class SettingsPanel(_RowPanel):
         f = self._draw_chrome(screen)
         self._row_rects = []
         self._chip_rects = []
-        mouse = pygame.mouse.get_pos()
+        mouse = pointer.pos()
 
         y = self._draw_section(screen, "DIFFICULTY", _CONTENT_TOP)
         self._chip_rects = gdt.draw_chips(
@@ -386,7 +387,7 @@ class KeyBindingsPanel(_RowPanel):
         """Draw the list. ``pending`` is the action awaiting a keypress."""
         f = self._draw_chrome(screen)
         self._row_rects = []
-        mouse = pygame.mouse.get_pos()
+        mouse = pointer.pos()
 
         y = self._draw_section(screen, "CONTROLS", _CONTENT_TOP)
         for action in self.ACTIONS:

@@ -137,6 +137,28 @@ def test_foul_direction_follows_signed_timing(hand, timing, side):
         assert angle < 45.0, f"expected RF-side foul, got {angle:.1f} deg (real field)"
 
 
+@pytest.mark.parametrize("hand,timing,voff,quality", [
+    (hand, timing, voff, quality)
+    for hand in ("R", "L")
+    for timing in (-0.6, +0.6)
+    for voff, quality in ((0.0, 0.5),      # generic foul liner
+                          (3.0, 0.95))     # foul home run
+])
+def test_the_fielder_who_drifts_after_a_foul_is_on_its_side(hand, timing, voff, quality):
+    """The drift fielder is picked from the landing's side of the field.
+
+    The side was read off the pull-positive spray angle without the
+    handedness mirror, so a left-hander's pulled foul down the right-field
+    line sent the third baseman after it.
+    """
+    anim = _make(hand=hand, timing=timing, voff=voff, quality=quality)
+    (drift,) = anim._lean_excluded
+    if _real_field_angle_deg(anim) > 90.0:
+        assert drift in ("LF", "3B"), f"{hand}HB foul to LF side chased by {drift}"
+    else:
+        assert drift in ("RF", "1B"), f"{hand}HB foul to RF side chased by {drift}"
+
+
 def test_severe_undercut_pops_straight_back():
     anim = _make(voff=40.0, quality=0.3)
     assert anim.shape == "POP_UP"

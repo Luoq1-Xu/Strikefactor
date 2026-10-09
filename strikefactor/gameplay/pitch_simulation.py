@@ -8,7 +8,6 @@ import pygame.gfxdraw
 from strikefactor import outcomes
 from strikefactor.engine import contact_audio
 from strikefactor.gameplay import bat_contact, bat_path, defense, spray
-from strikefactor.helpers import EnhancedPitchRecord
 from strikefactor.utils.physics import collision
 from strikefactor.utils.pitch_physics import DEFAULT_CAMERA, PitchTrajectory, UmpireCamera
 
@@ -50,6 +49,31 @@ def get_umpire_model():
                 _umpire_model = pickle.load(f)
     return _umpire_model
 
+
+def _handle_window_event(game, event):
+    """Honour the events every blocking pitch loop owes the window.
+
+    Returns None when `event` is not one of them, "quit" for a QUIT — already
+    re-posted so the outer loop exits; the caller must stop the pitch and
+    return — and "handled" for a resize or F11, which are dealt with here.
+
+    One function because two loops drain the queue during a pitch and only
+    one of them used to do this. The ball-flight phase handled KEYDOWN and
+    threw everything else away, so closing or resizing the window while a
+    pitch was in the air was silently swallowed.
+    """
+    if event.type == pygame.QUIT:
+        pygame.event.post(event)
+        return "quit"
+    if event.type in (pygame.VIDEORESIZE, pygame.WINDOWRESIZED):
+        game._update_scaling()
+        return "handled"
+    if event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
+        game.toggle_fullscreen()
+        return "handled"
+    return None
+
+
 class PitchSimulation:
     # What the banner *calls* an outcome, where that differs from what the
     # game *records* it as. The recorded vocabulary is load-bearing free
@@ -77,6 +101,9 @@ class PitchSimulation:
         self.pfx_x = pfx_x
         self.pfx_z = pfx_z
         self.pitchtype = pitchtype
+        # 'L' / 'R', for the DB's pitcher_hand. Off the pitcher that threw it
+        # rather than looked up by `pitchername`, which is not a roster key.
+        self.pitcher_hand = getattr(self.game.current_pitcher, 'throws', None)
 
         # Camera for 3D -> 2D projection
         self.camera: UmpireCamera = DEFAULT_CAMERA
@@ -233,7 +260,8 @@ class PitchSimulation:
         # the outcome and stay None when no race was run.
         self.batted_ball_type = None
         self.fielder_role = None
-        self.play_margin_s = None
+        self.play_margin_s = None           # the infield throw-to-first race
+        self.extra_base_margin_s = None     # the base race, on a ball that got through
         # Which way the ball left the bat, pull-positive degrees. Set on every
         # bat-on-ball event including fouls — a foul has a direction and it is
         # often *why* it was a foul — and left None on a whiff, where there is
@@ -268,10 +296,18 @@ class PitchSimulation:
         self._foul_shape = None
         self.ai_umpire_strike = None      # set in _make_ball_strike_call (taken pitches only)
         self.truth_strike = None          # set in _make_ball_strike_call (taken pitches only)
-        self.abs_challenged = False       # toggled by ABS challenge wiring (see _challenge bookkeeping)
+        # Always False when the row is written: the challenge window is still
+        # open then, so a verdict reaches the row afterwards, through
+        # `Game._record_abs_challenge` -> `PitchDatabaseService.amend_abs_challenge`.
+        self.abs_challenged = False
         self.abs_overturned = False
         self.runs_scored_on_pitch = 0     # filled in cleanup() from scoreKeeper delta
         self._score_before_pitch = self.game.scoreKeeper.get_score()
+        # Earned runs the scorer credited on this pitch — its own delta, not
+        # a share of the one above: a run can be ruled earned on a later
+        # pitch than it scored on (`ScoreKeeper._settle`).
+        self.earned_runs_on_pitch = 0
+        self._earned_before_pitch = self.game.scoreKeeper.get_earned_runs()
 
         # Set when a hit is registered; the animation runs in place of
         # follow-through and defers the outcome banner until it finishes.
@@ -319,8 +355,13 @@ class PitchSimulation:
         self.game.ui_manager.hide_banner()
         self.game.ui_manager.set_button_visibility('pitching')
 
-        while self.running:
-            self.update()
+        try:
+            while self.running:
+                self.update()
+        finally:
+            # The hit animation hides the cursor; every way out of the pitch
+            # (Continue, a quit mid-play) hands it back to the batter here.
+            pygame.mouse.set_visible(True)
 
     def update(self):
         """Main simulation update loop."""
@@ -438,6 +479,12 @@ class PitchSimulation:
             self.game.sound_manager.play('sizzle')
 
         for event in pygame.event.get():
+            window = _handle_window_event(self.game, event)
+            if window == "quit":
+                self.running = False
+                return
+            if window:
+                continue
             if event.type == pygame.KEYDOWN:
                 if current_time < self.arrival_time - 100:
                     self._handle_swing_input(event, current_time)
@@ -748,6 +795,7 @@ class PitchSimulation:
             launch_deg=self.launch_angle_deg,
             ev_mph=self.exit_velocity_mph,
             handedness=self.game.batter.get_handedness(),
+            outs=self.game.currentouts,
         )
 
         # Snapshot contact metrics for the hit animation (shape + HR distance).
@@ -784,16 +832,17 @@ class PitchSimulation:
         For IN_PLAY — the generic ball-in-play outcome — the final result
         is whatever the animation resolves to: FLYOUT or GROUNDOUT if a
         fielder intercepts; SINGLE/DOUBLE/TRIPLE if the ball gets past
-        them. We record the at-bat and reset counts here (those fire
-        regardless of resolution) and stash the inputs needed at finalize
-        time; the rest is applied by _finalize_batted_ball once
-        HitAnimation.classified_outcome is set.
-        """
-        # At-bat is recorded unconditionally — every contact counts as an
-        # AB regardless of how it resolves.
-        self.game.field_renderer.record_at_bat()
+        them. We reset counts here (that fires regardless of resolution) and
+        stash the inputs needed at finalize time; the rest is applied by
+        _finalize_batted_ball once HitAnimation.classified_outcome is set.
 
+        The at-bat waits for the resolution too. It used to be charged here
+        on every contact, which charged one for a sacrifice fly (Rule
+        9.02(a)(1) does not) — and whether a fly ball is a sacrifice is not
+        known until it is caught and the runner has scored.
+        """
         if hit_string == "HOME RUN":
+            self.game.field_renderer.record_at_bat()
             self.is_hit = True
             self.game.hits += 1
             homerun_text = self.game.hit_outcome_manager.get_homerun_text()
@@ -815,7 +864,9 @@ class PitchSimulation:
             if self.game.in_gameday_mode:
                 runs_scored = self.game.scoreKeeper.get_score() - score_before
                 self.game.gameday_manager.record_player_at_bat(
-                    hit_string, runs_scored=runs_scored, pitches_thrown=self.game.pitchnumber
+                    hit_string, runs_scored=runs_scored, pitches_thrown=self.game.pitchnumber,
+                    play=self.game.scoreKeeper.last_play,
+                    charges=self.game.scoreKeeper.take_charges(),
                 )
                 self._check_walkoff()
         else:
@@ -857,6 +908,11 @@ class PitchSimulation:
         self.fielder_role = getattr(self.hit_animation, 'fielder_role', None)
         timing = getattr(self.hit_animation, 'play_timing', None)
         self.play_margin_s = timing.margin_s if timing is not None else None
+        # The other race, for the ball that got past the infield. Its own
+        # column, for the reason `play_margin_s` is only ever the throw to
+        # first: the two are different races and share only their sign.
+        self.extra_base_margin_s = getattr(self.hit_animation,
+                                           'extra_base_margin_s', None)
 
         # Three states, not two. Reaching on an error is neither an out nor a
         # hit, and the old binary put it in the `else` — crediting the batter
@@ -890,13 +946,21 @@ class PitchSimulation:
             if len(last_entry) >= 5 and last_entry[4] == "hit":
                 last_entry[3] = new_trail_color
 
-        # Advance runners + score for hits (no-op for outs).
-        suppress_out_advancement = is_out and self.game.currentouts >= 3
-        self.game.hit_outcome_manager.apply_classified_outcome(
+        # Advance runners + score. The scorer wants the outs before the play
+        # (`currentouts` already counts this one), and for an error the out it
+        # should have been — the reconstructed inning is built from it.
+        play = self.game.hit_outcome_manager.apply_classified_outcome(
             classified,
-            suppress_out_advancement=suppress_out_advancement,
+            outs=self.game.currentouts - (1 if is_out else 0),
             bases=getattr(self.hit_animation, 'error_bases', 1),
+            clean_outcome=getattr(self.hit_animation, 'error_out', None),
         )
+
+        # A sacrifice fly is a plate appearance and not an at-bat.
+        if play.sacrifice_fly:
+            self.game.field_renderer.record_sacrifice_fly()
+        else:
+            self.game.field_renderer.record_at_bat()
 
         # Hit-location stats only record actual hits — outs don't contribute
         # to the batting-zone heatmap.
@@ -910,7 +974,8 @@ class PitchSimulation:
         if self.game.in_gameday_mode:
             runs_scored = self.game.scoreKeeper.get_score() - score_before
             self.game.gameday_manager.record_player_at_bat(
-                classified, runs_scored=runs_scored, pitches_thrown=pitches_thrown
+                classified, runs_scored=runs_scored, pitches_thrown=pitches_thrown,
+                play=play, charges=self.game.scoreKeeper.take_charges(),
             )
             if not is_out:
                 self._check_walkoff()
@@ -1047,7 +1112,7 @@ class PitchSimulation:
 
             # Track score before walk for gameday mode
             score_before = self.game.scoreKeeper.get_score() if self.game.in_gameday_mode else 0
-            self.game.scoreKeeper.update_walk_event()
+            self.game.scoreKeeper.update_walk_event(outs=self.game.currentouts)
             runs_scored = self.game.scoreKeeper.get_score() - score_before
 
             self.game._display_pitch_results("WALK", self.pitchtype, self.speed_mph)
@@ -1060,7 +1125,11 @@ class PitchSimulation:
 
             # Record in gameday mode
             if self.game.in_gameday_mode:
-                self.game.gameday_manager.record_player_at_bat('WALK', runs_scored=runs_scored, pitches_thrown=self.game.pitchnumber)
+                self.game.gameday_manager.record_player_at_bat(
+                    'WALK', runs_scored=runs_scored, pitches_thrown=self.game.pitchnumber,
+                    play=self.game.scoreKeeper.last_play,
+                    charges=self.game.scoreKeeper.take_charges(),
+                )
                 self._check_walkoff()
 
             self.game.currentstrikes = 0
@@ -1310,6 +1379,9 @@ class PitchSimulation:
         from strikefactor.gameplay.fielding_record import FieldingRecorder
 
         if self._fielding_recorder is None:
+            # The crosshair is the batter's aiming reticle; over the field it
+            # only covers the play. `run()` shows it again when the pitch ends.
+            pygame.mouse.set_visible(False)
             self.game._fielding_play_number += 1
             label = f"PLAY {self.game._fielding_play_number} / {self.pitchtype} {self.speed_mph:.0f} MPH"
             self._fielding_recorder = FieldingRecorder(self.hit_animation, label, self.game.screen.get_size())
@@ -1331,15 +1403,11 @@ class PitchSimulation:
         from strikefactor.key_binding_manager import KeyAction
         from strikefactor.ui.review_overlay import view_for_key
         for event in pygame.event.get():
-            if event.type == pygame.QUIT:
+            window = _handle_window_event(self.game, event)
+            if window == "quit":
                 self.running = False
-                pygame.event.post(event)
                 return
-            if event.type in (pygame.VIDEORESIZE, pygame.WINDOWRESIZED):
-                self.game._update_scaling()
-                continue
-            if event.type == pygame.KEYDOWN and event.key == pygame.K_F11:
-                self.game.toggle_fullscreen()
+            if window:
                 continue
             if not self.hit_animation.banner_fired:
                 continue
@@ -1359,10 +1427,6 @@ class PitchSimulation:
             if event.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN):
                 self._finish_pitch()
                 return
-
-    def _calculate_velocity_mph(self) -> float:
-        """Return the pitch speed in MPH (directly from input parameter)."""
-        return self.speed_mph
 
     def _get_outcome_display(self) -> str:
         """Get display-friendly outcome string from internal outcome."""
@@ -1442,36 +1506,12 @@ class PitchSimulation:
             self.game.pitch_history = self.game.pitch_history[-5:]
 
         # Build new state with richer representation
-        from strikefactor.ai.AI_2 import build_state
-        new_state = build_state(
-            outs=self.game.currentouts,
-            strikes=self.game.currentstrikes,
-            balls=self.game.currentballs,
-            runners=self.game.scoreKeeper.get_runners_on_base(),
-            pitch_number_in_ab=self.game.pitchnumber,
-            prev_pitch=self.game.last_pitch_type_thrown,
-            handedness=self.game.batter.get_handedness(),
-            score_diff=self.game.scoreKeeper.get_score(),
-        )
+        new_state = self.game.build_ai_state()
         self.game.current_pitcher.get_ai().update(self.previous_state, self.game.pitch_chosen,
                                                  new_state, self.game.outcome_value.get(self.outcome, 0))
         self.game.current_state = new_state
         self.game.pitch_trajectories.append(self.game.last_pitch_information)
-        self.game.pitches_display.append((self.game.ball[0], self.game.ball[1]))
         self.game.current_pitches += 1
-
-        # Create enhanced pitch record for visualization
-        if hasattr(self.game, 'enhanced_pitch_records'):
-            enhanced_record = EnhancedPitchRecord(
-                trajectory=self.game.last_pitch_information.copy(),
-                pitch_type=self.pitchtype,
-                velocity_mph=self._calculate_velocity_mph(),
-                outcome=self._get_outcome_display(),
-                final_location=(self.game.ball[0], self.game.ball[1]),
-                index=len(self.game.enhanced_pitch_records),
-                selected=False
-            )
-            self.game.enhanced_pitch_records.append(enhanced_record)
 
         # Compute runs scored on THIS pitch from the inning scoreKeeper delta.
         # SummaryState.enter() resets scoreKeeper at inning end, but cleanup()
@@ -1479,15 +1519,31 @@ class PitchSimulation:
         self.runs_scored_on_pitch = max(
             0, self.game.scoreKeeper.get_score() - self._score_before_pitch
         )
-
-        # Pull any ABS challenge verdict that fired during this pitch.
-        self.abs_challenged = bool(getattr(self.game, '_last_pitch_abs_challenged', False))
-        self.abs_overturned = bool(getattr(self.game, '_last_pitch_abs_overturned', False))
+        self.earned_runs_on_pitch = max(
+            0, self.game.scoreKeeper.get_earned_runs() - self._earned_before_pitch
+        )
 
         # Non-animated results publish here. Animated plays already published
         # before Continue; this is idempotent and never builds a second swing.
         self._publish_review()
 
-        # Record pitch to SQLite database
+        self._record_to_database()
+
+    def _record_to_database(self):
+        """Write this pitch's DB row, and hand its id to any open challenge.
+
+        **The row is written with the ABS window still open**, and no
+        challenge can be made until it is: the window runs 1.8 s from the call,
+        this pitch ends 0.7 s after it, and the challenge key is only read once
+        `run()` has returned. So the verdict cannot be read here — it used to
+        be, off flags nothing could have set yet, and every row recorded "not
+        challenged". The row's id goes to the challenge instead, and the
+        verdict amends the row when it comes (`Game._record_abs_challenge`).
+        Any open challenge is this pitch's: the next pitch clears it.
+        """
         from strikefactor.data.pitch_database import PitchDatabaseService
-        PitchDatabaseService.get_instance().record_pitch(self)
+        pitch_id = PitchDatabaseService.get_instance().record_pitch(self)
+        pending = getattr(self.game, 'pending_challenge', None)
+        if pending is not None:
+            pending['pitch_id'] = pitch_id
+        return pitch_id

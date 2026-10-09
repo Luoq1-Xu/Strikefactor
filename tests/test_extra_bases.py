@@ -113,14 +113,56 @@ def test_the_wall_floor_cannot_be_undercut():
     assert base >= 2
 
 
-def test_the_margin_reported_is_the_decisive_race():
-    """`play_margin_s` is only falsifiable if it describes the race that
-    actually settled the play."""
-    for retrieved in (3.5, 5.0, 6.5, 8.0):
-        base, margin = xb.final_base((0.0, 300.0), retrieved_at_s=retrieved)
-        assert isinstance(margin, float)
-        if base == 1:
-            assert margin <= 0.0, "held at first on a race the runner won"
+def _race_s(base, ball, retrieved):
+    """`runner_s - defense_s` to `base`: the infield margin's sign."""
+    return xb.home_to_base_s(base) - xb.defense_to_base_s(base, ball, retrieved)
+
+
+_GAPPER = (-150.0, 330.0)
+
+
+@pytest.mark.parametrize("retrieved,base", [(4.0, 1), (7.0, 2), (8.0, 3)])
+def test_the_margin_reported_is_the_race_that_settled_the_hit(retrieved, base):
+    """`extra_base_margin_s` is only falsifiable if it describes the race that
+    decided how far the runner got: the base they held short of, or third on
+    a triple. It used to be the race to second on both a single (declined)
+    and a double (won), and nothing read it, so nothing noticed."""
+    got, margin = xb.final_base(_GAPPER, retrieved_at_s=retrieved)
+    assert got == base
+    decisive = min(base + 1, 3)
+    assert margin == pytest.approx(_race_s(decisive, _GAPPER, retrieved))
+
+
+@pytest.mark.parametrize("retrieved", [3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 10.0])
+def test_the_margin_is_the_physical_race_signed_like_the_infield_one(retrieved):
+    """Positive favours the defense, as `PlayTiming.margin_s` does, and it is
+    the race itself rather than the coach's decision about it: a runner who
+    held lacked `AGGRESSION_MARGIN_S` of daylight — and may still have been
+    ahead of the throw — while one who reached third had more than it."""
+    base, margin = xb.final_base(_GAPPER, retrieved_at_s=retrieved)
+    if base < 3:
+        assert margin >= -xb.AGGRESSION_MARGIN_S
+    else:
+        assert margin < -xb.AGGRESSION_MARGIN_S
+
+
+def test_a_runner_held_while_ahead_of_the_throw_reads_as_ahead():
+    """The case the old aggression-shifted margin could not express: beating
+    the throw to second by a third of a second is not enough to be sent."""
+    base, margin = xb.final_base(_GAPPER, retrieved_at_s=4.0)
+    assert base == 1
+    assert -xb.AGGRESSION_MARGIN_S < margin < 0.0
+
+
+def test_a_runner_tagged_out_reports_the_race_they_lost_on_the_tag():
+    """Sent with daylight and beaten by the tag: that base's race settled it."""
+    class _TagAlwaysWins:
+        def random(self):
+            return 1.0          # above any p_safe short of certainty
+
+    base, margin = xb.final_base(_GAPPER, retrieved_at_s=5.0, rng=_TagAlwaysWins())
+    assert base == 2
+    assert margin == pytest.approx(_race_s(2, _GAPPER, 5.0))
 
 
 def test_faster_runners_take_more_bases_over_many_plays():

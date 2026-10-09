@@ -29,12 +29,13 @@ import shutil
 import sqlite3
 from datetime import datetime
 
+from strikefactor import paths
 from strikefactor.data import gameday_sessions
 from strikefactor.gameplay.gameday_manager import GameDayManager
 from strikefactor.utils.io import atomic_write_json
 
-ARCHIVE_ROOT = os.path.join(os.path.dirname(__file__), 'gameday_archives')
-DB_PATH = os.path.join(os.path.dirname(__file__), 'strikefactor.db')
+ARCHIVE_ROOT = paths.data_path(paths.GAMEDAY_ARCHIVES_DIR)
+DB_PATH = paths.db_path()
 
 # Name of the extracted GameDay slice inside an archive directory. It is a
 # standalone SQLite file with the same table shapes as the live DB, so it can

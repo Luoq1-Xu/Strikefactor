@@ -116,19 +116,33 @@ def test_gameday_history_normalizes_legacy_play_results():
     assert games[0]["result"] == "WIN"
 
 
-def test_live_database_has_no_legacy_spelling():
-    """The user's real db was migrated; catch a regression that reintroduces it."""
-    from strikefactor.config import get_path
+def test_the_v5_migration_rewrites_the_legacy_spelling(tmp_path):
+    """A database written before v5 has its POP_UP outcomes renamed on open.
 
-    conn = sqlite3.connect(get_path("data/strikefactor.db"))
+    This used to be asserted against the player's own database, which made it
+    a test of one machine's data: on a fresh checkout there is no database, so
+    `sqlite3.connect` created an empty one and the query failed.
+    """
+    from strikefactor.data.pitch_database import PitchDB
+
+    path = str(tmp_path / "v4.db")
+    PitchDB(path).close()                       # current schema, then roll back
+    conn = sqlite3.connect(path)
+    conn.execute("INSERT INTO pitches (pitch_id, session_id, created_at, pitcher_name, "
+                 "pitch_type, outcome) VALUES ('p1', 's', 't', 'sale', 'FF', 'POP_UP')")
+    conn.execute("INSERT INTO at_bats (ab_id, session_id, created_at, final_outcome) "
+                 "VALUES ('a1', 's', 't', 'POP_UP')")
+    conn.execute("PRAGMA user_version = 4")
+    conn.commit()
+    conn.close()
+
+    db = PitchDB(path)
     try:
         for table, col in (("pitches", "outcome"), ("at_bats", "final_outcome")):
-            stale = conn.execute(
-                f"SELECT COUNT(*) FROM {table} WHERE {col} = 'POP_UP'"
-            ).fetchone()[0]
-            assert stale == 0, f"{table}.{col} still has {stale} POP_UP rows"
+            values = [row[0] for row in db.conn.execute(f"SELECT {col} FROM {table}")]
+            assert values == ["POP UP"], f"{table}.{col}: {values}"
     finally:
-        conn.close()
+        db.close()
 
 
 def test_reached_on_error_is_in_the_right_groups():
@@ -236,13 +250,71 @@ def test_the_pitch_selection_ai_is_not_punished_for_its_defense():
 def test_every_consumer_composes_the_shared_vocabulary():
     from strikefactor.data.pitch_database import PitchDataExtractor
     from strikefactor.gameplay.game_states import GameDayTransitionState as G
-    from strikefactor.helpers import OUTCOME_COLORS
 
     assert G._HIT_RESULTS == tuple(o.upper() for o in outcomes.HIT_OUTCOMES)
     assert G._OUT_RESULTS == tuple(o.upper() for o in outcomes.OUT_OUTCOMES)
     assert G._REACH_RESULTS == tuple(o.upper() for o in outcomes.REACH_OUTCOMES)
     assert PitchDataExtractor.TERMINAL_OUTCOMES is outcomes.DB_TERMINAL_OUTCOMES
-    assert OUTCOME_COLORS is outcomes.COLORS
+
+
+def test_gameday_composes_the_shared_vocabulary():
+    """`gameday_manager` counted outs, hits and hot streaks off five
+    hand-written lists that had never heard of REACHED ON ERROR."""
+    from strikefactor.gameplay import gameday_manager as gd
+
+    assert gd._HIT_RESULTS == tuple(o.upper() for o in outcomes.HIT_OUTCOMES)
+    assert gd._OUT_RESULTS == tuple(o.upper() for o in outcomes.OUT_OUTCOMES)
+    assert gd._REACH_RESULTS == tuple(o.upper() for o in outcomes.REACH_OUTCOMES)
+    assert gd._STRIKEOUT == outcomes.STRIKEOUT.upper()
+    assert gd._WALK == outcomes.WALK.upper()
+
+
+def test_the_opponent_table_only_speaks_the_shared_vocabulary():
+    """The opponent's outcome table stays data, so a misspelt key would be
+    an outcome that is drawn and then matches no branch at all."""
+    from strikefactor.gameplay import gameday_manager as gd
+
+    known = set(gd._HIT_RESULTS + gd._OUT_RESULTS + gd._REACH_RESULTS
+                + (gd._WALK,))
+    assert set(gd.GameDayManager.BASE_OPPONENT_OUTCOMES) <= known
+
+
+def _gameday_at_bat(outcome, streak=2):
+    from strikefactor.gameplay.gameday_manager import GameDayManager
+
+    gm = GameDayManager(difficulty='amateur', starter_name='sale')
+    gm.player_consecutive_hits = streak
+    stats = gm.get_active_pitcher_stats()
+    stats.consecutive_hits = 3
+    gm.record_player_at_bat(outcome, runs_scored=0, pitches_thrown=4)
+    return gm, stats
+
+
+def test_reaching_on_an_error_in_gameday_is_neither_an_out_nor_a_hit():
+    gm, stats = _gameday_at_bat(outcomes.REACHED_ON_ERROR)
+    assert gm.current_outs == 0
+    assert stats.outs_recorded == 0
+    assert stats.hits_allowed == 0
+    assert stats.consecutive_hits == 3, "the pitcher is still in trouble, as on a walk"
+
+
+def test_reaching_on_an_error_snaps_the_hot_streak():
+    """The streak is consecutive hits. A walk leaves it alone; an at-bat
+    without a hit ends it, and reaching on an error is one."""
+    gm, _ = _gameday_at_bat(outcomes.REACHED_ON_ERROR, streak=3)
+    assert gm.player_consecutive_hits == 0
+    assert not gm.is_player_hot()
+    assert gm.get_player_momentum_bonus() == 0.0
+
+
+@pytest.mark.parametrize('outcome,streak_after', [
+    (outcomes.SINGLE, 3), (outcomes.HOME_RUN, 3),
+    (outcomes.WALK.upper(), 2),
+    (outcomes.STRIKEOUT.upper(), 0), (outcomes.POP_UP, 0),
+])
+def test_the_hot_streak_rule_for_everything_else_is_unchanged(outcome, streak_after):
+    gm, _ = _gameday_at_bat(outcome, streak=2)
+    assert gm.player_consecutive_hits == streak_after
 
 
 def test_the_analysis_groups_agree_with_the_games():

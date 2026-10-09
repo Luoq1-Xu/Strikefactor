@@ -13,6 +13,7 @@ into a caller-supplied rect and consumes raw events.
 import pygame
 
 from strikefactor.ui import gameday_theme as gdt
+from strikefactor.ui import pointer
 
 # --- Result categories (used for chip styling) ---
 _HOMERS = {'HOME RUN', 'HOMERUN', 'HR'}
@@ -186,7 +187,7 @@ class PlayByPlayPanel:
     def handle_event(self, event):
         """Consume scroll/filter input. Returns True when the event was used."""
         if event.type == pygame.MOUSEWHEEL:
-            if self.rect.collidepoint(pygame.mouse.get_pos()):
+            if self.rect.collidepoint(pointer.pos()):
                 self.scroll_by(-event.y * self.SCROLL_STEP)
                 return True
             return False

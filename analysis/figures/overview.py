@@ -55,7 +55,9 @@ def _pitching_line_panel(ax, ctx):
     dropped = line.attrs.get("dropped_pitches", 0)
     if dropped:
         src += f"; {dropped:,} unattributable pitches excluded"
-    ax.set_title(f"Pitching Line — GameDay  ({src}; ER = R, no errors tracked)",
+    src += ("; ER from the official scorer" if bool(line["er_exact"].all()) else
+            "; ER from the scorer where logged, else every run counted as earned")
+    ax.set_title(f"Pitching Line — GameDay  ({src})",
                  fontweight="bold", pad=10, fontsize=12)
 
 

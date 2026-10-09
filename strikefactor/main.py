@@ -5,12 +5,12 @@ import sys
 
 import pygame
 
-from strikefactor import outcomes
+from strikefactor import outcomes, paths
 from strikefactor.ai import compat as ai_compat
 from strikefactor.ai.AI_2 import ERAI, build_state
 from strikefactor.ai.batter_profile import BatterProfile
 from strikefactor.ai.pitch_priors import validate_usage_priors
-from strikefactor.config import get_path, resource_path
+from strikefactor.config import get_path
 from strikefactor.engine.sound_manager import SoundManager
 from strikefactor.gameplay.batter import Batter
 from strikefactor.gameplay.challenge_manager import ChallengeManager
@@ -29,6 +29,7 @@ from strikefactor.pitchers.Sale import Sale
 from strikefactor.pitchers.Sasaki import Sasaki
 from strikefactor.pitchers.Yamamoto import Yamamoto
 from strikefactor.settings_manager import SettingsManager
+from strikefactor.ui import pointer
 from strikefactor.ui.abs_challenge_overlay import ABSChallengeOverlay
 from strikefactor.ui.broadcast_hud import BroadcastHUD
 
@@ -56,7 +57,7 @@ class AssetManager:
         counter = 1
         storage = []
         while counter <= number:
-            storage.append(pygame.image.load(resource_path(f'{name}{counter}.png')).convert_alpha())
+            storage.append(pygame.image.load(f'{name}{counter}.png').convert_alpha())
             counter += 1
         return storage
         
@@ -67,18 +68,26 @@ class AssetManager:
         storage = []
         name = get_path(name)
         while counter <= number:
-            image = pygame.image.load(resource_path(f'{name}{counter}.png')).convert_alpha()
+            image = pygame.image.load(f'{name}{counter}.png').convert_alpha()
             storage.append(pygame.transform.scale_by(image, 118 / image.get_height()))
             counter += 1
         return storage
         
+    @staticmethod
+    def ball_frame_files(ball_dir) -> list:
+        """The spin animation's frames, in playback order.
+
+        Sorted, because `os.listdir` order is arbitrary (on APFS it is a hash
+        order) and the ball's spin played its 160 frames scrambled. PNGs only,
+        so a stray `.DS_Store` can't reach `pygame.image.load`.
+        """
+        return sorted(f for f in os.listdir(ball_dir) if f.lower().endswith('.png'))
+
     def _load_ball_sprites(self) -> list:
         """Load ball animation sprites."""
-        out = []
         ball_dir = get_path('assets/images/ball')
-        for filename in os.listdir(ball_dir):
-            out.append(pygame.image.load(f'{ball_dir}/{filename}').convert_alpha())
-        return out
+        return [pygame.image.load(os.path.join(ball_dir, filename)).convert_alpha()
+                for filename in self.ball_frame_files(ball_dir)]
         
     def create_ball_renderer(self):
         """Create a ball rendering function."""
@@ -168,6 +177,17 @@ class PitcherManager:
         """Get the current active pitcher."""
         return self.current_pitcher
 
+    @staticmethod
+    def _ai_file(name):
+        """The AI to load: the player's own, else the seed the package ships.
+
+        Training is saved to the player's data directory (`save_all_ai`), so
+        the seed in the package is only read — until the first save, and on a
+        fresh install, it is the starting point.
+        """
+        trained = paths.ai_path(name)
+        return trained if os.path.exists(trained) else get_path(f"ai/{name}_ai.pkl")
+
     def _load_ai(self, name, pitcher):
         """Load a pitcher's AI from disk, or create a fresh one if unavailable.
 
@@ -175,7 +195,7 @@ class PitcherManager:
         ('AI_2', 'ai.AI_2') still load — see strikefactor/ai/compat.py.
         """
         pitcher_pitch_names = set(pitcher.get_pitch_names())
-        ai_file = get_path(f"ai/{name}_ai.pkl")
+        ai_file = self._ai_file(name)
 
         if not os.path.exists(ai_file):
             print(f"No saved AI for {name}, creating fresh AI")
@@ -202,15 +222,22 @@ class PitcherManager:
         return ERAI(pitcher.get_pitch_names())
 
     def save_all_ai(self):
-        """Save all pitcher AIs to disk."""
+        """Save all pitcher AIs to the player's data directory.
+
+        Written to a temporary file and swapped in, so a crash mid-save
+        leaves the previous training rather than a truncated pickle.
+        """
         for name, pitcher in self.pitchers.items():
             ai = pitcher.get_ai()
             if ai is None:
                 continue
-            ai_file = get_path(f"ai/{name}_ai.pkl")
+            ai_file = paths.ai_path(name)
             try:
-                with open(ai_file, "wb") as f:
+                os.makedirs(os.path.dirname(ai_file), exist_ok=True)
+                tmp_file = ai_file + ".tmp"
+                with open(tmp_file, "wb") as f:
                     pickle.dump(ai, f)
+                os.replace(tmp_file, ai_file)
                 print(f"Saved AI for {name} ({len(ai.q)} Q-values)")
             except Exception as e:
                 print(f"Failed to save AI for {name}: {e}")
@@ -268,6 +295,10 @@ class Game:
         self._setup_display()
         self._initialize_components()
         self._setup_ui_callbacks()
+        # The window opens windowed; a saved fullscreen preference is applied
+        # once settings exist (F11 saves it back — see `toggle_fullscreen`).
+        if self.settings_manager.get_display_mode() == "fullscreen":
+            self.toggle_fullscreen()
         # Pull pandas + scikit-learn in on a daemon thread while the player is
         # still in the menus. Left alone these load during the first pitch —
         # sklearn on the frame the ball reaches the plate — and freeze the
@@ -290,6 +321,9 @@ class Game:
         self.screen = pygame.Surface((SCREEN_WIDTH, SCREEN_HEIGHT))
         self.fullscreen = False
         self._update_scaling()
+        # Panels that read the pointer directly (hover, wheel scrolling) get
+        # it in the internal frame too — see ui/pointer.py.
+        pointer.install(self._window_to_internal)
         self.clock = pygame.time.Clock()
         icon = pygame.image.load(get_path("assets/images/icon.png")).convert_alpha()
         pygame.display.set_icon(icon)
@@ -308,8 +342,7 @@ class Game:
 
     def get_mouse_pos(self):
         """Get mouse position translated to internal surface coordinates."""
-        wx, wy = pygame.mouse.get_pos()
-        return self._window_to_internal(wx, wy)
+        return pointer.pos()
 
     def _window_to_internal(self, wx, wy):
         """Convert window coordinates to internal 1280x720 coordinates."""
@@ -339,13 +372,15 @@ class Game:
         pygame.display.flip()
 
     def toggle_fullscreen(self):
-        """Toggle between fullscreen and windowed mode."""
+        """Toggle between fullscreen and windowed mode, and remember it."""
         self.fullscreen = not self.fullscreen
         if self.fullscreen:
             self.window = pygame.display.set_mode((0, 0), pygame.FULLSCREEN | pygame.RESIZABLE)
         else:
             self.window = pygame.display.set_mode((self.internal_width, self.internal_height), pygame.RESIZABLE)
         self._update_scaling()
+        self.settings_manager.set_setting(
+            "display_mode", "fullscreen" if self.fullscreen else "windowed")
         
     def _initialize_components(self):
         """Initialize all game components."""
@@ -365,6 +400,15 @@ class Game:
         self.scoreKeeper = ScoreKeeper()
         self.batter_profile = BatterProfile()
 
+        # Which mode's session is open: 'arcade', 'sandbox' or 'gameday', and
+        # None between sessions. Set by `_begin_session` and cleared by
+        # `_teardown_active_session`. It is what names the (mode, difficulty)
+        # bucket the batter profile and the pitch rows belong to, so it is
+        # stated here rather than inferred from `menu_state` — which is
+        # 'sandbox_menu' while a Sandbox session is being set up and
+        # 'visualise' while the T view is open.
+        self.game_mode = None
+
         # GameDay mode management
         self.gameday_manager = None
         self.in_gameday_mode = False
@@ -377,10 +421,6 @@ class Game:
         self.challenge_manager = ChallengeManager()
         self.abs_overlay = ABSChallengeOverlay(self)
         self.pending_challenge = None
-        # Per-pitch ABS verdict flags consumed by PitchSimulation.cleanup
-        # to populate pitches.abs_challenged / abs_overturned.
-        self._last_pitch_abs_challenged = False
-        self._last_pitch_abs_overturned = False
 
         # Review history owns pitch identity. `last_swing` / `last_fielding_play`
         # remain compatibility aliases; V/R/F enter Review, while T is the
@@ -401,6 +441,10 @@ class Game:
         # Playback honours master_volume; SoundManager is built before
         # settings exist, so the reference is attached here.
         self.sound_manager.set_settings_manager(self.settings_manager)
+        # The saved batter and strike-zone display. Both components are built
+        # before settings exist, so their saved state is applied here.
+        self.batter.set_handedness(self.settings_manager.get_batter_handedness())
+        self._apply_strikezone_setting()
 
         # Key binding system
         from strikefactor.key_binding_manager import KeyBindingManager
@@ -415,12 +459,6 @@ class Game:
         self.ui_manager.set_key_binding_manager(self.key_binding_manager)
         # Settings reference is needed for HUD-mode-aware button visibility.
         self.ui_manager.set_settings_manager(self.settings_manager)
-
-        # Sync PitchViz animation timing with display FPS setting
-        self.ui_manager.update_view_window_fps(self.settings_manager.get_display_fps())
-
-        # Set callback for PitchViz window close button
-        self.ui_manager.view_window.set_close_callback(self.exit_view_pitches)
 
         # Three HUDs: Legacy (full bottom bar), Broadcast (4 corners), Minimal (corner widget).
         self.scorebug = Scorebug(self)
@@ -440,8 +478,7 @@ class Game:
         self.blitfunc = self.asset_manager.create_ball_renderer()
         self.fourseamballsize = 11
 
-        # Load settings and initialize state variables
-        self.umpsound = self.settings_manager.get_setting("umpire_sound")
+        # Initialize state variables
         self.swing_started = 0
         self.speed = 3
         self.menu_state = 0
@@ -451,9 +488,7 @@ class Game:
         self.state_manager.change_state('mode_select')
         self.current_gamemode = 0
         self.inning_ended = False
-        self.pitches_display = []
         self.pitch_trajectories = []
-        self.enhanced_pitch_records = []  # Enhanced pitch data for visualization
         self.last_pitch_information = []
 
     def _setup_ui_callbacks(self):
@@ -502,20 +537,18 @@ class Game:
         self.ui_manager.register_button_callback('main_menu', lambda: self.set_menu_state(0))
         self.ui_manager.register_button_callback('back_to_main_menu', lambda: self.set_menu_state(0))
         self.ui_manager.register_button_callback('gameday_main_menu', lambda: self.set_menu_state(0))
-        self.ui_manager.register_button_callback('visualise', self.toggle_track)
         self.ui_manager.register_button_callback('view_pitches', self.toggle_view_pitches)
         self.ui_manager.register_button_callback('continue_to_summary', lambda: self.continue_to_summary())
         
         # Game control callbacks
         self.ui_manager.register_button_callback('strikezone', lambda: self.field_renderer.toggle_strikezone_mode())
         self.ui_manager.register_button_callback('toggle_ump_sound', lambda: self.toggle_ump_sound())
-        self.ui_manager.register_button_callback('toggle_batter', lambda: self.batter.toggle_handedness())
+        self.ui_manager.register_button_callback('toggle_batter', self.toggle_batter_handedness)
         self.ui_manager.register_button_callback('scout', lambda: self.toggle_scouting_report())
 
         # Lap feature callbacks
         self.ui_manager.register_button_callback('lap_stats', lambda: self.create_lap())
         self.ui_manager.register_button_callback('view_laps', lambda: self.toggle_lap_log())
-        self.ui_manager.register_button_callback('fielding_replay', self.request_fielding_replay)
 
         # Settings + key-binding screens. Only the footer nav is a widget —
         # the difficulty chips and the setting/binding rows are drawn and
@@ -664,6 +697,16 @@ class Game:
         return self.game_stats.outcome_value
 
     @property
+    def umpsound(self):
+        """Whether the umpire calls are voiced — the saved setting itself.
+
+        It used to be a copy taken at startup that the in-game sound button
+        flipped on its own, so the button and the Settings row disagreed and
+        the button's choice was lost on the next launch.
+        """
+        return bool(self.settings_manager.get_setting("umpire_sound"))
+
+    @property
     def pitch_history(self):
         return self.game_stats.pitch_history
 
@@ -677,13 +720,11 @@ class Game:
         self.pitcher_manager.set_current_pitcher(pitcher_name)
         self.game_stats.reset_game_stats()
         self._reset_review()
-        self._load_batter_profile_for_current_bucket()
+        self._begin_session("arcade")
         self.challenge_manager.set_unlimited(False)
         self.challenge_manager.reset_all()
         self.inning_ended = False
-        self.pitches_display = []
         self.pitch_trajectories = []
-        self.enhanced_pitch_records = []
         self.scorebug.last_pitch_type = ""  # Reset last pitch display
         crosshair = create_pci_cursor()
         pygame.mouse.set_cursor(crosshair)
@@ -723,7 +764,7 @@ class Game:
         # Set up the game state with the scenario
         self.game_stats.reset_game_stats()
         self._reset_review()
-        self._load_batter_profile_for_current_bucket()
+        self._begin_session("arcade")
         self.challenge_manager.set_unlimited(False)
         self.challenge_manager.reset_all()
         self.game_stats.currentballs = scenario['balls']
@@ -743,7 +784,6 @@ class Game:
         # Set menu state and initialize
         self.menu_state = f"Random: {pitcher_name.title()}"
         self.inning_ended = False
-        self.pitches_display = []
         self.scorebug.last_pitch_type = ""  # Reset last pitch display
 
         # Reset cursor (like in enter_gamemode)
@@ -763,16 +803,21 @@ class Game:
     def _current_bucket_key(self):
         """Return the (game_mode, difficulty) tuple matching the current
         session, used for both batting_stats.json and the SQLite per-bucket
-        batter profile.
+        batter profile. Outside a session (the settings screen changing the
+        difficulty) it names the Arcade bucket, as it always has.
         """
-        if self.in_gameday_mode:
-            mode = "gameday"
-        elif self.menu_state == "sandbox_gameplay":
-            mode = "sandbox"
-        else:
-            mode = "arcade"
         difficulty = self.settings_manager.get_difficulty().value
-        return mode, difficulty
+        return self.game_mode or "arcade", difficulty
+
+    def _begin_session(self, mode):
+        """Open a session of `mode` and load that mode's batter profile.
+
+        The mode is set *before* the load, which is the whole point of doing
+        both here: the bucket the profile comes from and the bucket it is
+        saved back to are then the same one by construction.
+        """
+        self.game_mode = mode
+        self._load_batter_profile_for_current_bucket()
 
     def _db_start_game(self, game_mode, pitcher_name=None):
         """Open a games row in the pitch DB so all subsequent pitches share a game_id."""
@@ -879,7 +924,7 @@ class Game:
         # Fresh per-game state.
         self.game_stats.reset_game_stats()
         self._reset_review()
-        self._load_batter_profile_for_current_bucket()
+        self._begin_session("gameday")
         self.scoreKeeper.reset()
         self.challenge_manager.set_unlimited(False)
         self.challenge_manager.reset_all()
@@ -928,10 +973,11 @@ class Game:
         # Fresh per-game side state (the manager itself carries score/innings).
         self.game_stats.reset_game_stats()
         self._reset_review()
-        self._load_batter_profile_for_current_bucket()
+        self._begin_session("gameday")
         self.scoreKeeper.reset()
         self.challenge_manager.set_unlimited(False)
-        self.challenge_manager.reset_all()
+        self.challenge_manager.restore_remaining(
+            record.get('challenges_remaining'))
         self.inning_ended = False
 
         # Continue logging into the same DB game row this session opened, so a
@@ -960,10 +1006,23 @@ class Game:
             from strikefactor.data.pitch_database import PitchDatabaseService
             record = gameday_sessions.build_record(
                 self.gameday_manager, phase,
-                db_game_id=PitchDatabaseService.get_instance().current_game_id)
+                db_game_id=PitchDatabaseService.get_instance().current_game_id,
+                challenges_remaining=self.challenge_manager.remaining_by_side())
             gameday_sessions.upsert_session(record)
         except Exception as e:
             print(f"[gameday] autosave_gameday_session failed: {e}")
+
+    def _persist_gameday_challenges(self):
+        """Save challenge usage even when the current half is not resumable."""
+        if not (self.in_gameday_mode and self.gameday_manager is not None):
+            return
+        try:
+            from strikefactor.data import gameday_sessions
+            gameday_sessions.update_challenges_remaining(
+                self.gameday_manager.session_uuid,
+                self.challenge_manager.remaining_by_side())
+        except Exception as e:
+            print(f"[gameday] challenge balance save failed: {e}")
 
     def clear_gameday_session(self, session_id: str):
         """Remove a saved in-progress session (on completion or abandonment)."""
@@ -1008,7 +1067,7 @@ class Game:
         # Reset game stats for fresh start
         self.game_stats.reset_game_stats()
         self._reset_review()
-        self._load_batter_profile_for_current_bucket()
+        self._begin_session("sandbox")
         self.scoreKeeper.reset()
         self.challenge_manager.reset_all()
         # Sandbox is for exploration — challenges are unlimited there.
@@ -1016,8 +1075,6 @@ class Game:
 
         # Clear pitch data
         self.pitch_trajectories = []
-        self.enhanced_pitch_records = []
-        self.pitches_display = []
 
         # Set cursor
         crosshair = create_pci_cursor()
@@ -1052,8 +1109,11 @@ class Game:
         the AI/profile or close the DB game.
         """
         self.pitcher_manager.save_all_ai()
-        self._save_batter_profile_for_current_bucket()
+        if self.game_mode is not None:
+            self._save_batter_profile_for_current_bucket()
         self._db_end_game_if_open()
+        # After the save, which has to name this session's bucket.
+        self.game_mode = None
         self.current_gamemode = 0
         self.inning_ended = False
         self.in_gameday_mode = False
@@ -1098,11 +1158,6 @@ class Game:
             self._teardown_active_session()
         self.state_manager.handle_menu_state_change(state)
 
-    def exit_view_pitches(self):
-        """Compatibility entry point; review never leaves the underlying state."""
-        self.review_overlay.dismiss()
-        self.ui_manager.hide_view_window()
-
     def toggle_view_pitches(self):
         self.request_review(view='zone')
 
@@ -1133,8 +1188,24 @@ class Game:
             self.state_manager.change_state('gameplay')
 
     def toggle_ump_sound(self):
-        """Toggle umpire sound effects."""
-        self.umpsound = not self.umpsound
+        """Toggle umpire sound effects (the in-game sound button)."""
+        self.toggle_umpire_sound_setting()
+
+    def toggle_batter_handedness(self):
+        """Switch the batter's side of the plate and remember it."""
+        self.batter.toggle_handedness()
+        self.settings_manager.set_setting("batter_handedness",
+                                          self.batter.get_handedness())
+
+    def _apply_strikezone_setting(self):
+        """Show the strike-zone outline, or hide it, per the saved setting.
+
+        The setting chooses how the zone starts; the Z key still cycles the
+        full outline / grid / heatmap sequence within a session.
+        """
+        shown = bool(self.settings_manager.get_setting("show_strikezone"))
+        self.field_renderer.strikezonedrawn = (
+            FieldRenderer.ZONE_OUTLINE if shown else FieldRenderer.ZONE_HIDDEN)
 
     def enter_settings_menu(self):
         """Enter the settings menu."""
@@ -1160,13 +1231,12 @@ class Game:
         """Toggle umpire sound setting."""
         current = self.settings_manager.get_setting("umpire_sound")
         self.settings_manager.set_setting("umpire_sound", not current)
-        # Also update the legacy umpsound variable
-        self.umpsound = self.settings_manager.get_setting("umpire_sound")
 
     def toggle_strikezone_setting(self):
-        """Toggle strikezone display setting."""
+        """Toggle strikezone display setting, and show the change at once."""
         current = self.settings_manager.get_setting("show_strikezone")
         self.settings_manager.set_setting("show_strikezone", not current)
+        self._apply_strikezone_setting()
 
     def toggle_abs_setting(self):
         """Toggle MLB-style ABS ball/strike challenge system on or off."""
@@ -1210,7 +1280,6 @@ class Game:
         visibility_map = {
             'gameplay': 'in_game',
             'sandbox_gameplay': 'sandbox_gameplay',
-            'view_pitches': 'view_pitches',
             'visualization': 'visualise',
             'inning_end': 'inning_end',
         }
@@ -1220,8 +1289,10 @@ class Game:
     def reset_settings(self):
         """Reset all settings to defaults."""
         self.settings_manager.reset_to_defaults()
-        # Update legacy variables
-        self.umpsound = self.settings_manager.get_setting("umpire_sound")
+        self.batter.set_handedness(self.settings_manager.get_batter_handedness())
+        self._apply_strikezone_setting()
+        if self.fullscreen != (self.settings_manager.get_display_mode() == "fullscreen"):
+            self.toggle_fullscreen()
 
     def cycle_defense_strength(self):
         """Cycle sandlot -> minors -> league -> gold glove -> sandlot.
@@ -1235,8 +1306,6 @@ class Game:
     def cycle_display_fps(self):
         """Cycle through display FPS options."""
         self.settings_manager.cycle_display_fps()
-        # Update PitchViz animation timing to match new display FPS
-        self.ui_manager.update_view_window_fps(self.settings_manager.get_display_fps())
 
     def cycle_engine_fps(self):
         """Cycle through engine FPS options."""
@@ -1250,7 +1319,7 @@ class Game:
         self.key_binding_manager.register_callback(KeyAction.TOGGLE_UI, self.toggle_ui_visibility)
         self.key_binding_manager.register_callback(KeyAction.TOGGLE_STRIKEZONE, lambda: self.field_renderer.toggle_strikezone_mode())
         self.key_binding_manager.register_callback(KeyAction.TOGGLE_SOUND, self.toggle_umpire_sound_setting)
-        self.key_binding_manager.register_callback(KeyAction.TOGGLE_BATTER, lambda: self.batter.toggle_handedness())
+        self.key_binding_manager.register_callback(KeyAction.TOGGLE_BATTER, self.toggle_batter_handedness)
         self.key_binding_manager.register_callback(KeyAction.QUICK_PITCH, self.quick_pitch)
         self.key_binding_manager.register_callback(KeyAction.VIEW_PITCHES, self.toggle_view_pitches)
         self.key_binding_manager.register_callback(KeyAction.MAIN_MENU, self.exit_to_menu)
@@ -1317,8 +1386,6 @@ class Game:
                             current_state = 'main_menu'
                 elif self.state_manager.current_state.__class__.__name__ == 'SummaryState':
                     current_state = 'summary'
-                elif self.state_manager.current_state.__class__.__name__ == 'ViewPitchesState':
-                    current_state = 'view_pitches'
                 elif self.state_manager.current_state.__class__.__name__ == 'VisualizationState':
                     current_state = 'visualise'
                 elif self.state_manager.current_state.__class__.__name__ == 'InningEndState':
@@ -1404,7 +1471,6 @@ class Game:
                 'opponent_inning_scores': list(self.gameday_manager.opponent_inning_scores),
             }
         snap['field_renderer'] = {
-            'total_pitches': getattr(self.field_renderer, 'total_pitches', 0),
             'total_at_bats': getattr(self.field_renderer, 'total_at_bats', 0),
             'total_walks': getattr(self.field_renderer, 'total_walks', 0),
             'hit_records_len': len(getattr(self.field_renderer, 'hit_records', [])),
@@ -1412,28 +1478,34 @@ class Game:
         return snap
 
     def restore_for_abs(self, snap):
-        """Roll the game back to the snapshot and cancel any scheduled side effects."""
+        """Roll the game back to the snapshot and cancel any scheduled side effects.
+
+        Only what the *call* decided is rolled back. The snapshot is taken at
+        the call, but a challenge can only be made after the pitch has
+        finished — so `PitchSimulation.cleanup` has already run, and what it
+        recorded about the pitch itself (that it was thrown, what type it was,
+        the history the AI sequences from) is true whichever way the call
+        goes. `last_pitch_type_thrown`, `pitch_history`, `current_pitches`,
+        `current_state` and the heatmap's `total_pitches` used to be restored
+        here too, which erased the pitch from the history and the pitch count
+        and put the AI's state back to before it was thrown. `current_state`
+        does depend on the count; `_reverse_last_call` recomputes it once the
+        corrected call is applied.
+        """
         import copy
         src = snap['game_stats']
         for attr in ('strikes', 'balls', 'currentballs', 'currentstrikes',
                      'currentouts', 'currentstrikeouts', 'currentwalks',
                      'homeruns_allowed', 'hits', 'pitchnumber',
-                     'last_pitch_type_thrown', 'first_pitch_thrown',
-                     'pitch_chosen', 'current_state', 'current_pitches'):
+                     'first_pitch_thrown', 'pitch_chosen'):
             if hasattr(src, attr):
                 setattr(self.game_stats, attr, getattr(src, attr))
-        if hasattr(src, 'pitch_history'):
-            self.game_stats.pitch_history = list(src.pitch_history)
 
-        # Re-clone the saved ScoreKeeper as a single object so that the
-        # references between `runners` and `basesfilled` stay intact —
-        # walk_event() mutates Runner objects via basesfilled and expects them
-        # to be the same instances stored in `runners`.
-        sk_clone = copy.deepcopy(snap['scoreKeeper'])
-        self.scoreKeeper.bases = sk_clone.bases
-        self.scoreKeeper.runners = sk_clone.runners
-        self.scoreKeeper.basesfilled = sk_clone.basesfilled
-        self.scoreKeeper.score = sk_clone.score
+        # The whole ScoreKeeper, cloned as a single object so the same
+        # Runner stays the same instance everywhere it is held. That includes
+        # the scorer's reconstruction: a walk the review takes away must take
+        # its earned runs with it.
+        self.scoreKeeper.restore_from(snap['scoreKeeper'])
 
         self.inning_ended = snap['inning_ended']
         self.last_pitch_information = list(snap['last_pitch_information'])
@@ -1461,8 +1533,6 @@ class Game:
             self.gameday_manager.opponent_inning_scores = list(gd['opponent_inning_scores'])
 
         fr = snap['field_renderer']
-        if hasattr(self.field_renderer, 'total_pitches'):
-            self.field_renderer.total_pitches = fr['total_pitches']
         if hasattr(self.field_renderer, 'total_at_bats'):
             self.field_renderer.total_at_bats = fr['total_at_bats']
         if hasattr(self.field_renderer, 'total_walks'):
@@ -1494,13 +1564,15 @@ class Game:
             self.currentwalks += 1
             self.field_renderer.record_walk()
             score_before = self.scoreKeeper.get_score() if self.in_gameday_mode else 0
-            self.scoreKeeper.update_walk_event()
+            self.scoreKeeper.update_walk_event(outs=self.currentouts)
             runs_scored = self.scoreKeeper.get_score() - score_before
             self._display_pitch_results("WALK", pitchtype, speed_mph)
             self.ui_manager.schedule_banner("WALK", delay=450)
             if self.in_gameday_mode and self.gameday_manager is not None:
                 self.gameday_manager.record_player_at_bat(
-                    'WALK', runs_scored=runs_scored, pitches_thrown=self.pitchnumber
+                    'WALK', runs_scored=runs_scored, pitches_thrown=self.pitchnumber,
+                    play=self.scoreKeeper.last_play,
+                    charges=self.scoreKeeper.take_charges(),
                 )
                 self._abs_check_walkoff()
             self.currentstrikes = 0
@@ -1600,10 +1672,6 @@ class Game:
     def clear_pending_challenge(self):
         """Called when the next pitch starts (window closes)."""
         self.pending_challenge = None
-        # Reset per-pitch ABS challenge result flags so cleanup of pitch N+1
-        # doesn't inherit pitch N's verdict.
-        self._last_pitch_abs_challenged = False
-        self._last_pitch_abs_overturned = False
 
     def request_abs_challenge(self):
         """Triggered by the CHALLENGE key. Runs the overlay synchronously."""
@@ -1621,17 +1689,11 @@ class Game:
         pre_s = snap_stats.currentstrikes
         truth_call = "strike" if pc['truth_strike'] else "ball"
         overturned = (truth_call != pc['original_call'])
-        if overturned:
-            new_balls = pre_b + (0 if pc['truth_strike'] else 1)
-            new_strikes = pre_s + (1 if pc['truth_strike'] else 0)
-            if new_strikes >= 3:
-                post_count = "K"  # strikeout
-            elif new_balls >= 4:
-                post_count = "BB"  # walk
-            else:
-                post_count = f"{new_balls}-{new_strikes}"
-        else:
-            post_count = f"{self.currentballs}-{self.currentstrikes}"
+        # Whichever way the review goes, the call that stands is the true one,
+        # applied to the count the pitch was thrown on. An upheld call used to
+        # read the live count instead — which an upheld strike three or ball
+        # four had already reset, so CALL CONFIRMED showed "0-0".
+        post_count = self._count_after_call_label(truth_call, pre_b, pre_s)
 
         self.abs_overlay.trigger(
             ball_xy=pc['ball_xy'],
@@ -1647,16 +1709,41 @@ class Game:
 
         # Consume challenge (retain on success).
         self.challenge_manager.consume(side, successful=overturned)
+        if not overturned and getattr(self, 'in_gameday_mode', False):
+            self._persist_gameday_challenges()
 
-        if overturned:
-            self._reverse_last_call()
-
-        # Stash for the active pitch's DB record. Read from
-        # PitchSimulation.cleanup via self.game._last_pitch_abs_*.
-        self._last_pitch_abs_challenged = True
-        self._last_pitch_abs_overturned = bool(overturned)
+        final_outcome = self._reverse_last_call() if overturned else None
+        self._record_abs_challenge(pc, overturned, final_outcome)
 
         self.pending_challenge = None
+
+    def _record_abs_challenge(self, pc, overturned, final_outcome):
+        """Put the verdict on the challenged pitch's DB row.
+
+        The row was written before the challenge could be made (see
+        `PitchSimulation.cleanup`), which handed its id to `pc`. On an
+        overturn the row takes the call as it now stands, and the runs that
+        call scored or unscored — a bases-loaded walk given or taken away —
+        with the earned runs beside them.
+        """
+        pitch_id = pc.get('pitch_id')
+        if pitch_id is None:
+            return
+        runs = earned = None
+        if overturned and final_outcome is not None:
+            before = pc['snapshot']['scoreKeeper']
+            runs = max(0, self.scoreKeeper.get_score() - before.get_score())
+            earned = max(0, self.scoreKeeper.get_earned_runs()
+                         - before.get_earned_runs())
+        from strikefactor.data.pitch_database import PitchDatabaseService
+        PitchDatabaseService.get_instance().amend_abs_challenge(
+            pitch_id,
+            overturned=overturned,
+            outcome=final_outcome,
+            is_strike=bool(pc['truth_strike']),
+            runs_scored_on_pitch=runs,
+            earned_runs_on_pitch=earned,
+        )
 
     def _run_abs_overlay_loop(self):
         """Synchronous render loop for the overlay. Mirrors PitchSimulation.run.
@@ -1723,17 +1810,71 @@ class Game:
     def request_fielding_replay(self, *, simulation=None):
         self.request_review(view='fielding', simulation=simulation)
 
+    def build_ai_state(self):
+        """The pitch-selection AI's view of the game as it stands now.
+
+        One definition, because two things build it: `PitchSimulation.cleanup`
+        from the count a pitch left behind, and an ABS overturn from the count
+        the corrected call leaves.
+        """
+        from strikefactor.ai.AI_2 import build_state
+        return build_state(
+            outs=self.currentouts,
+            strikes=self.currentstrikes,
+            balls=self.currentballs,
+            runners=self.scoreKeeper.get_runners_on_base(),
+            pitch_number_in_ab=self.pitchnumber,
+            prev_pitch=self.last_pitch_type_thrown,
+            handedness=self.batter.get_handedness(),
+            score_diff=self.scoreKeeper.get_score(),
+        )
+
+    @staticmethod
+    def _outcome_after_call(call, balls_before, strikes_before):
+        """What a 'ball' or 'strike' call makes of this count, in the pitch
+        record's vocabulary: 'walk' / 'ball' / 'strikeout' / 'strike'."""
+        if call == "ball":
+            return outcomes.WALK if balls_before >= 3 else "ball"
+        return outcomes.STRIKEOUT if strikes_before >= 2 else "strike"
+
+    @classmethod
+    def _count_after_call_label(cls, call, balls_before, strikes_before):
+        """The ABS banner's count after `call`: 'K', 'BB' or 'B-S'.
+
+        Off `_outcome_after_call`, so the banner and the pitch's recorded
+        outcome come from one rule.
+        """
+        result = cls._outcome_after_call(call, balls_before, strikes_before)
+        if result == outcomes.STRIKEOUT:
+            return "K"
+        if result == outcomes.WALK:
+            return "BB"
+        if call == "ball":
+            return f"{balls_before + 1}-{strikes_before}"
+        return f"{balls_before}-{strikes_before + 1}"
+
     def _reverse_last_call(self):
         """Reverse the umpire's call after a successful challenge.
         Restores the pre-commit snapshot, then re-dispatches the opposite call
-        silently (no umpire SFX, per ABS UX)."""
+        silently (no umpire SFX, per ABS UX).
+
+        Returns the pitch's outcome as the corrected call leaves it, or None
+        if there was nothing to reverse. That one value is what the review
+        store and the pitch's DB row are both revised to."""
         pc = self.pending_challenge
         if not pc or 'snapshot' not in pc:
-            return
+            return None
 
         new_call = "strike" if pc['truth_strike'] else "ball"
         if new_call == pc['original_call']:
-            return
+            return None
+
+        # The count the call was made on — the snapshot is taken just before
+        # the umpire's call commits, so this is exactly the count restored
+        # and then re-called below.
+        stats = pc['snapshot']['game_stats']
+        final_outcome = self._outcome_after_call(
+            new_call, stats.currentballs, stats.currentstrikes)
 
         # Roll the world back to just before the umpire's call.
         self.restore_for_abs(pc['snapshot'])
@@ -1749,14 +1890,15 @@ class Game:
                 pc['pitchtype'], pc['speed_mph'], with_sound=False, was_swung=False
             )
 
+        # The pitch finished (and built the AI's next state) on the umpire's
+        # count; the next pitch has to be chosen from the corrected one.
+        self.current_state = self.build_ai_state()
+
         # Review keeps the pitch identity through an ABS metadata revision.
         store = getattr(self, 'review_store', None)
         record = store.get(pc.get('review_id')) if store is not None else None
         if record is not None:
-            balls, strikes, _ = record.count
-            result = ('WALK' if balls == 3 else 'BALL') if new_call == 'ball' else (
-                'STRIKEOUT' if strikes == 2 else 'STRIKE')
-            store.revise_outcome(record.review_id, result)
+            store.revise_outcome(record.review_id, final_outcome.upper())
 
         # Recolor the on-field trail dot to match the new call.
         if self.last_pitch_information:
@@ -1765,6 +1907,8 @@ class Game:
             for entry in self.last_pitch_information:
                 if entry[0] == last[0] and entry[1] == last[1]:
                     entry[3] = new_color
+
+        return final_outcome
 
     def check_inning_end(self):
         """Check if the inning should end."""
@@ -1826,7 +1970,7 @@ class Game:
                         break
 
                 # Handle key binding events (only in gameplay-related states)
-                _hotkey_states = {'gameplay', 'sandbox_gameplay', 'view_pitches',
+                _hotkey_states = {'gameplay', 'sandbox_gameplay',
                                   'visualization', 'inning_end'}
                 if event.type == pygame.KEYDOWN:
                     # Check if we're waiting for a key rebind
@@ -1889,8 +2033,25 @@ class Game:
             print("Saving final batting statistics...")
             self.field_renderer.save_data()
 
+        # What leaving a session through the menus does, done for closing the
+        # window mid-session too: without it the profile lost everything since
+        # its last 10-pitch save and the `games` row was never closed. A GameDay
+        # game closed here can still be resumed — `resume_game` reopens the row.
+        if getattr(self, 'game_mode', None) is not None:
+            self._save_batter_profile_for_current_bucket()
+        self._db_end_game_if_open()
+
 def main():
     """Main entry point."""
+    # Carry player data over from the old in-package layout the first time the
+    # game starts with a data directory. Before Game(), which loads it.
+    from strikefactor.data import legacy_layout
+    copied = legacy_layout.migrate()
+    if copied:
+        print(f"Copied {len(copied)} item(s) of saved data from the old "
+              f"in-package location into {paths.data_dir()} "
+              f"(the originals are left in place).")
+    print(f"Player data: {paths.data_dir()}")
     game = Game()
     game.run()
     pygame.quit()

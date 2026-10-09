@@ -161,7 +161,8 @@ class HitOutcomeManager:
         """
         return MOMENTUM_EV_MPH_PER_UNIT * self.momentum_bonus
 
-    def _resolve_outcome(self, launch_deg, ev_mph, spray_deg, handedness):
+    def _resolve_outcome(self, launch_deg, ev_mph, spray_deg, handedness,
+                         outs=0):
         """Classify the batted ball and ask the fence about it.
 
         Two things happen here and neither is a roll. The shape is the band the
@@ -184,11 +185,11 @@ class HitOutcomeManager:
         field_rad = spray.field_angle_rad(spray_deg, spray.spin_for(handedness))
         if park.fence_verdict(launch_deg, ev_mph, field_rad) == park.OUT_OF_PARK:
             self.hit_type = 4
-            self.update_runners_and_score()
+            self.update_runners_and_score(outs)
             return "HOME RUN"
         return "IN_PLAY"
 
-    def hit_outcome(self, contact, launch_deg, ev_mph, handedness="R"):
+    def hit_outcome(self, contact, launch_deg, ev_mph, handedness="R", outs=0):
         """Coarse outcome at contact. Returns one of:
             "HOME RUN" — predetermined; runners advance now.
             "IN_PLAY"  — ball is live. The HitAnimation classifies the
@@ -204,6 +205,10 @@ class HitOutcomeManager:
         every other once-drawn quantity in this pipeline is: drawing twice
         gives one ball two flights.
 
+        `outs` is how many are out, for the scorer: a home run after the third
+        out the defense should have had scores unearned runs
+        (`ScoreKeeper.update_hit_event`).
+
         It replaced `get_contact_hit_outcome` / `get_power_hit_outcome`, whose
         only difference was a `swing_type` that fed the home-run roll's power
         bonus. With the fence deciding home runs there is nothing left for the
@@ -217,24 +222,33 @@ class HitOutcomeManager:
         self.last_quality = quality
         self.last_vertical_offset = vertical_offset
         return self._resolve_outcome(launch_deg, ev_mph, contact.spray_deg,
-                                     handedness)
+                                     handedness, outs)
 
-    def apply_classified_outcome(self, outcome_str, suppress_out_advancement=False,
-                                 bases=1):
+    def apply_classified_outcome(self, outcome_str, outs=0, bases=1,
+                                 clean_outcome=None):
         """Called by pitch_simulation once the animation has classified an
         IN_PLAY contact into its final outcome. Runner movement is based on
         the resolved outcome so productive outs can advance runners.
 
+        `outs` is how many were out before the play; the third out advances
+        nobody.
+
         `bases` is how far the batter got on a REACHED ON ERROR — a drop in
         shallow left is a one-base error and one at the wall is a two-base
-        error. It is ignored for every other outcome, which carries its own
-        advance in its name.
+        error — and `clean_outcome` is the out that play would have been. Both
+        are ignored for every other outcome, which carries its own advance in
+        its name.
+
+        Returns the scorer's `Play` for it: runs, runs batted in, and whether
+        it was a sacrifice fly.
         """
         self.score_keeper.update_hit_event(
             outcome_str,
-            suppress_out_advancement=suppress_out_advancement,
             bases=bases,
+            outs=outs,
+            clean_outcome=clean_outcome,
         )
+        return self.score_keeper.last_play
     
     def resolve_swing(self, swing, trajectory, swing_start_s, swing_type=1):
         """Sweep the bat against the ball. Returns a `bat_contact.Contact` or None.
@@ -338,9 +352,9 @@ class HitOutcomeManager:
         """
         return contact.quality, contact.vertical_offset_ft / FT_PER_PX_Z
 
-    def update_runners_and_score(self):
+    def update_runners_and_score(self, outs=0):
         self.ishomerun = ''
-        scored = self.score_keeper.update_hit_event("HOME RUN")[1]
+        scored = self.score_keeper.update_hit_event("HOME RUN", outs=outs)[1]
         
         if self.hit_type == 4:
             if scored == 1:

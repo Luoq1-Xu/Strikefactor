@@ -3,7 +3,6 @@ Game state classes for StrikeFactor baseball simulator.
 Each state handles its own rendering, input processing, and state transitions.
 """
 
-import os
 from abc import ABC, abstractmethod
 from datetime import datetime
 
@@ -11,7 +10,7 @@ import pygame
 import pygame.gfxdraw
 import pygame_gui
 
-from strikefactor import outcomes
+from strikefactor import outcomes, paths
 from strikefactor.gameplay.gameday_manager import GameDayManager, get_pitcher_attrs
 from strikefactor.ui import gameday_theme as gdt
 from strikefactor.ui.pitching_box_panel import PitchingBoxPanel, PitchingSide
@@ -369,6 +368,14 @@ class GameplayState(GameState):
     def _initiate_pitch(self):
         """Start a new pitch simulation."""
         self.game.first_pitch_thrown = True
+        # The state the pitch is chosen in, built from the game as it stands
+        # now. `current_state` was otherwise whatever the last pitch left, and
+        # the first pitch of a game or half-inning inherited the placeholder
+        # `reset_game_stats` writes — a right-handed batter at 0-0 with the
+        # bases empty — even for a left-hander or a full-count random
+        # scenario. The Q-update for the pitch is keyed on this same state
+        # (`PitchSimulation.previous_state`), so both were wrong together.
+        self.game.current_state = self.game.build_ai_state()
         count_state = self.game.current_pitcher._get_count_state()
         selection = self.game.current_pitcher.ai.choose_action(
             self.game.current_state,
@@ -399,15 +406,7 @@ class GameplayState(GameState):
         self.game.field_renderer.draw_strikezone()
         self.game.field_renderer.draw_field(self.game.scoreKeeper.get_bases())
         self.game.batter.draw_stance(1)
-        
-        # Draw pitch positions if in view mode
-        if self.game.menu_state == 'view_pitches':
-            for pitch_pos in self.game.pitches_display:
-                pygame.gfxdraw.aacircle(
-                    screen, int(pitch_pos[0]), int(pitch_pos[1]), 
-                    self.game.fourseamballsize, (255, 255, 255)
-                )
-                
+
         # Draw current ball position
         if self.game.first_pitch_thrown:
             pygame.gfxdraw.aacircle(
@@ -508,6 +507,7 @@ class SummaryState(GameState):
             'hits_allowed': self.game.hits,
             'outs': self.game.currentouts,
             'runs': self.game.scoreKeeper.get_score(),
+            'earned_runs': self.game.scoreKeeper.get_earned_runs(),
             'pitch_count': self.game.current_pitches
         }
 
@@ -674,57 +674,6 @@ class VisualizationState(GameState):
         self.game.field_renderer.draw_strikezone()
         self.game.field_renderer.draw_field(self.game.scoreKeeper.get_bases())
         self.game.batter.draw_stance(1)
-
-
-class ViewPitchesState(GameState):
-    """State for viewing pitch locations."""
-    
-    def __init__(self, game):
-        super().__init__(game)
-        
-    def enter(self):
-        """Initialize view pitches state."""
-        self.game.ui_manager.set_button_visibility('view_pitches')
-
-        # Use enhanced records if available, otherwise fall back to legacy
-        if hasattr(self.game, 'enhanced_pitch_records') and self.game.enhanced_pitch_records:
-            self.game.ui_manager.update_pitch_info_enhanced(
-                self.game.enhanced_pitch_records
-            )
-        else:
-            self.game.ui_manager.update_pitch_info(
-                self.game.pitch_trajectories, self.game.last_pitch_information
-            )
-        self.game.ui_manager.show_view_window()
-        
-    def exit(self):
-        """Clean up view pitches state."""
-        self.game.ui_manager.hide_view_window()
-        
-    def update(self, time_delta: float):
-        """Update view pitches logic."""
-        pass
-        
-    def handle_event(self, event):
-        """Handle view pitches events."""
-        self.game.ui_manager.process_events(event)
-        if event.type == pygame.QUIT:
-            return False
-        return True
-        
-    def render(self, screen):
-        """Render the view pitches state."""
-        screen.fill("black")
-        self.game.current_pitcher.draw_pitcher(0, 0)
-        self.game.field_renderer.draw_strikezone()
-        self.game.field_renderer.draw_field(self.game.scoreKeeper.get_bases())
-        
-        # Draw all pitch positions
-        for pitch_pos in self.game.pitches_display:
-            pygame.gfxdraw.aacircle(
-                screen, int(pitch_pos[0]), int(pitch_pos[1]), 
-                self.game.fourseamballsize, (255, 255, 255)
-            )
 
 
 class InningEndState(GameState):
@@ -1117,6 +1066,10 @@ class SandboxGameplayState(GameState):
         chosen_pitch = random.choice(list(self.active_pitches))
 
         self.game.first_pitch_thrown = True
+        # The simulation's Q-update uses this state as its starting point.
+        # Refresh it for the actual count, runners and batter before the first
+        # Sandbox pitch (and each later one), as Arcade does above.
+        self.game.current_state = self.game.build_ai_state()
         self.game.pitch_chosen = chosen_pitch
 
         # Randomly select from active pitches
@@ -1314,10 +1267,6 @@ class GameDayTransitionState(GameState):
         self.game.ui_manager.hide_scouting_panel()
         self.game.ui_manager.hide_lap_log_panel()
 
-        # Hide gameplay UI elements
-        self.game.ui_manager.scoreboard.hide()
-        self.game.ui_manager.pitch_result.hide()
-
         # Clean up labels from previous entry
         self._clear_labels()
 
@@ -1372,10 +1321,6 @@ class GameDayTransitionState(GameState):
             self.game.clear_gameday_session(gameday_mgr.session_uuid)
         else:
             self.game.autosave_gameday_session(self.phase)
-
-        # Ensure gameplay UI stays hidden (redundant safety)
-        self.game.ui_manager.scoreboard.hide()
-        self.game.ui_manager.pitch_result.hide()
 
     def exit(self):
         """Called when exiting this state."""
@@ -1565,13 +1510,15 @@ class GameDayTransitionState(GameState):
         # Reset for new half-inning
         self.game.game_stats.reset_game_stats()
         self.game.scoreKeeper.reset()
+        # Name the arm the runs are charged to. The opposing staff only
+        # changes between innings, so once per half is every change there is.
+        self.game.scoreKeeper.set_pitcher(
+            self.game.gameday_manager.current_pitcher_name)
         self.game.inning_ended = False
         self.game.scorebug.last_pitch_type = ""  # Reset last pitch display for new inning
 
         # Clear pitch data from previous inning
         self.game.pitch_trajectories = []
-        self.game.enhanced_pitch_records = []
-        self.game.pitches_display = []
 
         # Transition to gameplay
         self.game.state_manager.change_state('gameplay')
@@ -1744,14 +1691,18 @@ class GameDayTransitionState(GameState):
                 if event.result == 'HOME RUN':
                     hr += 1
             elif event.result in self._OUT_RESULTS:
-                ab += 1
+                # A sacrifice fly is an out but not an at-bat (Rule 9.02(a)).
+                ab += 0 if event.sacrifice_fly else 1
                 if event.result == 'STRIKEOUT':
                     so += 1
             elif event.result in self._REACH_RESULTS:
-                ab += 1
+                # Nor is a dropped fly that would have been one (9.08(d)).
+                ab += 0 if event.sacrifice_fly else 1
             elif event.result == 'WALK':
                 bb += 1
-            rbi += event.runs_scored
+            # The scorer's count, not the runs that crossed: a run an error
+            # let in is not batted in (Rule 9.04).
+            rbi += event.rbi
         avg = (h / ab) if ab else 0.0
         return {'AB': ab, 'R': mgr.player_score, 'H': h, 'HR': hr,
                 'RBI': rbi, 'BB': bb, 'SO': so, 'AVG': avg}
@@ -1785,11 +1736,14 @@ class GameDayTransitionState(GameState):
         # Each side's hits = hits allowed by the pitchers they batted against.
         plr_hits = sum(ps.hits_allowed for ps in gm.get_opponent_pitcher_stats())
         opp_hits = sum(ps.hits_allowed for ps in gm.get_player_pitcher_stats())
+        plr_errors, opp_errors = gm.error_totals(
+            (event.result, event.is_top) for event in gm.event_log)
         return gdt.draw_linescore_from_arrays(
             screen, x, y, self._ensure_fonts(),
             box['opponent'], box['player'],
             box['opponent_total'], box['player_total'],
             opp_hits=opp_hits, plr_hits=plr_hits,
+            opp_errors=opp_errors, plr_errors=plr_errors,
             current_inning=current_inning)
 
     # ---- Stat grid (YOUR LINE) ----------------------------------
@@ -1891,7 +1845,7 @@ class GameDayTransitionState(GameState):
 
             # Right-aligned stats: ER first, then K, then IP (matching design)
             right_x = x + width
-            er_text = f"ER{ps.runs_allowed}"
+            er_text = f"ER{ps.earned_runs}"
             er_rect = self._blit_text(screen, er_text, f['med'],
                                       (right_x, y), self._FG, align='right')
             k_text = f"K{ps.strikeouts}"
@@ -2235,7 +2189,7 @@ class _GameDayListState(GameState):
             self._render_footer(screen, f)
             return
 
-        mouse = pygame.mouse.get_pos()
+        mouse = self.game.get_mouse_pos()
         y = self._LIST_TOP
         for item in self._page_items():
             rect = pygame.Rect(self._LIST_X, y, self._LIST_W, self._ROW_H)
@@ -2326,9 +2280,32 @@ class GameDayHistoryState(_GameDayListState):
         self.selected = None      # a game dict when viewing detail
         self._pbp = None          # lazily-built PlayByPlayPanel
         self._detail_plays = []   # play log for `selected` (resolved once)
+        self._detail_hits = (0, 0)  # (player, opponent) hits for `selected`
 
     def _load_items(self):
         return GameDayManager.get_history_games()
+
+    @staticmethod
+    def _query_pitch_db(sql, params):
+        """Rows from the pitch database, read-only, or [] if it can't be read.
+
+        Read-only so that a history viewed on a machine with no database yet
+        doesn't create an empty one. Only older history records need this —
+        newer ones carry their hits and play log.
+        """
+        import sqlite3
+
+        try:
+            conn = sqlite3.connect(paths.sqlite_readonly_uri(paths.db_path()), uri=True)
+        except sqlite3.Error:
+            return []
+        try:
+            conn.row_factory = sqlite3.Row
+            return conn.execute(sql, params).fetchall()
+        except sqlite3.Error:
+            return []
+        finally:
+            conn.close()
 
     @staticmethod
     def _history_hit_totals(item):
@@ -2347,27 +2324,14 @@ class GameDayHistoryState(_GameDayListState):
         if not game_id or not session_id:
             return 0, 0
 
-        try:
-            import sqlite3
-            db_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'strikefactor.db')
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                """
-                SELECT is_hit, is_top_inning
-                FROM pitches
-                WHERE game_id = ? AND session_id = ? AND is_hit = 1
-                """,
-                (game_id, session_id),
-            ).fetchall()
-        except Exception:
-            return 0, 0
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
-
+        rows = GameDayHistoryState._query_pitch_db(
+            """
+            SELECT is_hit, is_top_inning
+            FROM pitches
+            WHERE game_id = ? AND session_id = ? AND is_hit = 1
+            """,
+            (game_id, session_id),
+        )
         player_hits = sum(1 for row in rows if not row['is_top_inning'])
         opponent_hits = sum(1 for row in rows if row['is_top_inning'])
         return player_hits, opponent_hits
@@ -2383,37 +2347,25 @@ class GameDayHistoryState(_GameDayListState):
         if not game_id or not session_id:
             return []
 
-        try:
-            import sqlite3
-            db_path = os.path.join(os.path.dirname(__file__), '..', 'data', 'strikefactor.db')
-            conn = sqlite3.connect(db_path)
-            conn.row_factory = sqlite3.Row
-            rows = conn.execute(
-                """
-                SELECT
-                    a.ab_id,
-                    a.final_outcome,
-                    a.pitcher_name,
-                    p.inning,
-                    p.is_top_inning,
-                    MIN(a.created_at) AS ab_created_at,
-                    MIN(p.created_at) AS first_pitch_created_at,
-                    MAX(p.runs_scored_on_pitch) AS runs_scored_on_pitch
-                FROM at_bats a
-                JOIN pitches p ON p.ab_id = a.ab_id
-                WHERE a.game_id = ? AND a.session_id = ?
-                GROUP BY a.ab_id, a.final_outcome, a.pitcher_name, p.inning, p.is_top_inning
-                ORDER BY ab_created_at, first_pitch_created_at, a.ab_id
-                """,
-                (game_id, session_id),
-            ).fetchall()
-        except Exception:
-            return []
-        finally:
-            try:
-                conn.close()
-            except Exception:
-                pass
+        rows = GameDayHistoryState._query_pitch_db(
+            """
+            SELECT
+                a.ab_id,
+                a.final_outcome,
+                a.pitcher_name,
+                p.inning,
+                p.is_top_inning,
+                MIN(a.created_at) AS ab_created_at,
+                MIN(p.created_at) AS first_pitch_created_at,
+                MAX(p.runs_scored_on_pitch) AS runs_scored_on_pitch
+            FROM at_bats a
+            JOIN pitches p ON p.ab_id = a.ab_id
+            WHERE a.game_id = ? AND a.session_id = ?
+            GROUP BY a.ab_id, a.final_outcome, a.pitcher_name, p.inning, p.is_top_inning
+            ORDER BY ab_created_at, first_pitch_created_at, a.ab_id
+            """,
+            (game_id, session_id),
+        )
 
         play_log = []
         for index, row in enumerate(rows, start=1):
@@ -2486,8 +2438,9 @@ class GameDayHistoryState(_GameDayListState):
 
     def _on_activate(self, item):
         self.selected = item
-        # Resolved once here (it can hit the pitch DB) rather than per frame.
+        # Resolved once here (both can hit the pitch DB) rather than per frame.
         self._detail_plays = self._play_log_from_game(item)
+        self._detail_hits = self._history_hit_totals(item)
         self._panel().set_plays(self._detail_plays)
         self.game.ui_manager.set_visibility_state('gameday_history_detail')
 
@@ -2578,7 +2531,10 @@ class GameDayHistoryState(_GameDayListState):
         gdt.blit_text(screen, f"{diff}   ·   OPPONENT STARTER: {starter}",
                       f['small'], (gdt.MARGIN_X, 146), gdt.DIM)
 
-        player_hits, opponent_hits = self._history_hit_totals(game)
+        player_hits, opponent_hits = self._detail_hits
+        player_errors, opponent_errors = GameDayManager.error_totals(
+            (play.get('result'), play.get('is_top'))
+            for play in self._detail_plays or [])
 
         opp = game.get('opponent_inning_scores', []) or []
         plr = game.get('player_inning_scores', []) or []
@@ -2589,6 +2545,7 @@ class GameDayHistoryState(_GameDayListState):
         gdt.draw_linescore_from_arrays(
             screen, gdt.MARGIN_X, 178, f, opp, plr, sum(opp), sum(plr),
             opp_hits=opponent_hits, plr_hits=player_hits,
+            opp_errors=opponent_errors, plr_errors=player_errors,
         )
 
         if self._detail_plays:

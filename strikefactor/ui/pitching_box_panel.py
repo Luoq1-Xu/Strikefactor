@@ -1,7 +1,7 @@
 """Full pitching box score for the GameDay screens.
 
-Every arm both teams used gets a row and its whole line — IP / H / R / BB / K /
-HR / PC / ERA — under a per-side header, closed by a totals row. Rows scroll, so
+Every arm both teams used gets a row and its whole line — IP / H / R / ER / BB /
+K / HR / PC / ERA — under a per-side header, closed by a totals row. Rows scroll, so
 the panel is never forced to truncate: the GAME LOG overlay used to render this
 as a fixed two-line strip beneath the play-by-play (``stats[-2:]`` per side),
 which silently hid every arm before the last two. A game that went to a
@@ -18,6 +18,7 @@ from typing import Mapping, NamedTuple, Optional, Sequence
 import pygame
 
 from strikefactor.ui import gameday_theme as gdt
+from strikefactor.ui import pointer
 
 # Column labels, in display order, paired with the key their formatted value is
 # stored under. Counting stats sit between IP and the rate stat the way a real
@@ -27,6 +28,7 @@ COLUMNS = (
     ('IP', 'ip'),
     ('H', 'h'),
     ('R', 'r'),
+    ('ER', 'er'),
     ('BB', 'bb'),
     ('K', 'k'),
     ('HR', 'hr'),
@@ -36,7 +38,7 @@ COLUMNS = (
 
 # Counting columns render a zero dimly, so a line's actual damage stands out at
 # a glance. IP / PC / ERA are always lit — a 0.0 IP appearance is information.
-_DIM_WHEN_ZERO = ('h', 'r', 'bb', 'k', 'hr')
+_DIM_WHEN_ZERO = ('h', 'r', 'er', 'bb', 'k', 'hr')
 
 
 class PitchingSide(NamedTuple):
@@ -44,7 +46,7 @@ class PitchingSide(NamedTuple):
 
     ``stats`` holds :class:`gameplay.gameday_manager.PitcherStats`-shaped
     objects (name / pitch_count / outs_recorded / hits_allowed / runs_allowed /
-    strikeouts / walks / home_runs_allowed / is_active, plus
+    earned_runs / strikeouts / walks / home_runs_allowed / is_active, plus
     ``get_fatigue_label()``). ``tags`` maps a pitcher name to a short label
     drawn beside it — handedness for arms the player bats against, bullpen role
     for the arms they only ever manage. The caller supplies those because the
@@ -67,12 +69,14 @@ def format_ip(outs: int) -> str:
     return f"{outs // 3}.{outs % 3}"
 
 
-def format_era(runs: int, outs: int) -> str:
+def format_era(earned_runs: int, outs: int) -> str:
     """Earned runs per nine. No outs recorded has no rate: '-' when unscored
-    upon, 'INF' once a run is in, never a divide-by-zero or a fake 0.00."""
+    upon, 'INF' once an earned run is in, never a divide-by-zero or a fake
+    0.00. Earned runs, not runs: a run an error let in is on the R column and
+    not in this rate."""
     if outs <= 0:
-        return 'INF' if runs > 0 else '-'
-    return f"{27.0 * runs / outs:.2f}"
+        return 'INF' if earned_runs > 0 else '-'
+    return f"{27.0 * earned_runs / outs:.2f}"
 
 
 def _fit(text, font, max_w):
@@ -146,12 +150,11 @@ class PitchingBoxPanel:
         return bool(ps.pitch_count or ps.outs_recorded or ps.is_active)
 
     def _line(self, ps, tag) -> dict:
-        outs = int(ps.outs_recorded)
-        runs = int(ps.runs_allowed)
         counts = {
-            'outs': outs,
+            'outs': int(ps.outs_recorded),
             'h': int(ps.hits_allowed),
-            'r': runs,
+            'r': int(ps.runs_allowed),
+            'er': int(ps.earned_runs),
             'bb': int(ps.walks),
             'k': int(ps.strikeouts),
             'hr': int(ps.home_runs_allowed),
@@ -171,16 +174,16 @@ class PitchingBoxPanel:
 
     def _totals(self, lines) -> dict:
         counts = {key: sum(line['counts'][key] for line in lines)
-                  for key in ('outs', 'h', 'r', 'bb', 'k', 'hr', 'pc')}
+                  for key in ('outs', 'h', 'r', 'er', 'bb', 'k', 'hr', 'pc')}
         return {'counts': counts, 'values': self._values(counts)}
 
     @staticmethod
     def _values(counts) -> dict:
         """Format one set of counting stats into the panel's display strings."""
         values = {key: str(counts[key])
-                  for key in ('h', 'r', 'bb', 'k', 'hr', 'pc')}
+                  for key in ('h', 'r', 'er', 'bb', 'k', 'hr', 'pc')}
         values['ip'] = format_ip(counts['outs'])
-        values['era'] = format_era(counts['r'], counts['outs'])
+        values['era'] = format_era(counts['er'], counts['outs'])
         return values
 
     def _rebuild_rows(self):
@@ -231,7 +234,7 @@ class PitchingBoxPanel:
     def handle_event(self, event):
         """Consume scroll input. Returns True when the event was used."""
         if event.type == pygame.MOUSEWHEEL:
-            if self.rect.collidepoint(pygame.mouse.get_pos()):
+            if self.rect.collidepoint(pointer.pos()):
                 self.scroll_by(-event.y * self.SCROLL_STEP)
                 return True
             return False

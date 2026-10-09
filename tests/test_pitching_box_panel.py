@@ -31,11 +31,12 @@ def fonts():
 
 
 def _arm(name, outs=3, hits=1, runs=1, walks=1, k=2, hr=0, pitches=18,
-         active=False):
+         active=False, earned=None):
     ps = PitcherStats(name)
     ps.outs_recorded = outs
     ps.hits_allowed = hits
     ps.runs_allowed = runs
+    ps.earned_runs = runs if earned is None else earned
     ps.walks = walks
     ps.strikeouts = k
     ps.home_runs_allowed = hr
@@ -135,10 +136,20 @@ def test_totals_row_sums_the_side(fonts):
     panel = _panel(fonts, [PitchingSide("THEIRS", theirs)])
     totals = _rows_of(panel, 'totals')[0]['totals']
 
-    assert totals['counts'] == {'outs': 21, 'h': 7, 'r': 4, 'bb': 3, 'k': 10,
-                               'hr': 2, 'pc': 116}
+    assert totals['counts'] == {'outs': 21, 'h': 7, 'r': 4, 'er': 4, 'bb': 3,
+                               'k': 10, 'hr': 2, 'pc': 116}
     assert totals['values']['ip'] == '7.0'
     assert totals['values']['era'] == format_era(4, 21)
+
+
+def test_era_is_over_earned_runs_and_the_line_shows_both(fonts):
+    """Three runs in, one of them earned: R says 3, and ERA is the 1."""
+    theirs = [_arm('sale', outs=9, runs=3, earned=1)]
+    panel = _panel(fonts, [PitchingSide("THEIRS", theirs)])
+    for row in (_rows_of(panel, 'pitcher')[0]['line'],
+                _rows_of(panel, 'totals')[0]['totals']):
+        assert (row['values']['r'], row['values']['er']) == ('3', '1')
+        assert row['values']['era'] == '3.00'
 
 
 def test_ip_formatting_matches_pitcher_stats():

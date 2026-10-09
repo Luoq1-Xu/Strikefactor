@@ -2,7 +2,7 @@ import json
 import os
 from enum import Enum
 
-from strikefactor.config import get_path
+from strikefactor import paths
 from strikefactor.utils.io import atomic_write_json
 
 
@@ -111,7 +111,7 @@ class SettingsManager:
     DEFENSE_LEVELS = ["sandlot", "minors", "league", "gold_glove"]
 
     def __init__(self):
-        self.settings_file = get_path("settings.json")
+        self.settings_file = paths.data_path(paths.SETTINGS_FILE)
         self.default_settings = {
             "difficulty": DifficultyLevel.AMATEUR.value,
             "umpire_sound": True,
@@ -240,6 +240,16 @@ class SettingsManager:
         next_fps = self.ENGINE_FPS_OPTIONS[(idx + 1) % len(self.ENGINE_FPS_OPTIONS)]
         self.set_setting("engine_fps", next_fps)
         return next_fps
+
+    def get_batter_handedness(self) -> str:
+        """The saved batter side, 'R' or 'L', defaulting to 'R' if invalid."""
+        hand = self.get_setting("batter_handedness")
+        return hand if hand in ("R", "L") else "R"
+
+    def get_display_mode(self) -> str:
+        """'windowed' or 'fullscreen', defaulting to windowed if invalid."""
+        mode = self.get_setting("display_mode")
+        return mode if mode in ("windowed", "fullscreen") else "windowed"
 
     def get_defense_level(self) -> str:
         """Return the current defense level, defaulting to league if invalid."""

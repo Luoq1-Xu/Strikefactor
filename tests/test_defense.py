@@ -165,19 +165,43 @@ def test_charging_a_slow_roller_is_harder_than_standing_still():
 def test_the_hop_does_not_apply_to_a_ball_caught_in_the_air():
     """Exit velocity makes a ground ball harder to field because of the hop.
     A fly ball has no hop -- it has hang time -- so the term must not sneak
-    into the catch."""
+    into the catch. Nor through the back door: the charge penalty fades as the
+    hop comes in, and in the air there is no hop for it to fade against."""
     p = d.NEUTRAL
     assert (d.misplay_prob(p, ev_mph=110.0, in_air=True)
             == d.misplay_prob(p, ev_mph=60.0, in_air=True))
+    assert (d.misplay_prob(p, ev_mph=110.0, is_charging=True, in_air=True)
+            == d.misplay_prob(p, ev_mph=60.0, is_charging=True, in_air=True))
+
+
+def test_charging_stops_mattering_once_the_ball_is_scorched():
+    """"Charging" is geometric -- the ball was taken in front of the set
+    position -- and the penalty is for the barehand play on a slow roller. On
+    a ball the hop has fully taken over it is a step in, so it adds nothing,
+    and the two penalties never compound. It fades rather than switching off.
+    """
+    p = d.NEUTRAL
+
+    def charge_bonus(ev):
+        return (d.misplay_prob(p, ev_mph=ev, is_charging=True)
+                / d.misplay_prob(p, ev_mph=ev))
+
+    scorched = d.HOP_REF_MPH + d.HOP_SPAN_MPH
+    assert charge_bonus(50.0) == pytest.approx(d.MISPLAY_CHARGE_MULT)
+    assert charge_bonus(50.0) > charge_bonus(d.HOP_REF_MPH + d.HOP_SPAN_MPH / 2)
+    assert (d.misplay_prob(p, ev_mph=scorched, is_charging=True)
+            == d.misplay_prob(p, ev_mph=scorched, is_charging=False))
 
 
 def test_misplay_probability_is_bounded():
     """Even the worst play on the worst defense is mostly made.
 
-    `MISPLAY_P_MAX` is a rail, not a working limit. Since `field_misplay_p`
-    was rescaled x0.72 (2026-09-02, see the sourcing note in defense.py) the
-    worst play available -- 500 ft of ranging, 130 mph, charging -- modulates
-    SANDLOT's base to ~0.28, under the 0.35 cap. The invariant that matters is
+    `MISPLAY_P_MAX` is a rail, not a working limit. The worst play available
+    -- 500 ft of ranging, 130 mph, charging -- modulates SANDLOT's base to
+    0.25, under the 0.35 cap. That holds with the hop gain at 3.0 only
+    because the charge penalty fades out as the hop comes in (2026-09-28);
+    compounded in full, the same play came to 0.35 and sat on the rail.
+    The invariant that matters is
     the bound, so that is what is asserted of the real levels; the cap itself
     is still exercised, on a profile hot enough to reach it, rather than being
     asserted somewhere it can no longer fire.
@@ -253,7 +277,11 @@ def test_the_routine_through_rate_halves_up_the_ladder():
     for lower, higher in zip(rates, rates[1:]):
         assert 1.6 < lower / higher < 4.0, f"{rates}"
     # And the whole ladder sits where a *reached* ball is usually fielded.
-    assert 0.02 < rates[0] < 0.08          # sandlot: a moderate share through
+    # The floor was 0.02 until the hop gain went 0.8 -> 3.0 (2026-09-28). That
+    # moved misplays off the routine play and onto the hot one, and the base
+    # came down to hold ERR%, so a *routine* ball now gets through a sandlot
+    # infielder 1.5% of the time; a scorched one, several times that.
+    assert 0.01 < rates[0] < 0.08          # sandlot: a moderate share through
     assert rates[-1] < 0.005               # gold glove: almost never
 
 
@@ -408,16 +436,28 @@ def test_defense_strength_does_not_move_the_batter_runner():
     """Defense strength is not batter speed. Conflating them would make a
     weak defense silently a fast batter, and would double-count against
     `_difficulty_time_offset_s`, which already moves that clock."""
-    def mean_sprint(level):
-        anim = _anim(level)
-        return sum(anim._runner_sprint_fts() for _ in range(4000)) / 4000
+    def sprints(level, n=400):
+        # One runner per play, so the distribution is sampled across plays.
+        out = []
+        for _ in range(n):
+            out.append(_anim(level)._runner_sprint_fts())
+        return out
 
     random.seed(1)
-    slow = mean_sprint(d.DefenseLevel.SANDLOT)
+    slow = sprints(d.DefenseLevel.SANDLOT)
     random.seed(1)
-    fast = mean_sprint(d.DefenseLevel.GOLD_GLOVE)
+    fast = sprints(d.DefenseLevel.GOLD_GLOVE)
     assert slow == pytest.approx(fast, abs=1e-9)
-    assert slow == pytest.approx(it.SPRINT_SPEED_LEAGUE_FTS, abs=0.15)
+    assert sum(slow) / len(slow) == pytest.approx(it.SPRINT_SPEED_LEAGUE_FTS, abs=0.3)
+
+
+def test_the_batter_runner_has_one_speed_for_the_whole_play():
+    """Every race in a play reads the same runner. The speed used to be redrawn
+    per call, so a ball through a fielder judged the error-or-hit
+    counterfactual and the base race with two different runners."""
+    anim = _anim(d.DefenseLevel.LEAGUE)
+    first = anim._runner_sprint_fts()
+    assert all(anim._runner_sprint_fts() == first for _ in range(20))
 
 
 def test_the_unassisted_carry_and_the_sprint_are_the_same_legs():
@@ -565,6 +605,32 @@ def test_a_misplay_is_rolled_once_and_latched():
         assert anim._misplay_role is not None
 
 
+def test_a_harder_hit_grounder_is_harder_to_handle_on_the_plays_reached():
+    """Exit velocity has to survive the mix of plays fielders actually get to.
+
+    `test_a_hotter_ball_is_misplayed_more_often` holds the fielder still, and
+    it passed for as long as exit velocity did nothing in play. Soft grounders
+    are the ones fielders range and charge for, so the ranging and charge
+    gains landed on soft contact and the hop gain on hard, and over the balls
+    reached the two cancelled: mean misplay probability 1.08x as high on 95+
+    mph grounders as on sub-80 ones, on this very sample. With the hop gain at
+    3.0 and the charge penalty fading as the hop comes in, it is 1.75x.
+
+    Read off `_misplay_p`, the probability each roll was against, rather than
+    off the rolls themselves: at a sample a test can afford, whether a handful
+    of misplays landed in one bucket or the other is noise. The sample is the
+    grounder sweep the through-ball tests below already share.
+    """
+    worst = d.profile_for(d.DefenseLevel.SANDLOT)
+    reached = [a for a in _plays(worst, 300, 31, "GROUNDER")
+               if a._misplay_p is not None]
+    soft = [a._misplay_p for a in reached if a.exit_velocity_mph < 80.0]
+    hard = [a._misplay_p for a in reached if a.exit_velocity_mph >= 95.0]
+    assert len(soft) > 30 and len(hard) > 30
+    soft_p, hard_p = sum(soft) / len(soft), sum(hard) / len(hard)
+    assert hard_p > 1.4 * soft_p, f"hard {hard_p:.4f} vs soft {soft_p:.4f}"
+
+
 def test_a_ball_through_a_fielder_usually_reaches_the_outfield():
     """The whole point: reaching the ball stopped meaning fielding it.
 
@@ -678,9 +744,9 @@ def test_a_clean_play_has_an_empty_error_window():
 
 
 def test_a_worse_defense_commits_more_errors():
-    """Measured end to end at n=2500 the ladder runs 3.84% / 2.48% / 1.56% /
-    0.72% of balls in play, against MLB's ~1.5% at the LEAGUE rung -- rerun it
-    with `python -m tools.calibrate_defense --n 2500`. Only the ends are swept
+    """Measured end to end at n=10000 the ladder runs 3.76% / 2.29% / 1.41% /
+    0.66% of balls in play, against MLB's ~1.5% at the LEAGUE rung -- rerun it
+    with `python -m tools.calibrate_defense --n 10000`. Only the ends are swept
     here; at the sample size a test can afford, adjacent rungs are inside each
     other's noise."""
     def error_rate(profile, n=260):
@@ -722,6 +788,27 @@ def test_every_error_marks_the_fielder_who_made_it():
         assert anim._error_marked_at_ms is not None
         assert anim._error_role == anim._misplay_role
         assert anim._error_role in anim.fielders
+
+
+def test_every_error_names_the_out_it_cost():
+    """The official scorer rebuilds the inning from the out an error should
+    have been (`ScoreKeeper.update_hit_event`), so every error has to say
+    which. A drop is the catch it was; a bobble, or a ball through a fielder,
+    is an infield out."""
+    worst = d.profile_for(d.DefenseLevel.SANDLOT)
+    caught = {"LINER": "LINEOUT", "FLY": "FLYOUT", "POP_UP": "POP UP"}
+    for anim in _sweep(worst, 400, seed=808):
+        if not anim.is_error:
+            assert anim.error_out is None
+        elif anim._misplay_kind == "MUFF":
+            assert anim.error_out == caught[anim.shape]
+        else:
+            assert anim.error_out == "GROUNDOUT"
+        # What the offline analysis leans on to find a dropped sacrifice fly
+        # without this ruling being a column (`analysis.data.sac_fly_sql`): an
+        # error on a FLY is the dropped catch, and no other error is.
+        if anim.is_error:
+            assert (anim.error_out == "FLYOUT") == (anim.shape == "FLY")
 
 
 def test_a_clean_play_never_marks_anyone():

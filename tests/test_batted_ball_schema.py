@@ -279,3 +279,136 @@ def test_an_unreadable_setting_records_null_rather_than_neutral():
         game = object()          # no settings_manager at all
 
     assert PitchDataExtractor._defense_value(_Sim()) is None
+
+
+# ---- v11: the base race, and ABS verdicts that reach the row ---------------
+
+def _pre_v11_db(db_path, rows):
+    """A v10 database: no base-race column, and ABS flags as v10 wrote them."""
+    conn = sqlite3.connect(db_path)
+    conn.executescript(PitchDB.SCHEMA)
+    conn.execute("ALTER TABLE pitches DROP COLUMN extra_base_margin_s")
+    for pitch_id, challenged, overturned in rows:
+        conn.execute(
+            "INSERT INTO pitches (pitch_id, session_id, game_mode, difficulty, "
+            "created_at, pitcher_name, pitch_type, outcome, abs_challenged, "
+            "abs_overturned) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (pitch_id, "s1", "arcade", "amateur", "2026-01-01T00:00:00",
+             "Sale", "FASTBALL", "ball", challenged, overturned))
+    conn.execute("PRAGMA user_version = 10")
+    conn.commit()
+    conn.close()
+
+
+def test_a_fresh_database_has_the_base_race_column(db_path):
+    db = PitchDB(db_path)
+    try:
+        cols = {r[1] for r in db.conn.execute("PRAGMA table_info(pitches)")}
+        assert "extra_base_margin_s" in cols
+        assert SCHEMA_VERSION >= 11
+        assert db.conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
+    finally:
+        db.close()
+
+
+def test_migrating_a_v10_database_adds_the_base_race_column_as_unknown(db_path):
+    """Doubles and triples before v11 had a race and no margin recorded for
+    it; that is unknown, and must not be guessed at."""
+    _pre_v11_db(db_path, [("p1", 0, 0)])
+    db = PitchDB(db_path)
+    try:
+        cols = {r[1] for r in db.conn.execute("PRAGMA table_info(pitches)")}
+        assert "extra_base_margin_s" in cols
+        row = db.conn.execute(
+            "SELECT outcome, extra_base_margin_s FROM pitches WHERE pitch_id='p1'"
+        ).fetchone()
+        assert tuple(row) == ("ball", None)
+    finally:
+        db.close()
+
+
+def test_abs_flags_written_before_v11_become_unknown(db_path):
+    """Before v11 no challenge could reach the row, so every flag read 0
+    whatever happened on the field. That 0 is not "not challenged", it is
+    "not recorded" — NULL, per the rule for every other column."""
+    _pre_v11_db(db_path, [("p1", 0, 0), ("p2", 0, 0)])
+    db = PitchDB(db_path)
+    try:
+        rows = db.conn.execute(
+            "SELECT abs_challenged, abs_overturned, outcome FROM pitches"
+        ).fetchall()
+        assert [tuple(r) for r in rows] == [(None, None, "ball")] * 2
+    finally:
+        db.close()
+
+
+def test_abs_flags_written_at_v11_survive_reopening(db_path):
+    """The migration is a one-off at the version boundary, not something
+    every open does to the data."""
+    db = PitchDB(db_path)
+    db.insert_pitch({
+        "pitch_id": "p3", "session_id": "s1", "game_mode": "arcade",
+        "difficulty": "amateur", "created_at": "2026-01-01T00:00:00",
+        "pitcher_name": "Sale", "pitch_type": "FASTBALL", "outcome": "strike",
+        "abs_challenged": 1, "abs_overturned": 1,
+    }, [])
+    db.close()
+    db = PitchDB(db_path)
+    try:
+        row = db.conn.execute(
+            "SELECT abs_challenged, abs_overturned FROM pitches WHERE pitch_id='p3'"
+        ).fetchone()
+        assert tuple(row) == (1, 1)
+    finally:
+        db.close()
+
+
+def test_the_base_race_margin_round_trips(db_path):
+    db = PitchDB(db_path)
+    try:
+        db.insert_pitch({
+            "pitch_id": "p4", "session_id": "s1", "game_mode": "arcade",
+            "difficulty": "amateur", "created_at": "2026-01-01T00:00:00",
+            "pitcher_name": "Sale", "pitch_type": "FASTBALL", "outcome": "DOUBLE",
+            "extra_base_margin_s": -0.31,
+        }, [])
+        row = db.conn.execute(
+            "SELECT extra_base_margin_s, play_margin_s FROM pitches WHERE pitch_id='p4'"
+        ).fetchone()
+        assert tuple(row) == (-0.31, None)
+    finally:
+        db.close()
+
+
+def test_each_race_lands_in_its_own_margin():
+    """A ball that got past the infield carries its base race; one fielded in
+    the infield carries the throw to first; a ball caught in the air carries
+    neither. Before v11 the base race was computed and then dropped, so no
+    double or triple ever had a margin."""
+    import random
+
+    from strikefactor import outcomes
+    from strikefactor.gameplay.hit_animation import HitAnimation
+
+    base_races = extra_base_hits = 0
+    for seed in range(80):
+        random.seed(seed)
+        shape = ("LINER", "FLY", "GROUNDER")[seed % 3]
+        launch = {"LINER": 16.0, "FLY": 28.0, "GROUNDER": 4.0}[shape]
+        anim = HitAnimation(_StubGame(), "IN_PLAY", lambda: None, quality=0.85,
+                            batted_ball_type=shape, spray_deg=-30.0 + 1.5 * (seed % 40),
+                            ev_mph=88.0 + (seed % 7) * 3.0, launch_deg=launch)
+        t = 0
+        while not anim.finished and t < 25000:
+            t += 16
+            anim.update(t)
+        result = anim.classified_outcome
+        if anim.play_timing is not None:
+            assert anim.extra_base_margin_s is None, "one play, one race"
+        elif result in outcomes.BATTED_OUT_OUTCOMES:
+            assert anim.extra_base_margin_s is None, "a catch has no race"
+        else:
+            assert isinstance(anim.extra_base_margin_s, float), result
+            base_races += 1
+            extra_base_hits += result in (outcomes.DOUBLE, outcomes.TRIPLE)
+    assert base_races >= 5 and extra_base_hits >= 1, (base_races, extra_base_hits)

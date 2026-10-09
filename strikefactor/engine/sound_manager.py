@@ -3,7 +3,7 @@ import random
 
 import pygame
 
-from strikefactor.config import get_path, resource_path
+from strikefactor.config import get_path
 from strikefactor.engine.contact_audio import contact_sound_for
 
 
@@ -65,7 +65,7 @@ class SoundManager:
         sound_files = self.SOUND_FILES
 
         for name, filename in sound_files.items():
-            full_path = resource_path(get_path(os.path.join(self.sound_dir, filename)))
+            full_path = get_path(os.path.join(self.sound_dir, filename))
             if os.path.exists(full_path):
                 self.sounds[name] = pygame.mixer.Sound(full_path)
             else:
@@ -76,27 +76,27 @@ class SoundManager:
 
         # Load all strike call variants for random selection
         self.strike_sounds = []
-        strike_dir = resource_path(get_path(os.path.join(umpire_dir, "strike")))
+        strike_dir = get_path(os.path.join(umpire_dir, "strike"))
         if os.path.isdir(strike_dir):
             for f in os.listdir(strike_dir):
                 if f.endswith(".mp3"):
                     self.strike_sounds.append(pygame.mixer.Sound(os.path.join(strike_dir, f)))
 
         # Load strike 3 call
-        strike3_path = resource_path(get_path(os.path.join(umpire_dir, "strike_3", "strike_3.mp3")))
+        strike3_path = get_path(os.path.join(umpire_dir, "strike_3", "strike_3.mp3"))
         if os.path.exists(strike3_path):
             self.sounds['strike3'] = pygame.mixer.Sound(strike3_path)
 
         # Load ball call variants for random selection (excluding low-ball-specific call)
         self.ball_sounds = []
-        ball_dir = resource_path(get_path(os.path.join(umpire_dir, "ball")))
+        ball_dir = get_path(os.path.join(umpire_dir, "ball"))
         if os.path.isdir(ball_dir):
             for f in os.listdir(ball_dir):
                 if f.endswith(".mp3") and f != "no_thats_down_ball.mp3":
                     self.ball_sounds.append(pygame.mixer.Sound(os.path.join(ball_dir, f)))
 
         # Load low ball specific call
-        ball_low_path = resource_path(get_path(os.path.join(umpire_dir, "ball", "no_thats_down_ball.mp3")))
+        ball_low_path = get_path(os.path.join(umpire_dir, "ball", "no_thats_down_ball.mp3"))
         if os.path.exists(ball_low_path):
             self.sounds['ball_low'] = pygame.mixer.Sound(ball_low_path)
             

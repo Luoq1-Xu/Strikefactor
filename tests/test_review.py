@@ -404,6 +404,30 @@ def test_modal_restores_clocks_consumes_close_batch_and_does_not_reenter_state(g
     assert random.getstate() == rng
 
 
+@pytest.mark.parametrize('hidden_by_caller', [True, False])
+def test_modal_shows_the_cursor_and_restores_the_callers_choice(game, monkeypatch, hidden_by_caller):
+    """Review opens over the hit animation, which hides the cursor."""
+    panel = ReviewOverlay(game)
+    panel.trigger()
+    seen = []
+    render = panel.render
+
+    def render_frame(screen):
+        render(screen)
+        seen.append(pygame.mouse.get_visible())
+        panel.dismiss()
+
+    panel.render = render_frame
+    monkeypatch.setattr(pygame.event, 'get', lambda: [])
+    pygame.mouse.set_visible(not hidden_by_caller)
+    try:
+        run_modal(game, panel)
+        assert seen == [True]
+        assert pygame.mouse.get_visible() == (not hidden_by_caller)
+    finally:
+        pygame.mouse.set_visible(True)
+
+
 @pytest.mark.parametrize('view_name', ['zone', 'swing', 'fielding'])
 def test_modal_starts_at_zero_and_excludes_first_frame_setup_time(game, monkeypatch, view_name):
     publish(game.review_store, swing=make_record(), fielding=field_clip())
@@ -573,15 +597,23 @@ def test_abs_revises_the_same_review_pitch_including_terminal_calls(game, truth,
 
     rec = replace(publish(game.review_store), count=count)
     game.review_store.publish(rec)
-    game.pending_challenge = dict(snapshot={}, truth_strike=truth, original_call='ball' if truth else 'strike',
+    # The snapshot is taken as the call commits, so it holds the count the
+    # call was made on — which is what the corrected outcome is read from.
+    snapshot = {'game_stats': SimpleNamespace(currentballs=count[0], currentstrikes=count[1])}
+    game.pending_challenge = dict(snapshot=snapshot, truth_strike=truth, original_call='ball' if truth else 'strike',
                                   pitchtype='FF', speed_mph=99, ball_xy=(630, 485), review_id=rec.review_id)
     game.restore_for_abs = lambda snap: None
     game.dispatch_ball_call = lambda *args, **kw: None
     game.dispatch_strike_call = lambda *args, **kw: None
+    game._outcome_after_call = Game._outcome_after_call
+    game.build_ai_state = lambda: 'state from the corrected count'
     game.last_pitch_information = []
-    Game._reverse_last_call(game)
+    final = Game._reverse_last_call(game)
     assert len(game.review_store.records) == 1
     assert game.review_store.get(rec.review_id).outcome == result
+    # One value revises both the review and the DB row.
+    assert final.upper() == result
+    assert game.current_state == 'state from the corrected count'
 
 
 def test_all_old_entry_points_route_to_one_workspace(game):

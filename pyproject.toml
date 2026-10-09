@@ -41,9 +41,24 @@ dev = [
 strikefactor = "strikefactor.__main__:main"
 
 [tool.setuptools]
-# Assets, AI models and seed data live inside the package and are loaded at
-# runtime via config.get_path(), so they must ship with it.
-include-package-data = true
+# Only the resources listed under package-data ship. `include-package-data`
+# is off so a VCS plugin can never sweep in whatever else is on disk under
+# strikefactor/ — which, in a checkout that predates the data directory, is a
+# player's database, stores, archives and backups (see strikefactor/paths.py).
+include-package-data = false
+
+[tool.setuptools.package-data]
+# Read-only resources, resolved at runtime with config.get_path(). Player data
+# is written to strikefactor.paths.data_dir() and never lives here.
+strikefactor = [
+    "assets/**/*.png",
+    "assets/**/*.mp3",
+    "assets/theme.json",
+    "ai/*.pkl",                          # umpire model + seed pitch-selection AIs
+    "data/pitch_locations.json",
+    "data/pitcher_attributes.json",
+    "ui/font/*.ttf",
+]
 
 [tool.setuptools.packages.find]
 include = ["strikefactor*", "analysis*"]

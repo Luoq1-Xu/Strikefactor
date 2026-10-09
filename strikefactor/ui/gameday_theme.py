@@ -12,7 +12,7 @@ All draw helpers are plain functions taking ``screen`` + a ``fonts`` dict from
 
 import pygame
 
-from strikefactor.config import get_path, resource_path
+from strikefactor.config import get_path
 
 # --- Palette (matches BroadcastHUD) ---
 BG = (0, 0, 0)
@@ -49,7 +49,7 @@ def load_fonts() -> dict:
     whose volume genuinely had to stay per-playback.
     """
     if not _FONT_CACHE:
-        base = resource_path(get_path(_FONT_PATH))
+        base = get_path(_FONT_PATH)
         _FONT_CACHE.update({name: pygame.font.Font(base, size)
                             for name, size in _FONT_SIZES.items()})
     return _FONT_CACHE
@@ -173,6 +173,7 @@ def _draw_linescore_row(screen, fonts, team_label, runs_per_inning,
 def draw_linescore_from_arrays(screen, x, y, fonts,
                                opp_runs, plr_runs, opp_total, plr_total,
                                opp_hits=0, plr_hits=0,
+                               opp_errors=0, plr_errors=0,
                                opp_label="OPPONENT", plr_label="YOU",
                                current_inning=None,
                                screen_w=SCREEN_W, margin_x=MARGIN_X):
@@ -181,6 +182,9 @@ def draw_linescore_from_arrays(screen, x, y, fonts,
     Works for both the live manager (via get_box_score_lines) and a stored
     history row (its ``*_inning_scores`` arrays). Auto-expands for extras.
     Returns the y just below the table.
+
+    A row's E is the errors that team made in the field, so it is counted in
+    the *other* team's half-innings (``GameDayManager.error_totals``).
     """
     n_innings = len(opp_runs)
     team_w, inn_w, tot_w = linescore_column_widths(n_innings, screen_w, margin_x)
@@ -210,10 +214,10 @@ def draw_linescore_from_arrays(screen, x, y, fonts,
 
     opp_y = sep_y + 8
     _draw_linescore_row(screen, fonts, opp_label, opp_runs, opp_total,
-                        opp_hits, 0, x, opp_y, team_w, inn_w, tot_w, table_w,
-                        highlight=False)
+                        opp_hits, opp_errors, x, opp_y, team_w, inn_w, tot_w,
+                        table_w, highlight=False)
     plr_y = opp_y + row_h
     _draw_linescore_row(screen, fonts, plr_label, plr_runs, plr_total,
-                        plr_hits, 0, x, plr_y, team_w, inn_w, tot_w, table_w,
-                        highlight=True)
+                        plr_hits, plr_errors, x, plr_y, team_w, inn_w, tot_w,
+                        table_w, highlight=True)
     return plr_y + row_h

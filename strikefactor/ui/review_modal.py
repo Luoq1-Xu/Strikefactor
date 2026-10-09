@@ -21,6 +21,9 @@ def run_modal(game, overlay, *, simulation=None, background=False):
     sim = active_simulation(game, simulation)
     started = pygame.time.get_ticks()
     first_frame = True
+    # Review is pointer-driven, but it can open over the hit animation, which
+    # hides the cursor. Show it here and put back whatever the caller had.
+    cursor_was_visible = pygame.mouse.set_visible(True)
     try:
         while overlay.is_active():
             dt_ms = game.clock.tick_busy_loop(60)
@@ -55,6 +58,7 @@ def run_modal(game, overlay, *, simulation=None, background=False):
                 first_frame = False
     finally:
         overlay.dismiss()
+        pygame.mouse.set_visible(cursor_was_visible)
         paused_ms = pygame.time.get_ticks() - started
         if sim is not None and sim.running:
             anim = getattr(sim, 'hit_animation', None)

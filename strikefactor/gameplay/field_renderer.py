@@ -7,6 +7,7 @@ from datetime import datetime
 import pygame
 import pygame.gfxdraw
 
+from strikefactor import paths
 from strikefactor.utils.io import atomic_write_json
 
 # Bucket key sentinel used until the Game tells us which (mode, difficulty)
@@ -51,6 +52,10 @@ class FieldRenderer:
     )
     DATA_VERSION = '2.0'
 
+    # `strikezonedrawn` values, in the order the Z key cycles them.
+    ZONE_HIDDEN = 1
+    ZONE_OUTLINE = 2
+
     def __init__(self, screen, strikezone_rect=(565, 410, 130, 150)):
         """
         Initialize the field renderer.
@@ -61,7 +66,9 @@ class FieldRenderer:
         """
         self.screen = screen
         self.strikezone = pygame.Rect(strikezone_rect)
-        self.strikezonedrawn = 1  # 1: Hidden, 2: Outline only, 3: Grid, 4: Heatmap, 5: Heatmap with Averages
+        # 1: Hidden, 2: Outline only, 3: Grid, 4: Heatmap, 5: Heatmap with
+        # Averages. Game sets the starting mode from the show_strikezone setting.
+        self.strikezonedrawn = self.ZONE_HIDDEN
         self.show_bases = True  # Disabled in minimal HUD mode (the corner widget shows them).
 
         # Heatmap fonts are reused every frame the heatmap is active; build
@@ -80,14 +87,10 @@ class FieldRenderer:
         self._buckets[DEFAULT_BUCKET_KEY] = _fresh_bucket()
         self._bind_instance_to_active()
 
-        # Data file paths
-        self.data_file = os.path.join(os.path.dirname(__file__), '..', 'data', 'batting_stats.json')
-        self.legacy_archive_path = os.path.join(
-            os.path.dirname(__file__), '..', 'data', 'batting_stats_legacy_v1.json'
-        )
-
-        # Lap history file path
-        self.lap_history_file = os.path.join(os.path.dirname(__file__), '..', 'data', 'lap_history.json')
+        # Data file paths (the player's data directory — see strikefactor/paths.py)
+        self.data_file = paths.data_path(paths.BATTING_STATS_FILE)
+        self.legacy_archive_path = paths.data_path(paths.BATTING_STATS_LEGACY_FILE)
+        self.lap_history_file = paths.data_path(paths.LAP_HISTORY_FILE)
         self.lap_start_time = datetime.now()
 
         # Load existing data if available
@@ -334,6 +337,15 @@ class FieldRenderer:
         - Catcher's interference
         """
         self.total_at_bats += 1
+
+    def record_sacrifice_fly(self):
+        """
+        Record a sacrifice fly in place of the at-bat.
+
+        Not an at-bat, so it leaves AVG and SLG alone, but it is a plate
+        appearance the batter did not reach base in, so it counts against OBP.
+        """
+        self.total_sacrifice_flies += 1
 
     def get_hit_rate(self, segment):
         """Get the hit rate for a segment (hits/attempts)."""
@@ -692,8 +704,11 @@ class FieldRenderer:
         # Load existing lap history
         lap_history = self.load_lap_history()
 
-        # Determine lap number
-        lap_number = len(lap_history.get('laps', [])) + 1
+        # One past the newest lap's own number, not the list's length: the
+        # history is trimmed to MAX_LAP_HISTORY, after which a length-based
+        # number stuck at 101 forever.
+        laps = lap_history.get('laps', [])
+        lap_number = (laps[-1].get('lap_number', len(laps)) + 1) if laps else 1
 
         # Create lap entry — tag with the bucket so per-(mode, difficulty)
         # laps don't get mixed in side-by-side comparisons.
@@ -737,14 +752,15 @@ class FieldRenderer:
         # Save lap history
         self.save_lap_history(lap_history)
 
+        # Reported before the reset below zeroes the totals it reads.
+        print(f"✓ Lap {lap_number} created [{self._active_key}]: "
+              f"BA {batting_avg:.3f}, {self.total_hits} hits in {self.total_at_bats} ABs")
+
         # Reset current stats (using existing method)
         self.reset_heatmap_data()
 
         # Reset lap timer
         self.lap_start_time = datetime.now()
-
-        print(f"✓ Lap {lap_number} created [{self._active_key}]: "
-              f"BA {batting_avg:.3f}, {self.total_hits} hits in {self.total_at_bats} ABs")
 
         return lap_entry
 

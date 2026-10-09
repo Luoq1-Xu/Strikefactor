@@ -211,3 +211,37 @@ def test_wall_rebound_does_not_invent_a_bounce_before_the_ball_lands():
     # initialization of ground motion must not manufacture a grass bounce.
     assert not any(e.label == "BOUNCE" for e in recorder.record.events)
     assert recorder.record.sample(wall.time_ms).ball_visible
+
+
+def test_the_cursor_is_hidden_over_the_play_and_back_when_the_pitch_ends(monkeypatch):
+    """The aiming reticle has nothing to aim at while the ball is fielded."""
+    from strikefactor.gameplay.pitch_simulation import PitchSimulation
+
+    pygame.font.init()
+    anim, _ = play()
+    anim.on_complete = lambda: None
+    game = GameStub()
+    game.screen = pygame.Surface((1280, 720))
+    game._fielding_play_number = 0
+    game.last_fielding_play = None
+    game.ui_manager = SimpleNamespace(update=lambda dt: None, draw=lambda: None,
+                                      hide_banner=lambda: None,
+                                      set_button_visibility=lambda state: None)
+    game.flip_display = lambda: None
+    sim = object.__new__(PitchSimulation)
+    sim.game, sim.hit_animation, sim._fielding_recorder = game, anim, None
+    sim.pitchtype, sim.speed_mph = "FF", 93.0
+    sim._publish_review = lambda: None
+    monkeypatch.setattr(pygame.event, "get", lambda: [])
+    pygame.mouse.set_visible(True)
+    seen = []
+
+    def first_frame_then_quit():
+        sim._handle_hit_animation_phase(anim.start_time + anim._elapsed, 0.016)
+        seen.append(pygame.mouse.get_visible())
+        sim.running = False  # the window closed mid-play, not Continue
+
+    sim.update, sim.running = first_frame_then_quit, True
+    PitchSimulation.run(sim)
+    assert seen == [False]
+    assert pygame.mouse.get_visible()

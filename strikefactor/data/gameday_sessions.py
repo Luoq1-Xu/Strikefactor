@@ -13,9 +13,10 @@ import json
 import os
 from datetime import datetime
 
+from strikefactor import paths
 from strikefactor.utils.io import atomic_write_json
 
-SESSIONS_FILE = os.path.join(os.path.dirname(__file__), 'gameday_sessions.json')
+SESSIONS_FILE = paths.data_path(paths.GAMEDAY_SESSIONS_FILE)
 
 # Cap the number of resumable sessions kept on disk. Once exceeded, the
 # oldest-saved entries drop off the tail (the list is most-recent-first).
@@ -54,7 +55,8 @@ def get_session(session_id: str):
     return None
 
 
-def build_record(manager, phase: str, db_game_id: str = None) -> dict:
+def build_record(manager, phase: str, db_game_id: str = None,
+                 challenges_remaining: dict[str, int] | None = None) -> dict:
     """Build a session record from a live GameDayManager + transition phase.
 
     Metadata fields are denormalized copies of manager state so the resume list
@@ -65,6 +67,11 @@ def build_record(manager, phase: str, db_game_id: str = None) -> dict:
     its pitches to the same row. Without it a resumed game logs under a second
     game_id, splitting one logical game in two — the first half then has no
     final score, so its runs go unattributable in the pitching line.
+
+    ``challenges_remaining`` starts at this half-inning boundary and is then
+    updated whenever a challenge is spent. Gameplay still resumes from the
+    boundary if the player quits mid-inning, but a spent challenge stays spent.
+    Older records without this field resume with the default allotment.
     """
     return {
         'session_id': manager.session_uuid,
@@ -77,6 +84,7 @@ def build_record(manager, phase: str, db_game_id: str = None) -> dict:
         'opponent_score': manager.opponent_score,
         'phase': phase,
         'db_game_id': db_game_id,
+        'challenges_remaining': challenges_remaining,
         'state': manager.to_dict(),
     }
 
@@ -95,6 +103,22 @@ def upsert_session(record: dict) -> None:
     data['sessions'] = sessions[:MAX_SESSIONS]
     data['last_updated'] = datetime.now().isoformat()
     atomic_write_json(SESSIONS_FILE, data)
+
+
+def update_challenges_remaining(session_id: str, counts: dict[str, int]) -> None:
+    """Persist a spent challenge without replacing the boundary game state.
+
+    A quit during a batting half resumes play from the last saved boundary.
+    Keeping the challenge balance current prevents that replay from restoring
+    challenges already spent. No-op if the session was already cleared.
+    """
+    data = _load()
+    for session in data.get('sessions', []):
+        if session.get('session_id') == session_id:
+            session['challenges_remaining'] = dict(counts)
+            data['last_updated'] = datetime.now().isoformat()
+            atomic_write_json(SESSIONS_FILE, data)
+            return
 
 
 def remove_session(session_id: str) -> None:

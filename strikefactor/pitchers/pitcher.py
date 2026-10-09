@@ -201,6 +201,9 @@ class Pitcher:
         self.outs = 0
         self.era = 0
         self.runs = 0
+        # Runs less the ones an error let in (`ScoreKeeper.earned`). ERA is
+        # computed from these, not from `runs`.
+        self.earned_runs = 0
         self.hits_allowed = 0
         self.strikeouts = 0
         self.walks = 0
@@ -235,7 +238,7 @@ class Pitcher:
     def recalculate_era(self):
         if not self.outs:
             return
-        era = 9 * (self.runs / (self.outs / 3))
+        era = 9 * (self.earned_runs / (self.outs / 3))
         return era
 
     def update_stats(self, input_dict):
@@ -243,6 +246,8 @@ class Pitcher:
             self.outs += input_dict['outs']
         if 'runs' in input_dict:
             self.runs += input_dict['runs']
+        if 'earned_runs' in input_dict:
+            self.earned_runs += input_dict['earned_runs']
         if 'strikeouts' in input_dict:
             self.strikeouts += input_dict['strikeouts']
         if 'walks' in input_dict:
@@ -400,7 +405,7 @@ class Pitcher:
         print("║  " + colorize("PITCHING LINE", Colors.CYAN) + " " * (BOX_WIDTH - 15) + "║")
 
         # Column headers
-        headers = f"  {'IP':<8}{'ERA':<8}{'WHIP':<8}{'K':<8}{'BB':<8}{'H':<8}{'R':<8}{'HR':<8}"
+        headers = f"  {'IP':<7}{'ERA':<7}{'WHIP':<7}{'K':<7}{'BB':<7}{'H':<7}{'R':<7}{'ER':<7}{'HR':<7}"
         print("║" + headers + " " * (BOX_WIDTH - len(headers)) + "║")
 
         # Values with colors
@@ -408,8 +413,8 @@ class Pitcher:
         whip_colored = colorize(whip_str, self._get_whip_color(whip))
 
         # For colored values, we need to account for ANSI codes in padding
-        values_plain = f"  {ip_str:<8}{era_str:<8}{whip_str:<8}{self.strikeouts:<8}{self.walks:<8}{self.hits_allowed:<8}{self.runs:<8}{self.basic_stats['home_runs_allowed']:<8}"
-        values_display = f"  {ip_str:<8}{era_colored}{' ' * (8 - len(era_str))}{whip_colored}{' ' * (8 - len(whip_str))}{self.strikeouts:<8}{self.walks:<8}{self.hits_allowed:<8}{self.runs:<8}{self.basic_stats['home_runs_allowed']:<8}"
+        values_plain = f"  {ip_str:<7}{era_str:<7}{whip_str:<7}{self.strikeouts:<7}{self.walks:<7}{self.hits_allowed:<7}{self.runs:<7}{self.earned_runs:<7}{self.basic_stats['home_runs_allowed']:<7}"
+        values_display = f"  {ip_str:<7}{era_colored}{' ' * (7 - len(era_str))}{whip_colored}{' ' * (7 - len(whip_str))}{self.strikeouts:<7}{self.walks:<7}{self.hits_allowed:<7}{self.runs:<7}{self.earned_runs:<7}{self.basic_stats['home_runs_allowed']:<7}"
         print("║" + values_display + " " * (BOX_WIDTH - len(values_plain)) + "║")
 
         print("╠" + "═" * BOX_WIDTH + "╣")

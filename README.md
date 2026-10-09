@@ -21,6 +21,20 @@ Without uv: `pip install -e .` then `python -m strikefactor` (Python 3.12+).
 `python strikefactor/main.py` does not work: `strikefactor` is a package and
 must be launched as one.
 
+### Where your data lives
+Settings, key bindings, the pitchers' trained AIs, the pitch database and your
+stats and GameDay history are kept in a per-user data directory, never in the
+repository:
+
+- macOS: `~/Library/Application Support/StrikeFactor`
+- Windows: `%APPDATA%\StrikeFactor`
+- Linux: `$XDG_DATA_HOME/strikefactor` (usually `~/.local/share/strikefactor`)
+
+Set `STRIKEFACTOR_DATA_DIR` to keep it somewhere else. The game prints the
+directory it is using at startup. Data saved by older versions inside
+`strikefactor/` is copied over automatically the first time you launch; the
+originals are left where they were.
+
 ### How to Play
 1. **Choose your mode** - Select Arcade or Sandbox from the main menu
 2. **Choose your opponent** - Select which pitcher you want to face
@@ -191,7 +205,7 @@ Every pitch is recorded to a SQLite database (`strikefactor.db`) with:
 ### Statistics Tracking
 - Hit location heatmap (9-segment strikezone breakdown)
 - Batting average by zone
-- Career statistics saved to `batting_stats.json` (cumulative all-time stats)
+- Career statistics saved to `batting_stats.json` in your data directory (cumulative all-time stats)
 - Triple slash line (BA/OBP/SLG) and OPS
 - In-game stats: hits, walks, strikeouts, runs
 

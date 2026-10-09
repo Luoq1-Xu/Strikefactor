@@ -1,6 +1,6 @@
 import pygame
 
-from strikefactor.config import get_path, resource_path
+from strikefactor.config import get_path
 
 
 class Batter:
@@ -19,7 +19,7 @@ class Batter:
         counter = 1
         storage = []
         while counter <= number:
-            storage.append(pygame.image.load(resource_path(f'{name}{counter}.png')).convert_alpha())
+            storage.append(pygame.image.load(f'{name}{counter}.png').convert_alpha())
             counter += 1
         return storage
         

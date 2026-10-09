@@ -16,7 +16,6 @@ from strikefactor.ui.ui_manager import UIManager
 VISIBILITY_STATES = [
     'in_game',
     'pitching',
-    'view_pitches',
     'main_menu',
     'visualise',
     'summary',
@@ -33,7 +32,6 @@ VISIBILITY_STATES = [
     'gameday_history_detail',
     'sandbox_menu',
     'sandbox_gameplay',
-    'sandbox_view_pitches',
 ]
 
 
@@ -95,8 +93,8 @@ def test_one_review_entry_and_results_use_footer_not_sidebar(ui, state):
     ui.set_button_visibility(state, force_show=True)
     review = ui.buttons['view_pitches']
     assert review.visible and review.text == 'REVIEW'
-    assert not ui.buttons['visualise'].visible
-    assert not ui.buttons['fielding_replay'].visible
+    assert 'visualise' not in ui.buttons
+    assert 'fielding_replay' not in ui.buttons
     if state not in ('in_game', 'sandbox_gameplay'):
         assert review.rect.y >= 600
     ui.set_button_visibility('in_game', force_show=True)
@@ -107,3 +105,24 @@ def test_one_review_entry_and_results_use_footer_not_sidebar(ui, state):
 def test_inning_end_and_summary_have_no_review_button(ui, state):
     ui.set_button_visibility(state, force_show=True)
     assert not ui.buttons['view_pitches'].visible
+
+
+class _HudSettings:
+    def __init__(self, mode):
+        self.mode = mode
+
+    def get_hud_mode(self):
+        return self.mode
+
+
+@pytest.mark.parametrize('mode, shown', [('legacy', True),
+                                         ('broadcast', False),
+                                         ('minimal', False)])
+def test_in_game_review_button_follows_the_hud_mode(ui, mode, shown):
+    """REVIEW sits in the side panel, which only the legacy HUD draws."""
+    ui.set_settings_manager(_HudSettings(mode))
+    try:
+        ui.set_button_visibility('in_game', force_show=True)
+        assert ui.buttons['view_pitches'].visible == shown
+    finally:
+        ui.set_settings_manager(None)

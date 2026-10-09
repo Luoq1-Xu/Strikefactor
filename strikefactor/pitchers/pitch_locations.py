@@ -15,9 +15,10 @@ Lookup order for (pitcher, pitch type, platoon):
 """
 
 import json
-import os
 
-_PATH = os.path.join(os.path.dirname(__file__), '..', 'data', 'pitch_locations.json')
+from strikefactor.config import get_path
+
+_PATH = get_path('data/pitch_locations.json')
 
 # In the column order of Pitcher.INTENT_TABLE.
 INTENTS = ('zone', 'edge', 'chase', 'waste')

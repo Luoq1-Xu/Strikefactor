@@ -18,7 +18,6 @@ from .game_states import (
     SandboxGameplayState,
     SandboxMenuState,
     SummaryState,
-    ViewPitchesState,
     VisualizationState,
 )
 
@@ -45,7 +44,6 @@ class GameStateManager:
             'gameplay': GameplayState(self.game),
             'summary': SummaryState(self.game),
             'visualization': VisualizationState(self.game),
-            'view_pitches': ViewPitchesState(self.game),
             'inning_end': InningEndState(self.game),
             'gameday': GameDayState(self.game),
             'gameday_transition': GameDayTransitionState(self.game),
@@ -100,8 +98,6 @@ class GameStateManager:
             self.change_state('summary')
         elif menu_state_value == 'visualise':
             self.change_state('visualization')
-        elif menu_state_value == 'view_pitches':
-            self.change_state('view_pitches')
         elif menu_state_value == 'inning_end':
             self.change_state('inning_end')
         elif isinstance(menu_state_value, str) and menu_state_value in ['Sale', 'Degrom', 'Yamamoto', 'Sasaki', 'Experimental']:

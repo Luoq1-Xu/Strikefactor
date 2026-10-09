@@ -1,5 +1,4 @@
 import os
-import sys
 
 # Paths
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -32,16 +31,12 @@ ZONE_CENTER_Y = 485
 # pitchers available across GameDay / Sandbox / random scenarios.
 ALL_PITCHERS = ['sale', 'degrom', 'yamamoto', 'sasaki', 'mcclanahan']
 
-# File paths
 def get_path(orig_path):
+    """A read-only resource shipped inside the package (assets, seed AIs,
+    pitch tables). Anything the game *writes* belongs in the player's data
+    directory instead — see `strikefactor.paths`.
+
+    Package-relative, which also resolves inside a PyInstaller bundle: the
+    package is unpacked under `sys._MEIPASS` with this file in it.
+    """
     return os.path.join(SCRIPT_DIR, orig_path)
-
-#Setup for Conversion into EXE
-def resource_path(relative_path):
-    try:
-    # PyInstaller creates a temp folder and stores path in _MEIPASS
-        base_path = sys._MEIPASS
-    except Exception:
-        base_path = os.path.abspath(".")
-
-    return os.path.join(base_path, relative_path)

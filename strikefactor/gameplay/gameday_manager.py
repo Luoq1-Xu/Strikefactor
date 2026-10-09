@@ -13,17 +13,33 @@ from typing import Dict, List, Optional, Tuple
 # Single source of truth for the pitcher roster lives in config; re-exported
 # here so existing `from gameplay.gameday_manager import ALL_PITCHERS` imports
 # keep working.
-from strikefactor.config import ALL_PITCHERS
+from strikefactor import outcomes, paths
+from strikefactor.config import ALL_PITCHERS, get_path
 from strikefactor.helpers import ScoreKeeper
 from strikefactor.utils.io import atomic_write_json
+
+# GameDay's plate-appearance vocabulary: the shared outcome groups in the
+# upper-case spelling the event log, the history file and the opponent table
+# all use ('STRIKEOUT', 'WALK', 'POP UP'). Composed from `strikefactor.outcomes`
+# rather than listed, the same way `GameDayTransitionState` does it — these
+# were five hand-written lists that never learned about REACHED ON ERROR, and
+# that it happened to fall through every one of them correctly was luck.
+_HIT_RESULTS = tuple(o.upper() for o in outcomes.HIT_OUTCOMES)
+_OUT_RESULTS = tuple(o.upper() for o in outcomes.OUT_OUTCOMES)
+_REACH_RESULTS = tuple(o.upper() for o in outcomes.REACH_OUTCOMES)
+# Compared through `db_key`, because a play log read back from the pitch
+# database or an older history file does not share the event log's spelling.
+_REACH_KEYS = frozenset(outcomes.db_key(o) for o in outcomes.REACH_OUTCOMES)
+_STRIKEOUT = outcomes.STRIKEOUT.upper()
+_WALK = outcomes.WALK.upper()
+_HOME_RUN = outcomes.HOME_RUN
 
 # --- Player-team pitcher attributes (roles, caps, quality multipliers) ---
 # Loaded from data/pitcher_attributes.json so designers can tune without
 # editing code. Each entry shapes the simulation in three ways:
 #   role / max_pitches / max_ip → bullpen management & hook timing
 #   k_mult / bb_mult / hit_mult → per-pitcher outcome distribution
-_ATTRS_PATH = os.path.join(os.path.dirname(__file__), '..', 'data',
-                           'pitcher_attributes.json')
+_ATTRS_PATH = get_path(os.path.join('data', 'pitcher_attributes.json'))
 
 NEUTRAL_ATTRS = {
     "role": "MIDDLE",
@@ -65,13 +81,22 @@ class GameEvent:
     """Represents a single game event (at-bat result)."""
 
     def __init__(self, inning: int, is_top: bool, batter_name: str,
-                 pitcher_name: str, result: str, runs_scored: int = 0):
+                 pitcher_name: str, result: str, runs_scored: int = 0,
+                 rbi: Optional[int] = None, sacrifice_fly: bool = False):
         self.inning = inning
         self.is_top = is_top  # Top = opponent batting, Bottom = player batting
         self.batter_name = batter_name
         self.pitcher_name = pitcher_name
         self.result = result  # "SINGLE", "DOUBLE", "STRIKEOUT", "GROUNDOUT", etc.
         self.runs_scored = runs_scored
+        # The batter's line for the play, as the scorer ruled it
+        # (`helpers.Play`). Runs batted in are not the runs that scored: a
+        # run an error let in is nobody's RBI (Rule 9.04). Left as None they
+        # are the runs, which is what every event recorded before the scorer
+        # ruled on it meant.
+        self.rbi = runs_scored if rbi is None else rbi
+        # A plate appearance but not an at-bat (Rule 9.02(a)(1)).
+        self.sacrifice_fly = sacrifice_fly
 
     def __str__(self):
         half = "Top" if self.is_top else "Bot"
@@ -90,6 +115,8 @@ class GameEvent:
             'pitcher_name': self.pitcher_name,
             'result': self.result,
             'runs_scored': self.runs_scored,
+            'rbi': self.rbi,
+            'sacrifice_fly': self.sacrifice_fly,
         }
 
     @classmethod
@@ -101,6 +128,8 @@ class GameEvent:
             pitcher_name=d['pitcher_name'],
             result=d['result'],
             runs_scored=d.get('runs_scored', 0),
+            rbi=d.get('rbi'),
+            sacrifice_fly=d.get('sacrifice_fly', False),
         )
 
 
@@ -113,6 +142,9 @@ class PitcherStats:
         self.outs_recorded = 0
         self.hits_allowed = 0
         self.runs_allowed = 0
+        # The runs that are his own doing: `runs_allowed` less the ones an
+        # error let in (Rule 9.16). ERA is computed from this one.
+        self.earned_runs = 0
         self.strikeouts = 0
         self.walks = 0
         self.home_runs_allowed = 0
@@ -160,23 +192,43 @@ class PitcherStats:
         """Increment pitch count."""
         self.pitch_count += 1
 
-    def record_outcome(self, outcome: str, runs: int = 0):
-        """Record the result of an at-bat."""
-        if outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP UP']:
+    def record_outcome(self, outcome: str):
+        """Record the result of an at-bat.
+
+        Runs are not part of it. They are charged by `charge_runs`, to the
+        pitcher who put the runner on, and that is not always the pitcher who
+        faced this batter.
+        """
+        if outcome in _OUT_RESULTS:
             self.outs_recorded += 1
-            if outcome == 'STRIKEOUT':
+            if outcome == _STRIKEOUT:
                 self.strikeouts += 1
             self.consecutive_hits = 0
-        elif outcome in ['SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN']:
+        elif outcome in _HIT_RESULTS:
             self.hits_allowed += 1
             self.consecutive_hits += 1
-            if outcome == 'HOME RUN':
+            if outcome == _HOME_RUN:
                 self.home_runs_allowed += 1
-        elif outcome == 'WALK':
+        elif outcome == _WALK:
             self.walks += 1
             # Walk doesn't reset consecutive hits (still in trouble)
+        elif outcome in _REACH_RESULTS:
+            # Neither an out nor a hit allowed, and the pitcher is still in
+            # the same trouble a walk leaves him in — so, like a walk, it
+            # leaves the run of hits against him alone. Stated rather than
+            # left to fall through, so the next outcome to join a group is a
+            # decision here and not an accident.
+            pass
 
+    def charge_runs(self, runs: int, earned: int):
+        """Charge runs to this pitcher's line, `earned` of them earned.
+
+        `earned` is its own count, not a share of `runs`: the scorer can rule
+        a run earned on a later play than the one it scored on
+        (`ScoreKeeper._settle`).
+        """
         self.runs_allowed += runs
+        self.earned_runs += earned
 
     def get_innings_pitched(self) -> float:
         """Calculate innings pitched (true decimal, for internal logic)."""
@@ -192,8 +244,8 @@ class PitcherStats:
     # straight attribute copy. Keyed by this tuple so to_dict/from_dict stay in
     # sync if a field is added.
     _SERIAL_FIELDS = ('name', 'pitch_count', 'outs_recorded', 'hits_allowed',
-                      'runs_allowed', 'strikeouts', 'walks', 'home_runs_allowed',
-                      'consecutive_hits', 'is_active')
+                      'runs_allowed', 'earned_runs', 'strikeouts', 'walks',
+                      'home_runs_allowed', 'consecutive_hits', 'is_active')
 
     def to_dict(self) -> dict:
         return {f: getattr(self, f) for f in self._SERIAL_FIELDS}
@@ -204,13 +256,17 @@ class PitcherStats:
         for f in cls._SERIAL_FIELDS:
             if f in d:
                 setattr(stats, f, d[f])
+        # A session saved before earned runs were kept apart. Every run was
+        # charged as earned then, so that is what its line still says.
+        if 'earned_runs' not in d:
+            stats.earned_runs = stats.runs_allowed
         return stats
 
 
 class GameDayManager:
     """Manages a full 9-inning baseball game."""
 
-    HISTORY_FILE = os.path.join(os.path.dirname(__file__), '..', 'data', 'gameday_history.json')
+    HISTORY_FILE = paths.data_path(paths.GAMEDAY_HISTORY_FILE)
 
     # Base outcome probabilities for opponent simulation
     BASE_OPPONENT_OUTCOMES = {
@@ -329,20 +385,20 @@ class GameDayManager:
 
         # Per-pitcher quality: applied first so it stacks multiplicatively
         # with difficulty and situational modifiers.
-        for key in ('SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN'):
+        for key in _HIT_RESULTS:
             probs[key] *= attrs.get('hit_mult', 1.0)
-        probs['WALK'] *= attrs.get('bb_mult', 1.0)
-        probs['STRIKEOUT'] *= attrs.get('k_mult', 1.0)
+        probs[_WALK] *= attrs.get('bb_mult', 1.0)
+        probs[_STRIKEOUT] *= attrs.get('k_mult', 1.0)
 
         # Apply difficulty modifiers
-        for key in ['SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN']:
+        for key in _HIT_RESULTS:
             probs[key] *= mods['hit_mult']
-        probs['WALK'] *= mods['walk_mult']
-        probs['STRIKEOUT'] *= mods['k_mult']
+        probs[_WALK] *= mods['walk_mult']
+        probs[_STRIKEOUT] *= mods['k_mult']
 
         # Apply situational boost (fatigue + momentum + clutch)
         if extra_hit_boost > 0:
-            for key in ['SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN']:
+            for key in _HIT_RESULTS:
                 probs[key] *= (1.0 + extra_hit_boost)
 
         # Renormalize to sum to 1.0
@@ -714,67 +770,65 @@ class GameDayManager:
 
         # Choose outcome based on adjusted probabilities
         probs = self._get_adjusted_probabilities(extra_hit_boost=total_boost)
-        outcomes = list(probs.keys())
+        results = list(probs.keys())
         probabilities = list(probs.values())
-        outcome = random.choices(outcomes, weights=probabilities, k=1)[0]
+        outcome = random.choices(results, weights=probabilities, k=1)[0]
 
         # Track PLAYER'S pitcher stats (opponent is batting against player's pitcher)
         pitcher_stats = self.get_active_player_pitcher_stats()
         # Simulate pitches per at-bat (weighted toward realistic counts)
         # Strikeouts/walks tend to have more pitches; outs in play fewer
-        if outcome == 'STRIKEOUT':
+        if outcome == _STRIKEOUT:
             pitches_thrown = random.choices([3, 4, 5, 6], weights=[15, 30, 35, 20], k=1)[0]
-        elif outcome == 'WALK':
+        elif outcome == _WALK:
             pitches_thrown = random.choices([4, 5, 6, 7], weights=[10, 30, 40, 20], k=1)[0]
         else:
             pitches_thrown = random.choices([1, 2, 3, 4, 5], weights=[5, 15, 35, 30, 15], k=1)[0]
         for _ in range(pitches_thrown):
             pitcher_stats.record_pitch()
 
-        # Process the outcome
-        runs_scored = 0
+        # Process the outcome. The scorekeeper is told who is pitching before
+        # every batter, so a runner belongs to the arm who put him on: when
+        # he scores off a reliever the run goes on the line of the pitcher
+        # who left him there (Rule 9.16(g)), not on the reliever's.
+        scorer = self.opponent_scorekeeper
+        scorer.set_pitcher(self.current_player_pitcher_name)
+        outs_before = self.current_outs
+        before_score = scorer.get_score()
+        play = None
 
-        if outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP UP']:
+        if outcome in _OUT_RESULTS:
             self.current_outs += 1
-            if outcome == 'STRIKEOUT':
-                pitcher_stats.record_outcome(outcome)
-            else:
-                before_score = self.opponent_scorekeeper.get_score()
-                suppress_advancement = self.current_outs >= 3
-                self.opponent_scorekeeper.update_hit_event(
-                    outcome,
-                    suppress_out_advancement=suppress_advancement,
-                )
-                runs_scored = self.opponent_scorekeeper.get_score() - before_score
-                self.opponent_score += runs_scored  # Add to cumulative score
-                self._current_half_runs += runs_scored
-                pitcher_stats.record_outcome(outcome, runs_scored)
+            if outcome != _STRIKEOUT:
+                scorer.update_hit_event(outcome, outs=outs_before)
+                play = scorer.last_play
             self._consecutive_hits = 0
 
-        elif outcome == 'WALK':
-            before_score = self.opponent_scorekeeper.get_score()
-            self.opponent_scorekeeper.update_walk_event()
-            runs_scored = self.opponent_scorekeeper.get_score() - before_score
-            self.opponent_score += runs_scored  # Add to cumulative score
-            self._current_half_runs += runs_scored
-            pitcher_stats.record_outcome(outcome, runs_scored)
+        elif outcome == _WALK:
+            scorer.update_walk_event(outs=outs_before)
+            play = scorer.last_play
             # Walk doesn't reset or add to consecutive hits
 
-        elif outcome in ['SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN']:
-            before_score = self.opponent_scorekeeper.get_score()
-            self.opponent_scorekeeper.update_hit_event(outcome)
-            runs_scored = self.opponent_scorekeeper.get_score() - before_score
-            self.opponent_score += runs_scored  # Add to cumulative score
-            self._current_half_runs += runs_scored
-            pitcher_stats.record_outcome(outcome, runs_scored)
+        elif outcome in _HIT_RESULTS:
+            scorer.update_hit_event(outcome, outs=outs_before)
+            play = scorer.last_play
             self._consecutive_hits += 1
+
+        runs_scored = scorer.get_score() - before_score
+        self.opponent_score += runs_scored  # Add to cumulative score
+        self._current_half_runs += runs_scored
+        pitcher_stats.record_outcome(outcome)
+        self._charge_runs(self.player_pitcher_stats, pitcher_stats,
+                          scorer.take_charges())
 
         # Log the event (with player's pitcher name)
         batter_name = self.get_current_batter_name()
         event = GameEvent(
             self.current_inning, self.is_top_inning,
             batter_name, self.current_player_pitcher_name,
-            outcome, runs_scored
+            outcome, runs_scored,
+            rbi=play.rbi if play else 0,
+            sacrifice_fly=bool(play and play.sacrifice_fly),
         )
         self.event_log.append(event)
 
@@ -783,7 +837,8 @@ class GameDayManager:
 
         return outcome, runs_scored
 
-    def record_player_at_bat(self, outcome: str, runs_scored: int = 0, pitches_thrown: int = 0):
+    def record_player_at_bat(self, outcome: str, runs_scored: int = 0,
+                             pitches_thrown: int = 0, play=None, charges=None):
         """
         Record a player's at-bat result.
 
@@ -791,6 +846,13 @@ class GameDayManager:
             outcome: The result (e.g., "SINGLE", "STRIKEOUT", etc.)
             runs_scored: Number of runs scored on this play
             pitches_thrown: Number of pitches thrown during this at-bat
+            play: The scorer's ruling on the play (`ScoreKeeper.last_play`):
+                runs batted in, and whether it was a sacrifice fly. None when
+                the play never reached the scorekeeper, as a strikeout does
+                not.
+            charges: Whose runs these are and which are earned
+                (`ScoreKeeper.take_charges()`). None charges every run as
+                earned, to the pitcher on the mound.
         """
         # Update opponent pitcher stats (player is batting against opponent pitcher)
         pitcher_stats = self.get_active_pitcher_stats()
@@ -799,13 +861,18 @@ class GameDayManager:
         for _ in range(pitches_thrown):
             pitcher_stats.record_pitch()
 
-        pitcher_stats.record_outcome(outcome, runs_scored)
+        pitcher_stats.record_outcome(outcome)
+        if charges is None:
+            charges = [(None, runs_scored, runs_scored)]
+        self._charge_runs(self.opponent_pitcher_stats, pitcher_stats, charges)
 
         # Log the event with actual pitcher name
         event = GameEvent(
             self.current_inning, self.is_top_inning,
             self.player_name, self.current_pitcher_name,
-            outcome, runs_scored
+            outcome, runs_scored,
+            rbi=play.rbi if play else None,
+            sacrifice_fly=bool(play and play.sacrifice_fly),
         )
         self.event_log.append(event)
 
@@ -814,16 +881,30 @@ class GameDayManager:
         self.player_score += runs_scored
         self._current_half_runs += runs_scored
 
-        # Track player momentum
-        if outcome in ['SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN']:
+        # Track player momentum. The streak is consecutive *hits*, so it is
+        # the same rule as a consecutive-hits record: a walk leaves it alone,
+        # and anything else that is not a hit ends it — including reaching on
+        # an error, which is an at-bat the batter did not get a hit in.
+        if outcome in _HIT_RESULTS:
             self.player_consecutive_hits += 1
-        elif outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP UP']:
+        elif outcome in _OUT_RESULTS or outcome in _REACH_RESULTS:
             self.player_consecutive_hits = 0
-        # WALK doesn't reset streak
 
         # Check for outs
-        if outcome in ['STRIKEOUT', 'FLYOUT', 'GROUNDOUT', 'LINEOUT', 'POP UP']:
+        if outcome in _OUT_RESULTS:
             self.current_outs += 1
+
+    @staticmethod
+    def _charge_runs(staff: Dict[str, PitcherStats], on_mound: PitcherStats,
+                     charges):
+        """Put the scorer's charges on the lines of the pitchers they belong to.
+
+        `charges` is `ScoreKeeper.take_charges()`: `(pitcher, runs, earned)`,
+        keyed by whoever the scorekeeper was told was pitching when the runner
+        reached. A name it was never given is the pitcher on the mound.
+        """
+        for pitcher, runs, earned in charges:
+            staff.get(pitcher, on_mound).charge_runs(runs, earned)
 
     def check_walkoff(self) -> bool:
         """Check if a walk-off condition is met.
@@ -1011,13 +1092,37 @@ class GameDayManager:
         player_hits = 0
         opponent_hits = 0
         for event in self.event_log:
-            if event.result not in ('SINGLE', 'DOUBLE', 'TRIPLE', 'HOME RUN'):
+            if event.result not in _HIT_RESULTS:
                 continue
             if event.is_top:
                 opponent_hits += 1
             else:
                 player_hits += 1
         return player_hits, opponent_hits
+
+    @staticmethod
+    def error_totals(plays) -> Tuple[int, int]:
+        """Return (player_errors, opponent_errors) from `(result, is_top)` plays.
+
+        An error belongs to the team in the field, so the opponent's are the
+        ones made while the player batted (the bottom halves) and the
+        player's are the ones made in the top halves. Every REACHED ON ERROR
+        is exactly one error: `HitAnimation._charge_error` charges one
+        fielder, and nothing else in the game is scored as an error.
+
+        Takes pairs rather than events because the linescore is drawn from
+        two shapes of play log: `GameEvent`s for the live game and stored
+        dicts for a finished one.
+        """
+        player_errors = opponent_errors = 0
+        for result, is_top in plays:
+            if outcomes.db_key(result) not in _REACH_KEYS:
+                continue
+            if is_top:
+                player_errors += 1
+            else:
+                opponent_errors += 1
+        return player_errors, opponent_errors
 
     @staticmethod
     def _empty_history() -> dict:

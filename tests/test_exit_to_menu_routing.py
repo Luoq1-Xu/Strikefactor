@@ -38,11 +38,10 @@ def test_sandbox_gameplay_escapes_to_sandbox_menu():
 
 
 def test_sandbox_side_screens_escape_to_sandbox_menu():
-    """view-pitches/visualization keep `current_gamemode` on sandbox."""
-    for state_name in ('view_pitches', 'visualization'):
-        g = _StubGame('sandbox_gameplay', state_name)
-        g.exit_to_menu()
-        assert g.went == 'sandbox_menu', state_name
+    """The visualization screen keeps `current_gamemode` on sandbox."""
+    g = _StubGame('sandbox_gameplay', 'visualization')
+    g.exit_to_menu()
+    assert g.went == 'sandbox_menu'
 
 
 def test_arcade_gameplay_escapes_to_arcade_menu():

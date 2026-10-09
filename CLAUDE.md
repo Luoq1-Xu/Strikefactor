@@ -26,9 +26,14 @@ uv run python pitch_analysis.py       # offline analysis (see Analysis package)
 - **Dependencies.** Declared in pyproject.toml: `[project.dependencies]` for runtime, `[dependency-groups] dev` for pytest, xdist and ruff. `uv.lock` pins exact versions and is committed; change dependencies with `uv add` / `uv remove` / `uv lock --upgrade-package X`, never by hand. `.python-version` pins 3.12. The pip fallback is `pip install -e . --group dev` (pip ≥ 25.1).
 - **scikit-learn is pinned (`~=1.4.2`) to the release `ai_umpire.pkl` was pickled with.** Unpickling under any other version raises `InconsistentVersionWarning`. Re-save the pickle before you move the pin.
 - **Package layout.** `strikefactor` is a package whose modules import each other as `strikefactor.<module>`, so the repository root must be on `sys.path`; the editable install handles that. Running `python strikefactor/main.py` directly does not work.
-- **Launching the game writes data.** On shutdown it re-saves the `ai/*_ai.pkl` Q-tables and `data/batting_stats.json`. Don't launch it to smoke-test a change unless you mean to touch those files.
+- **Player data lives outside the repository** (strikefactor/paths.py). Everything the game writes goes to `paths.data_dir()`: `$STRIKEFACTOR_DATA_DIR` if it is set, otherwise the per-user app-data directory (`~/Library/Application Support/StrikeFactor` on macOS). That covers settings, key bindings, the trained `ai/*_ai.pkl`, `strikefactor.db` and its backups, the JSON stores, and the maintenance tools' archives.
+  - The package holds only read-only resources, resolved with `config.get_path()`. `strikefactor/ai/*_ai.pkl` are *seeds*: `PitcherManager._ai_file` reads them only while the data directory has no trained copy.
+  - Never write through `get_path`, and never build `dirname(__file__)/../data` paths.
+  - **Launching the game writes player data.** On shutdown it saves the AIs and the batting stats, and a closed-mid-session game also saves the batter profile and closes the DB game. Point `STRIKEFACTOR_DATA_DIR` at a scratch directory to smoke-test without touching your own.
+  - `strikefactor.data.legacy_layout` copies data out of the old in-package locations once, on first launch (`--dry-run` to preview). It copies and never moves or overwrites. A marker file makes it run once per data directory.
+- **Packaging.** `[tool.setuptools.package-data]` lists the shipped resources explicitly, and `include-package-data` is off so nothing else under `strikefactor/` can leak into a wheel. A new resource type (say `.wav`) must be added there, or an installed copy won't find it; check with `uv build --wheel` and list the archive.
 - The deferred ruff rules (`B`, `UP`, `E731`) are listed in a comment in pyproject.toml.
-- tests/conftest.py switches SDL to its dummy drivers before pygame is imported, so the tests need no display. `addopts` runs `-n auto --dist worksteal`. See the pyproject comment for why it is `worksteal`.
+- tests/conftest.py switches SDL to its dummy drivers before pygame is imported, so the tests need no display. It also sets `STRIKEFACTOR_DATA_DIR` to a per-process temporary directory, overriding any value in your shell, so no test reads or writes real player data. A test that needs its own empty data directory uses `monkeypatch.setenv(paths.ENV_VAR, ...)`; `paths.data_dir()` is resolved on each call. `addopts` runs `-n auto --dist worksteal`. See the pyproject comment for why it is `worksteal`.
 - **A few Monte Carlo fielding tests take almost all of the test runtime** (test_infield_hit_verdict.py, test_defense.py). Nearly every other test finishes in under 5 ms, so removing tests will not make the suite faster. Don't change a Monte Carlo test's `n` in either direction. The bands are calibrated against MLB rates, and several sit within about 2.5σ.
 - Deterministic sweeps are memoized and shared between tests. In test_defense.py, `_sweep` also serves prefixes of a longer sweep. Tests that share a sample share the same *objects*, so a test that mutates an animation (for example by moving its clock) must restore it; that is what `_scratch` does.
 - `tools/` is dev tooling and is not part of the installed package (`packages.find` covers only `strikefactor*` and `analysis*`). pytest's `pythonpath = ["."]` is what lets tests import `tools.sim`.
@@ -80,7 +85,9 @@ ModeSelectState
  └── SANDBOX → SandboxMenuState → SandboxGameplayState
 ```
 
-Arcade and GameDay share `GameplayState`. `VisualizationState` is the T-key pitch-flight view, and `Game.toggle_track` swaps it in and out. `ViewPitchesState` is legacy; V now opens Review.
+Arcade and GameDay share `GameplayState`. `VisualizationState` is the T-key pitch-flight view, and `Game.toggle_track` swaps it in and out. V opens Review; the old PitchViz window (`ViewPitchesState`, `StatSwing`) is gone.
+
+**Which mode is being played is `Game.game_mode`** (`'arcade'` / `'sandbox'` / `'gameday'`, `None` between sessions). `Game._begin_session(mode)` sets it and loads that mode's batter profile, and `_teardown_active_session` saves the profile and clears it. It names the (mode, difficulty) bucket for the profile and for the pitch rows (`PitchDataExtractor._classify_game_mode`). Never infer the mode from `menu_state`, which names the *screen*: it is `'sandbox_menu'` while a Sandbox session is set up and `'visualise'` while the T view is open.
 
 ### Pitchers and pitch selection (pitchers/, ai/)
 - **Arsenals.** `Pitcher` (pitcher.py) is the base class, and each concrete pitcher is in its own file (Sale.py and so on). Each pitch is a method that draws `speed_mph`, `pfx_x` and `pfx_z` (inches of break), takes `target_x, target_y = self.get_pitch_target(type)` and calls `simulation_func(release_point, name, speed_mph, pfx_x, pfx_z, target_x, target_y, pitch_type)`. Methods are registered with `add_pitch_type`.
@@ -169,7 +176,7 @@ These are pure modules on the contact_audio.py pattern: no pygame, no game state
   - Friction applies only while the ball is on the ground. `GRASS_ROLL_DECEL_FT_S2` is the calibration dial; `ROLL_AIR_DRAG_PER_FT` is physics, not a dial.
   - An untouched ball rolls 60–200 ft. Fielders end outfield plays, not friction.
 - **infield_timing.py** races the throw against the runner to first. `HARD_PLAY_PROB` adds variance (hard plays), not bias. `roll_verdict` / `verdict_from(p_out, p_out_clean)` draw **once**: the window `[p_out, p_out_clean)` is exactly the set of plays a misplay cost, and those are the errors.
-- **extra_bases.py** runs the same race one base further. `AGGRESSION_MARGIN_S` is load-bearing; without it, every gapper is a triple.
+- **extra_bases.py** runs the same race one base further. Every race in a play reads one batter-runner: `HitAnimation._runner_sprint_fts` draws the sprint speed once, on first use. `AGGRESSION_MARGIN_S` is load-bearing; without it, every gapper is a triple.
 
 ### Contact audio (engine/contact_audio.py, engine/sound_manager.py)
 - **One entry point.** Every bat-on-ball event goes through `SoundManager.play_contact(quality, swing_type, ev_mph=, is_home_run=)`.
@@ -240,6 +247,7 @@ The hit animation draws the top-down play, and it also **decides** in-play outco
 - **`LEAGUE` is exactly the neutral constants.** `defense=None` and `"league"` must produce identical plays and consume the RNG identically (`test_the_neutral_profile_changes_nothing_at_all`).
 - **Dials:**
   - `field_misplay_p` sets the error rate. **Measure it with the harness; don't derive it.**
+  - `MISPLAY_HOP_GAIN` sets how errors split between soft and hard ground balls, and it moves only together with `field_misplay_p`. The charge penalty fades as the hop comes in, so the two never compound. A unit test at a fixed spot can't show the EV effect, because the mix of plays fielders reach cancelled it once. Read the per-reach curve (`--by-ev`, `Model p%`) at n ≥ 10000.
   - `body_block` sets how many balls a fielder reaches but lets through. Play difficulty degrades the block rather than scaling the through share.
   - `RANGING_FULL_FT` is `infield_timing.RELEASE_STRETCH_FT`, imported rather than restated.
   - `_runner_sprint_fts()` stays unscaled, because defense strength is not batter speed.
@@ -247,10 +255,23 @@ The hit animation draws the top-down play, and it also **decides** in-play outco
   - **BOBBLE**: costs release time.
   - **THROUGH**: the ball carries on at its real speed. It fires only from `_check_in_flight_intercept`.
   - **MUFF**: the ball is dropped. This is the only way a ball somebody was under falls in, and it is scored as an error, never a hit. If balls fall in as *hits* with a fielder underneath them, an eligibility rule is wrong.
-- **Charging the error.** `_charge_error(role)` is the only place `is_error` is set. It marks the fielder who misplayed the ball, not `_primary_role`, with a brief amber "!" (`_error_mark_alpha`).
+- **Charging the error.** `_charge_error(role, out)` is the only place `is_error` is set. It marks the fielder who misplayed the ball, not `_primary_role`, with a brief amber "!" (`_error_mark_alpha`). `out` is the out the clean play would have been, kept as `error_out`: GROUNDOUT for a bobble or a through-ball, the catch (`_caught_outcome`) for a muff. The official scorer rebuilds the inning from it.
 - **`REACHED ON ERROR` is neither a hit nor an out.** It belongs to the REACH / IN_PLAY / TERMINAL groups, not HIT / BATTED_OUT / OUT.
   - The banner says `ERROR` through `PitchSimulation._DISPLAY_NAMES`; the stored value is unchanged.
   - `GameStats.outcome_value`, the Q-learning reward scored from the pitcher's side, counts it close to an out.
+  - A runner who reached on one scores an unearned run. See Official scoring.
+
+### Official scoring (strikefactor/helpers.py)
+`ScoreKeeper` holds a half-inning's runners and runs, and it is also the official scorer. `tests/test_scorekeeping.py` pins it against the Official Baseball Rules' own worked examples.
+- **Earned runs (Rule 9.16) are a reconstruction, not a flag.** Every `Runner` has a second position, `clean_base`: where he would stand had every fielding chance been taken. `missed_outs` counts the errors that should have been outs. A run is earned when the reconstruction scores it too, before the third out the pitcher should have had.
+  - A batter who reached on the error has `clean_base = None` and can never be earned.
+  - On an error the reconstruction makes the out in `error_out` and moves the runners as that out does. `_out_advance` is the one statement of what an out does to a runner; the real inning, the reconstruction and the RBI rule all read it.
+  - **A run can be ruled earned on a later play than it scored on.** A runner an error moved up waits in `_home_early` until the reconstruction brings him home, and stays unearned if the half-inning ends first. So `earned` never exceeds `score` but can trail it, and anything that reads earned runs per play reads its own delta.
+- **Outs are passed in (`outs=`, the outs before the play), not counted here.** A strikeout never reaches the scorekeeper, and a scenario can start with two down. `update_hit_event` derives the third out from it; there is no `suppress_out_advancement` any more.
+- **A run is charged to the pitcher who put the runner on** (Rule 9.16(g)). `set_pitcher` names who is pitching, and `take_charges()` hands back `(pitcher, runs, earned)`. A reliever gets no benefit from chances missed before he came in (Rule 9.16(i)), which is what `_entered_at` is for.
+- **`last_play` is the batter's line for the play** (`Play`: runs, RBI, sacrifice fly). A run that scores on an error is batted in only if the out would have scored it with fewer than two down (Rule 9.04). A sacrifice fly is not an at-bat (`FieldRenderer.record_sacrifice_fly`, `GameEvent.sacrifice_fly`), so the at-bat is charged in `_finalize_batted_ball`, not at contact.
+- `restore_from` copies the whole state for an ABS rollback. Don't copy fields one at a time.
+- **Not modelled, so not scored:** stolen bases, wild pitches, passed balls, hit batters, fielder's choices and double plays. The simulated opponent's half has no errors, so every run the player's staff allows is earned.
 
 ### Outcome vocabulary (strikefactor/outcomes.py)
 This module is the single definition of:
@@ -268,16 +289,17 @@ It imports nothing. `analysis/theme.py` deliberately keeps its own copy, because
 - **tools/calibrate_defense.py** sweeps the defense ladder.
   - The harness forces `IN_PLAY` and reads HR% from `park.fence_verdict`. It sets home-run balls aside so BABIP is a real BABIP.
   - `--by-shape` gives the axis that is independent of fielding.
-  - Tune at n ≥ 2500. Test bands are deliberately wider than the harness numbers.
+  - `--by-ev [SHAPE]` breaks one shape's errors down by exit velocity: reach, per-reach misplay probability, share of misplays scored as errors, and error and hit rates.
+  - Tune at n ≥ 2500, or n ≥ 10000 for `--by-ev`. Test bands are deliberately wider than the harness numbers.
 
-Measured 2026-09-18 (`--n 2500 --seed 808`), LEAGUE:
+Measured 2026-09-28 (`--n 2500 --seed 808`), LEAGUE:
 
 | HR% | BABIP | ERR% | GB-hit% | IF-hit% | 2B/1B | GROUNDER | LINER | FLY | POP_UP |
 |---|---|---|---|---|---|---|---|---|---|
-| 4.08 | .246 | 1.04 | 27.4 | 6.3 | 0.23 | .274 | .482 | .061 | .000 |
+| 4.08 | .246 | 1.08 | 27.4 | 6.3 | 0.23 | .274 | .482 | .061 | .000 |
 | *MLB ~4.5–5* | *~.290* | *~1.5* | *~24* | *6–8* | *~0.33* | *~.24* | *~.68* | *~.12* | *~.02* |
 
-Across the ladder, BABIP runs .341 / .277 / .246 / .207 and ERR% runs 3.38 / 2.04 / 1.04 / 0.42.
+Across the ladder, BABIP runs .340 / .277 / .246 / .207 and ERR% runs 3.13 / 1.88 / 1.08 / 0.42. ERR% is noisy at this n: at n=10000 the ladder reads 3.76 / 2.29 / 1.41 / 0.66, so don't retune the base off the n=2500 row.
 
 **Next calibration item:** liners and flies land where the static `FIELDER_HOMES` outfielders stand, so LINER, FLY, BABIP and 2B/1B all run low. The fix is a two-variable fit: outfield alignment (`FIELDER_HOMES`) against per-shape exit velocity (`QUALITY_BY_SHAPE`), not a single-dial pass. Power swings run about 10% HR; `EV_POWER_BONUS_MPH` is the dial for that.
 
@@ -289,7 +311,7 @@ Across the ladder, BABIP runs .341 / .277 / .246 / .207 and ERR% runs 3.38 / 2.0
   - `review_modal.run_modal` owns input isolation and paused deadlines. The outer loops discard the event batch from before the modal opened.
   - Fielding review plays back immutable frames and never calls `HitAnimation.update`. Retention is bounded by frame count and clip count.
   - Replay transports don't depend on the display FPS.
-- **Legacy code.** A compatibility wrapper may keep an *entry point* alive (`request_swing_replay`, `_run_swing_replay_loop`, `StatSwing`). It may never keep a second renderer alive.
+- **Legacy code.** A compatibility wrapper may keep an *entry point* alive (`request_swing_replay`, `_run_swing_replay_loop`, `toggle_view_pitches`). It may never keep a second renderer alive.
 
 ### Swing record and swing replay
 **swing_record.py `SwingRecord`** holds the `PitchTrajectory` object itself, not samples.
@@ -312,7 +334,9 @@ tests/test_swing_replay.py pins the cameras, the panel containment, and that the
 - **ABS.**
   - `ChallengeManager` tracks challenges per side (`CHALLENGES_PER_SIDE`). A successful challenge is retained; Sandbox has unlimited challenges.
   - `ABSChallengeOverlay` runs its phases: intro → 2D replay → zoom → CONFIRMED/OVERTURNED.
-  - The feature is gated by `abs_enabled`. The flow in main.py is `request_abs_challenge` → `_run_abs_overlay_loop` → `_reverse_last_call`.
+  - The feature is gated by `abs_enabled`. The flow in main.py is `request_abs_challenge` → `_run_abs_overlay_loop` → `_reverse_last_call` → `_record_abs_challenge`.
+  - **A challenge always resolves after the pitch's DB row is written.** The row is written 0.7 s after the call, the window runs 1.8 s, and the challenge key is only read once `PitchSimulation.run()` has returned. So `cleanup()` hands the row's id to `pending_challenge`, and the verdict amends the row afterwards (`PitchDatabaseService.amend_abs_challenge`), including the at-bat the call closed or reopened.
+  - `restore_for_abs` rolls back only what the *call* decided. The snapshot is taken at the call, before `cleanup()`, so restoring the pitch's own bookkeeping (`pitch_history`, `last_pitch_type_thrown`, `current_pitches`, `total_pitches`, `current_state`) would erase the pitch. `current_state` is rebuilt from the corrected count via `Game.build_ai_state`.
 - **HUD.** `hud_mode` is one of `legacy` (Scorebug), `broadcast` (BroadcastHUD) or `minimal` (MinimalHUD). `Game.toggle_hud_mode` cycles it and `Game._draw_active_hud` dispatches. The palette is black, white and gray only.
 - **Sandbox.**
   - The player picks each pitch (`UIManager.update_sandbox_pitch_buttons`).
@@ -327,7 +351,9 @@ tests/test_swing_replay.py pins the cameras, the panel containment, and that the
   - the box score (`get_box_score_lines` → `gameday_theme.draw_linescore_from_arrays`)
   - history (data/gameday_history.json)
 
-  `PitcherStats` tracks each arm.
+  `PitcherStats` tracks each arm. `runs_allowed` and `earned_runs` are charged through `charge_runs` from the scorekeeper's `take_charges()`, so a run goes to the pitcher who put the runner on. ERA is over `earned_runs`. The hook logic (`_get_pull_score`, `should_consider_relief_pitcher`) reads `runs_allowed`.
+- **Linescore.** A team's E is the errors its defense made, counted from the other team's half-innings (`GameDayManager.error_totals`).
+- **Outcome groups.** Outcome groups are `_HIT_RESULTS` / `_OUT_RESULTS` / `_REACH_RESULTS`, built from outcomes.py in GameDay's upper-case spelling. The hot streak (`player_consecutive_hits`) counts consecutive hits: a walk leaves it alone, and an out or REACHED ON ERROR ends it. An ROE is neither an out nor a hit allowed, and it leaves the pitcher's `consecutive_hits` alone, as a walk does.
 - **Resume.** Resuming reattaches the DB game (`PitchDatabaseService.resume_game`), so one logical game keeps one `game_id`.
 - **UI.**
   - `PlayByPlayPanel` is the filterable log.
@@ -338,7 +364,10 @@ tests/test_swing_replay.py pins the cameras, the panel containment, and that the
   - `python -m strikefactor.data.reset_tracking` archives and clears **all** recorded play (`--dry-run`, `--restore`). It deletes rows rather than tables, keeps `user_version`, and gives snapshot directories unique names.
 
 ### Settings, key bindings, UI
-- **`SettingsManager`** (settings.json) stores `difficulty` (ROOKIE … HALL_OF_FAME), `umpire_sound`, `master_volume`, `show_strikezone`, `batter_handedness`, `display_mode`, `display_fps`, `engine_fps`, `abs_enabled`, `foul_animation_enabled`, `hud_mode` and `defense_strength`. `DEFENSE_LEVELS` and `HUD_MODES` are plain string lists because settings must not import gameplay; tests pin them to the enums.
+- **`SettingsManager`** (settings.json, in the player data directory) stores `difficulty` (ROOKIE … HALL_OF_FAME), `umpire_sound`, `master_volume`, `show_strikezone`, `batter_handedness`, `display_mode`, `display_fps`, `engine_fps`, `abs_enabled`, `foul_animation_enabled`, `hud_mode` and `defense_strength`. `DEFENSE_LEVELS` and `HUD_MODES` are plain string lists because settings must not import gameplay; tests pin them to the enums. Every stored setting is read:
+  - `show_strikezone` sets how the zone starts (outline or hidden); Z still cycles the display modes in-session.
+  - `batter_handedness` and `display_mode` are applied at startup, and B and F11 save them.
+  - `Game.umpsound` is a property over `umpire_sound`, not a copy, so the in-game sound button and the Settings row are one switch.
 - **`KeyBindingManager`** (key_bindings.json) defaults:
 
   | Key | Action | Key | Action |
@@ -356,23 +385,27 @@ tests/test_swing_replay.py pins the cameras, the panel containment, and that the
   - Panels return `(action_id, payload)`, and `MenuState._SETTINGS_ACTIONS` maps that to a `Game` method.
   - Nothing has a hard-coded x (`content_bounds()`, `UIManager._footer_row_right`).
   - **The settings page is full.** The next setting needs scrolling, a second column or a sub-screen (`test_the_settings_page_has_headroom_left`).
+- **Pointer.** Hover and mouse-wheel code reads `ui.pointer.pos()` (or `game.get_mouse_pos()`), which is in the internal 1280×720 frame. Never read `pygame.mouse.get_pos()` directly: it returns window pixels, which differ once the window is resized or fullscreen. Mouse *events* are already translated in `Game.run`.
 - **Buttons.**
   - Add a button in `UIManager._create_game_buttons()`, give it visibility in `set_button_visibility()`, and register its callback in `Game._setup_ui_callbacks()`.
   - Styling comes from assets/theme.json; menu screens use `@broadcast_button`.
 
 ### Pitch database (data/pitch_database.py)
-- **Service.** `PitchDatabaseService.get_instance()` wraps strikefactor/data/strikefactor.db and provides `start_game`, `end_game`, `record_pitch` and `load_batter_profile` / `save_batter_profile`.
+- **Service.** `PitchDatabaseService.get_instance()` wraps `paths.db_path()` (strikefactor.db in the player data directory) and provides `start_game`, `end_game`, `record_pitch` and `load_batter_profile` / `save_batter_profile`.
 - **Tables.** `pitches`, `pitch_trajectories` (20 samples per pitch), `at_bats`, `games` and `batter_profiles`.
-- **Versioning.** `SCHEMA_VERSION = 10`, with migrations in `PitchDB._migrate`. Auto-backups go to data/backups/.
+- **Versioning.** `SCHEMA_VERSION = 12`, with migrations in `PitchDB._migrate`. Auto-backups go to data/backups/.
 - **Non-obvious column semantics:**
   - `exit_velocity_mph` is set on every bat-on-ball event, fouls included, while `contact_quality` is NULL on fouls. Leave that asymmetry alone.
   - `swing_timing_diff_ms` is stored as `abs()`. `swing_timing_signed_ms` (v8) carries the sign.
   - `spray_angle_deg` (v9) is pull-positive for both hands and NULL when there was no contact. 0.0 is dead centre field, a real value.
-  - `batted_ball_type` (v7) is classified at contact, independent of fielding. `fielder_role` / `play_margin_s` are NULL when no play happened; a positive margin favours the defense.
+  - `batted_ball_type` (v7) is classified at contact, independent of fielding. `fielder_role` is NULL when no play happened.
+  - There are two race margins, one per race, and at most one is set on a row. `play_margin_s` (v7) is the infield race, the throw to first. `extra_base_margin_s` (v11) is the base race on a ball past the infield: to the base the runner held short of, or third on a triple. Both are `runner_s − defense_s`, so a positive margin favours the defense, and both are the physical race without `AGGRESSION_MARGIN_S`. Don't fold one into the other.
+  - `outcome` is the final call **after ABS review**, and `ai_umpire_strike` keeps the umpire's call. `abs_challenged` / `abs_overturned` are NULL on every row before v11, because no challenge could reach the row before then.
+  - `earned_runs_on_pitch` (v12) is the earned runs the scorer *credited* on the pitch, not a share of `runs_scored_on_pitch`: a row can carry an earned run and no run. Only sums over a half-inning compare. NULL before v12; don't back-fill it from the runs.
   - `defense_strength` (v10) is NULL for rows from before the setting existed. Don't back-fill it; error aggregates filter on `IS NOT NULL`.
   - `vertical_offset_in` actually holds screen pixels, despite its name.
   - Outcomes are stored in spaced form (`POP UP`).
-- **Other stores.** `ScoreKeeper` (outs, runners, score) is in helpers.py, and data/batting_stats.json feeds the batting heatmap.
+- **Other stores.** `ScoreKeeper` (runners, score, and the official scoring) is in helpers.py, and batting_stats.json (player data directory) feeds the batting heatmap.
 
 ### Analysis package (analysis/, pitch_analysis.py, batting_analysis.py)
 - **Running it.** The package is offline and opens the DB read-only. `python pitch_analysis.py [--terminal] [--mode/--difficulty/--handedness/--pitcher …]` writes 16 figures plus report.html into analysis_output/<filter-slug>/. batting_analysis.py writes batting_report.html into the same folder.
@@ -387,8 +420,10 @@ tests/test_swing_replay.py pins the cameras, the panel containment, and that the
 **Metric definitions worth knowing:**
 - A whiff is `swing_type > 0 AND outcome IN ('strike','strikeout')`.
 - `POP UP` is terminal and belongs in every PA/BF/out denominator.
+- A sacrifice fly is a plate appearance and not an at-bat, as in the game. `data.sac_fly_sql` is the one definition for both scripts: a FLYOUT a run scored on, or a dropped FLY with a runner on third and fewer than two out. It is read off the row rather than stored, `load_pitches` selects it as `is_sac_fly`, and tests/test_scorekeeping.py pins it to the scorer play by play. BABIP's `bip` keeps the sacrifice fly.
 - Run values come from a count-value model solved over the active slice, so they are only meaningful *between* sub-groups.
 - **The pitching line uses one slice for every column:** GameDay rows with a non-null `game_id`, which are the rows whose runs can be attributed. Excluded rows are reported in `df.attrs["dropped_pitches"]`.
+- ER comes from `earned_runs_on_pitch`, and ERA is over ER. Rows from before v12 count every run as earned, and `er_exact` says when a line has any.
 - If the spray figure's spray-vs-timing curve comes back flat, the bearing has stopped reaching the ball somewhere upstream.
 
 ## Common tasks
@@ -397,7 +432,7 @@ tests/test_swing_replay.py pins the cameras, the panel containment, and that the
 1. Subclass `Pitcher` in strikefactor/pitchers/, following Sale.py. The constructor takes `command`, `throws` and `pitch_command`. Call `load_img(loadfunc, 'assets/images/<name>/…', frames)`, then `add_pitch_type` once per pitch, and implement `draw_pitcher` for the windup timing.
 2. Add usage priors in ai/pitch_priors.py. They are validated against the arsenal.
 3. Add archetypes and a plan mix in data/pitch_locations.json, and bullpen attributes in data/pitcher_attributes.json.
-4. Register the pitcher in `PitcherManager` (main.py). Train the AI and save it as `ai/<name>_ai.pkl`.
+4. Register the pitcher in `PitcherManager` (main.py). Train the AI and ship it as the seed `strikefactor/ai/<name>_ai.pkl` (the game saves further training to the player data directory, not there).
 
 **Add a game state:**
 1. Write the class in game_states.py.
@@ -419,7 +454,7 @@ tests/test_swing_replay.py pins the cameras, the panel containment, and that the
 │                            #   pitch-analysis-refactor, unified-review
 └── strikefactor/
     ├── __main__.py, main.py # entry point; Game, PitcherManager, AssetManager
-    ├── config.py, outcomes.py, settings_manager.py, key_binding_manager.py, helpers.py
+    ├── config.py, paths.py, outcomes.py, settings_manager.py, key_binding_manager.py, helpers.py
     ├── ai/                  # AI_2 (ERAI), batter_profile, compat, pitch_priors, *_ai.pkl, ai_umpire.pkl
     ├── pitchers/            # pitcher.py, at_bat_plan.py, pitch_locations.py, one file per pitcher
     ├── gameplay/
@@ -431,12 +466,12 @@ tests/test_swing_replay.py pins the cameras, the panel containment, and that the
     │   └── batter.py, field_renderer.py
     ├── ui/                  # ui_manager, HUDs (scorebug/broadcast_hud/minimal_hud), review_* + swing_replay_overlay,
     │                        #   fielding_renderer, abs_challenge_overlay, settings_panel, gameday_theme,
-    │                        #   play_by_play_panel, pitching_box_panel, pitcher_carousel, lap_log_panel, font/
+    │                        #   play_by_play_panel, pitching_box_panel, pitcher_carousel, lap_log_panel, pointer, font/
     ├── engine/              # contact_audio.py, sound_manager.py
     ├── utils/               # pitch_physics.py, physics.py (ABS zone collision), io.py
     ├── assets/              # images/<pitcher>/, ball/, batter_*/, abs/; sounds/{contact,mitt,umpire_sounds}/; theme.json
-    └── data/                # strikefactor.db, pitch_database.py, JSON stores, pitch_locations.json,
-                             #   pitcher_attributes.json, gameday_maintenance.py, reset_tracking.py, archives/, backups/
+    └── data/                # pitch_database.py, gameday_sessions.py, gameday_maintenance.py, reset_tracking.py,
+                             #   legacy_layout.py; seed tables pitch_locations.json, pitcher_attributes.json
 ```
 
-Asset paths resolve through `config.get_path()` in development and `resource_path()` in PyInstaller builds.
+Resources resolve through `config.get_path()`, which is package-relative and so also works inside a PyInstaller bundle. Player data resolves through `strikefactor.paths` (see Running and development).

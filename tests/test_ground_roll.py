@@ -266,7 +266,13 @@ def test_the_ball_is_not_braked_while_it_is_in_the_air(monkeypatch):
     speed must be flat."""
     monkeypatch.setattr(ha, "_pick_hit_landing",
                         lambda *a, **k: (ha.HOME[0] + 120, ha.HOME[1] - 260))
-    anim = _anim("FLY")
+    # A fixed exit velocity, not whatever the global RNG holds when this test
+    # happens to run: near 100 mph the first hop from this landing reaches
+    # the wall and caroms, which rightly changes the speed mid-hop. At 90 it
+    # stays clear of the wall, so a change in speed can only be friction.
+    anim = ha.HitAnimation(_StubGame(), outcome="IN_PLAY",
+                           on_complete=lambda: None, quality=0.85,
+                           batted_ball_type="FLY", ev_mph=90.0)
     anim._init_ball_on_ground()
     assert anim._bounces, "a fly ball has to bounce"
     start, dur, _h, _r = anim._bounces[0]
@@ -277,6 +283,7 @@ def test_the_ball_is_not_braked_while_it_is_in_the_air(monkeypatch):
     while tau < start + dur * 0.85:
         anim._step_ball_on_ground(16.0, tau)
         tau += 16.0
+    assert not anim._wall_hit, "a carom changes the speed for a real reason"
     assert math.hypot(*anim._ball_v) == pytest.approx(before, rel=1e-9)
 
 

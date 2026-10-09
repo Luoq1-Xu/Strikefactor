@@ -125,9 +125,9 @@ and held-key set are refreshed on return. Both the main loop and completed-play
 loop discard the remainder of the batch that originally opened Review; otherwise
 a click queued beside the review key could become Continue immediately on close.
 
-Legacy `StatSwing`, `ViewPitchesState` and `_run_swing_replay_loop` remain
-compatibility surfaces. No normal button or hotkey enters those states/windows;
-the visible sidebar has one REVIEW action. `VisualizationState` is the exception
+`_run_swing_replay_loop` remains a compatibility surface. The legacy PitchViz
+window (`StatSwing`) and its `ViewPitchesState` have been deleted: nothing but a
+test still entered them. The visible sidebar has one REVIEW action. `VisualizationState` is the exception
 — it is live again as the T view (`Game.toggle_track`).
 
 A compatibility surface may keep an entry point alive; it may not keep a second
