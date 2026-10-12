@@ -5,29 +5,21 @@ import pygame_gui
 from pygame_gui.core import ObjectID
 
 from strikefactor.config import SCREEN_WIDTH, get_path
-from strikefactor.ui.lap_log_panel import LapLogPanel
-from strikefactor.ui.scouting_panel import ScoutingReportPanel
 
 
 class UIManager:
     # ── Left sidebar layout ──────────────────────────────────────────────
-    # Arcade and Sandbox stack *different* button sets into the same column.
-    # Sandbox inserts five pitcher-switch rows where Arcade puts SCOUT/PITCHVIZ,
-    # so any button shown by both layouts needs a per-layout position — leaving
-    # PITCHVIZ at its Arcade slot puts it exactly on top of the SASAKI row and
-    # it swallows the click. `_apply_sidebar_layout()` re-places them.
+    # Only Sandbox has a sidebar: the pitcher switch and the pitch toggles,
+    # which are selections and have no key. Everything else that used to sit
+    # in this column (ZONE, BATTER, REVIEW, SOUND, MENU, EXIT) is a key
+    # binding, so gameplay itself shows no buttons at all.
     SIDEBAR_X = 6
     SIDEBAR_W = 120
     SIDEBAR_H = 28
     SIDEBAR_TOP = 188
     SIDEBAR_STEP = 28
 
-    # Sandbox column slots: 0 ZONE, 1 BATTER, 2 PITCHVIZ, 3-7 pitchers,
-    # 9-11 pitch toggles, 13 SOUND, 14 EXIT.
-    _SHARED_SIDEBAR_POS = {
-        'arcade': {'view_pitches': (SIDEBAR_X, 326)},
-        'sandbox': {'view_pitches': (SIDEBAR_X, SIDEBAR_TOP + SIDEBAR_STEP * 2)},
-    }
+    # Sandbox column slots: 0-4 pitchers, 6-8 pitch toggles.
 
     # ── Menu footer (settings / key bindings) ────────────────────────────
     # These screens draw their body themselves (ui/settings_panel.py); the
@@ -65,26 +57,11 @@ class UIManager:
         self.big_font = pygame.font.Font(get_path("ui/font/8bitoperator_jve.ttf"), 84)  # +20% from 70
         self.button_callbacks = {}
         self.key_binding_manager = None  # Will be set after initialization
-        self.settings_manager = None  # Will be set after initialization
-        self._sidebar_layout = 'arcade'  # Buttons are created at Arcade slots
         self._create_ui_elements()
 
     def set_key_binding_manager(self, key_binding_manager):
         """Set the key binding manager reference for UI visibility control."""
         self.key_binding_manager = key_binding_manager
-
-    def set_settings_manager(self, settings_manager):
-        """Set the settings manager reference (e.g. for HUD mode lookups)."""
-        self.settings_manager = settings_manager
-
-    def _hud_mode(self) -> str:
-        if self.settings_manager is None:
-            return "legacy"
-        return self.settings_manager.get_hud_mode()
-
-    def _is_legacy_hud(self) -> bool:
-        """Side-panel buttons only render in legacy mode."""
-        return self._hud_mode() == "legacy"
 
     def register_button_callback(self, button_name, callback):
         """
@@ -126,44 +103,6 @@ class UIManager:
         settings_footer = self._footer_row_right([190, 200])
         keybind_footer = self._footer_row_right([170])
         buttons = {
-            # View toggles group
-            'strikezone': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x, sandbox_top), (sandbox_w, sandbox_h)),
-                text='ZONE', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'toggle_batter': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step), (sandbox_w, sandbox_h)),
-                text='BATTER', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            # Analysis group
-            'scout': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((6, 296), (120, 28)),
-                text='SCOUT', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'view_pitches': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect(self._SHARED_SIDEBAR_POS['arcade']['view_pitches'],
-                                          (sandbox_w, sandbox_h)),
-                text='REVIEW', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            # Session group
-            'lap_stats': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((6, 362), (58, 28)),
-                text='LAP', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'view_laps': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((68, 362), (58, 28)),
-                text='LOG', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            # System group
-            'toggle_ump_sound': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((6, 398), (120, 28)),
-                text='SOUND', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'main_menu': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((6, 428), (120, 28)),
-                text='MENU', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-
             # Pitcher selection buttons for main  menu
             'sale': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((400, 500), (190, 50)),
@@ -252,8 +191,7 @@ class UIManager:
                 relative_rect=pygame.Rect((975, 330), (50, 50)),
                 text='>', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
-            # Dedicated menu-screen sized "main menu" for gameday menu states,
-            # so the tiny (6, 428) sidebar button isn't shown on full menu screens.
+            # Menu-screen sized "main menu" for the gameday menu states.
             'gameday_main_menu': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((40, 660), (150, 36)),
                 text='MAIN MENU', manager=manager,
@@ -334,61 +272,51 @@ class UIManager:
 
             # Sandbox gameplay - Pitcher switch buttons (left sidebar, broadcast style)
             'sandbox_pitcher_sale': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 3), (sandbox_w, sandbox_h)),
+                relative_rect=pygame.Rect((sandbox_x, sandbox_top), (sandbox_w, sandbox_h)),
                 text='SALE', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitcher_degrom': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 4), (sandbox_w, sandbox_h)),
+                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 1), (sandbox_w, sandbox_h)),
                 text='DEGROM', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitcher_sasaki': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 5), (sandbox_w, sandbox_h)),
+                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 2), (sandbox_w, sandbox_h)),
                 text='SASAKI', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitcher_yamamoto': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 6), (sandbox_w, sandbox_h)),
+                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 3), (sandbox_w, sandbox_h)),
                 text='YAMAMOTO', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitcher_mcclanahan': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 7), (sandbox_w, sandbox_h)),
+                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 4), (sandbox_w, sandbox_h)),
                 text='MCCLANAHAN', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
 
             # Sandbox gameplay - Pitch toggle buttons (left sidebar, 2-column broadcast style)
             'sandbox_pitch_1': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 9), (58, sandbox_h)),
+                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 6), (58, sandbox_h)),
                 text='', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitch_2': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x + 62, sandbox_top + sandbox_step * 9), (58, sandbox_h)),
+                relative_rect=pygame.Rect((sandbox_x + 62, sandbox_top + sandbox_step * 6), (58, sandbox_h)),
                 text='', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitch_3': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 10), (58, sandbox_h)),
+                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 7), (58, sandbox_h)),
                 text='', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitch_4': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x + 62, sandbox_top + sandbox_step * 10), (58, sandbox_h)),
+                relative_rect=pygame.Rect((sandbox_x + 62, sandbox_top + sandbox_step * 7), (58, sandbox_h)),
                 text='', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitch_5': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 11), (58, sandbox_h)),
+                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 8), (58, sandbox_h)),
                 text='', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
             'sandbox_pitch_6': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x + 62, sandbox_top + sandbox_step * 11), (58, sandbox_h)),
+                relative_rect=pygame.Rect((sandbox_x + 62, sandbox_top + sandbox_step * 8), (58, sandbox_h)),
                 text='', manager=manager,
                 object_id=ObjectID(class_id='@broadcast_button')),
-
-            # Sandbox gameplay - System buttons (left sidebar bottom)
-            'sandbox_sound': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 13), (sandbox_w, sandbox_h)),
-                text='SOUND', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'sandbox_exit': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 14), (sandbox_w, sandbox_h)),
-                text='EXIT', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button'))
         }
         return buttons
 
@@ -408,17 +336,7 @@ class UIManager:
             manager=self.manager,
             text=""
         )
-        self.scouting_panel = ScoutingReportPanel(
-            position=(1000, 50),
-            manager=self.manager
-        )
-        self.lap_log_panel = LapLogPanel(
-            position=(465, 160),  # Center of screen
-            manager=self.manager
-        )
         self.banner.hide()
-        self.scouting_panel.hide()
-        self.lap_log_panel.hide()
 
         # Hide all buttons initially
         for button in self.buttons.values():
@@ -428,11 +346,6 @@ class UIManager:
         """Processes events for the UI manager."""
         self.manager.process_events(event)
         if event.type == pygame_gui.UI_BUTTON_PRESSED:
-            # Handle lap log panel close button
-            if event.ui_element == self.lap_log_panel.get_close_button():
-                self.lap_log_panel.hide()
-                return
-
             for key, button in self.buttons.items():
                 if event.ui_element == button and key in self.button_callbacks:
                     # Call the registered callback for the button
@@ -465,57 +378,6 @@ class UIManager:
     def draw(self):
         """Draws the UI manager and all UI elements to the screen."""
         self.manager.draw_ui(self.screen)
-
-    def toggle_scouting_panel(self, pitcher=None):
-        """Toggle the scouting report panel visibility."""
-        if pitcher:
-            self.scouting_panel.update_data(pitcher)
-
-        if self.scouting_panel.visible:
-            self.scouting_panel.hide()
-        else:
-            self.scouting_panel.show()
-
-    def update_scouting_panel(self, pitcher):
-        """Update the scouting panel with pitcher data."""
-        if pitcher:
-            self.scouting_panel.update_data(pitcher)
-
-    def hide_scouting_panel(self):
-        """Hide the scouting report panel."""
-        self.scouting_panel.hide()
-
-    def refresh_scouting_panel(self):
-        """Refresh the scouting panel stats (call after each pitch)."""
-        if self.scouting_panel.visible:
-            self.scouting_panel.refresh_stats()
-
-    def toggle_lap_log_panel(self, field_renderer=None):
-        """Toggle the lap log panel visibility."""
-        # Hide scouting panel if visible to avoid overlap
-        if self.scouting_panel.visible:
-            self.scouting_panel.hide()
-
-        if field_renderer:
-            laps = field_renderer.get_lap_history()
-            # Get current session stats
-            current_stats = {
-                'total_pitches': field_renderer.total_pitches,
-                'total_swings': field_renderer.total_swings,
-                'total_hits': field_renderer.total_hits,
-                'total_at_bats': field_renderer.total_at_bats,
-                'batting_average': field_renderer.get_overall_batting_average()
-            }
-            self.lap_log_panel.update_data(laps, current_stats)
-
-        if self.lap_log_panel.visible:
-            self.lap_log_panel.hide()
-        else:
-            self.lap_log_panel.show()
-
-    def hide_lap_log_panel(self):
-        """Hide the lap log panel."""
-        self.lap_log_panel.hide()
 
     def update_sandbox_pitch_buttons(self, pitch_names: list, active_pitches: set = None):
         """Update sandbox pitch type buttons based on current pitcher's arsenal.
@@ -556,19 +418,6 @@ class UIManager:
         """Alias for set_button_visibility for clearer state-based visibility."""
         self.set_button_visibility(state)
 
-    def _apply_sidebar_layout(self, layout):
-        """Move sidebar buttons shared by both column layouts to their slot.
-
-        See `_SHARED_SIDEBAR_POS`: Sandbox and Arcade stack different button
-        sets into the same column, so a button in both has to be re-placed on
-        every layout change or it ends up sitting on another button's row.
-        """
-        if layout == self._sidebar_layout:
-            return
-        self._sidebar_layout = layout
-        for name, pos in self._SHARED_SIDEBAR_POS[layout].items():
-            self.buttons[name].set_relative_position(pos)
-
     def set_button_visibility(self, state, force_show=False):
         """Show or hide buttons based on game state ('in_game', 'pitching', 'menu')."""
 
@@ -590,28 +439,15 @@ class UIManager:
                 button.hide()
             # Keep banner visible - it should be unaffected by UI toggle
             # self.banner.hide()  # Commented out to keep banner visible
-            self.scouting_panel.hide()
-            self.lap_log_panel.hide()
             return
 
         # Hide all buttons initially
         for button in self.buttons.values():
             button.hide()
 
-        self._apply_sidebar_layout('sandbox' if state.startswith('sandbox') else 'arcade')
-
-        if state == 'in_game':
-            if self._is_legacy_hud():
-                self.buttons['strikezone'].show()
-                self.buttons['main_menu'].show()
-                self.buttons['toggle_ump_sound'].show()
-                self.buttons['view_pitches'].show()
-                self.buttons['toggle_batter'].show()
-                self.buttons['scout'].show()
-                self.buttons['lap_stats'].show()
-                self.buttons['view_laps'].show()
-        elif state == 'pitching':
-            # All buttons are hidden during the pitch animation
+        if state in ('in_game', 'pitching', 'visualise'):
+            # Gameplay shows no buttons: every in-game action is a key
+            # binding (see KeyBindingsPanel.ACTIONS).
             pass
         elif state == 'main_menu':
             self.buttons['sale'].show()
@@ -623,34 +459,12 @@ class UIManager:
             self.buttons['gameday'].show()
             self.buttons['back_to_mode_select'].show()
             self.banner.hide()
-            self.scouting_panel.hide()
-            self.lap_log_panel.hide()
-        elif state == "visualise":
-            # Show the same buttons as in_game so they can toggle back
-            if self._is_legacy_hud():
-                self.buttons['strikezone'].show()
-                self.buttons['main_menu'].show()
-                self.buttons['toggle_ump_sound'].show()
-                self.buttons['view_pitches'].show()
-                self.buttons['toggle_batter'].show()
-                self.buttons['scout'].show()
-                self.buttons['lap_stats'].show()
-                self.buttons['view_laps'].show()
         elif state == 'summary':
             self.buttons['back_to_main_menu'].show()
             self.banner.hide()
-            self.scouting_panel.hide()
-            self.lap_log_panel.hide()
         elif state == 'inning_end':
             # Continue button always shown so the player can advance.
             self.buttons['continue_to_summary'].show()
-            if self._is_legacy_hud():
-                self.buttons['strikezone'].show()
-                self.buttons['main_menu'].show()
-                self.buttons['lap_stats'].show()
-                self.buttons['view_laps'].show()
-            self.scouting_panel.hide()
-            self.lap_log_panel.hide()
         elif state == 'settings':
             # The body of this screen is drawn by ui/settings_panel.py; only
             # the footer nav is a widget.
@@ -676,54 +490,39 @@ class UIManager:
                     self.buttons['gameday_resume'].show()
             except Exception as e:
                 print(f"[gameday] resume-button visibility check failed: {e}")
-            self.scouting_panel.hide()
-            self.lap_log_panel.hide()
         elif state == 'gameday_resume':
             # Resumable-sessions list
             self.buttons['gd_list_back'].show()
             self.buttons['gd_page_prev'].show()
             self.buttons['gd_page_next'].show()
-            self.scouting_panel.hide()
-            self.lap_log_panel.hide()
         elif state == 'gameday_history':
             # Completed-games list
             self.buttons['gd_list_back'].show()
             self.buttons['gd_page_prev'].show()
             self.buttons['gd_page_next'].show()
-            self.scouting_panel.hide()
-            self.lap_log_panel.hide()
         elif state == 'gameday_history_detail':
             # Single completed-game detail (linescore) — back only
             self.buttons['gd_list_back'].show()
-            self.scouting_panel.hide()
-            self.lap_log_panel.hide()
         elif state == 'gameday_transition':
             # After player's inning ends, before opponent bats
             self.buttons['next_inning'].show()
             self.buttons['view_game_log'].show()
             self.buttons['gameday_main_menu'].show()
-            self.scouting_panel.hide()
-            self.lap_log_panel.hide()
         elif state == 'gameday_simulation':
             # After opponent simulation, ready to start player batting
             self.buttons['start_batting'].show()
             self.buttons['view_game_log'].show()
             self.buttons['gameday_main_menu'].show()
-            self.scouting_panel.hide()
-            self.lap_log_panel.hide()
         elif state == 'gameday_final':
             # Game over screen
             self.buttons['final_menu'].show()
             self.buttons['view_game_log'].show()
-            self.scouting_panel.hide()
-            self.lap_log_panel.hide()
         elif state == 'mode_select':
             # Top-level mode selection (Arcade/Sandbox)
             self.buttons['arcade_mode'].show()
             self.buttons['sandbox_mode'].show()
             self.buttons['settings'].show()
             self.banner.hide()
-            self.scouting_panel.hide()
         elif state == 'sandbox_menu':
             # Sandbox mode menu - pitcher selection (matching arcade aesthetic)
             self.buttons['sandbox_menu_sale'].show()
@@ -733,14 +532,8 @@ class UIManager:
             self.buttons['sandbox_menu_mcclanahan'].show()
             self.buttons['back_to_mode_select'].show()
             self.banner.hide()
-            self.scouting_panel.hide()
-            self.lap_log_panel.hide()
         elif state == 'sandbox_gameplay':
             # Sandbox gameplay - broadcast-style left sidebar
-            # Standard controls
-            self.buttons['strikezone'].show()
-            self.buttons['toggle_batter'].show()
-            self.buttons['view_pitches'].show()
             # Pitcher switch buttons
             self.buttons['sandbox_pitcher_sale'].show()
             self.buttons['sandbox_pitcher_degrom'].show()
@@ -748,29 +541,7 @@ class UIManager:
             self.buttons['sandbox_pitcher_yamamoto'].show()
             self.buttons['sandbox_pitcher_mcclanahan'].show()
             # Pitch buttons shown via update_sandbox_pitch_buttons()
-            # System buttons
-            self.buttons['sandbox_sound'].show()
-            self.buttons['sandbox_exit'].show()
             self.banner.hide()
-            self.scouting_panel.hide()
-
-        # R/F remain remappable deep links into Review; T opens the standalone
-        # pitch-flight view. The sidebar has only one review button.
-        review = self.buttons['view_pitches']
-        review.set_dimensions((self.SIDEBAR_W, self.SIDEBAR_H))
-        review.set_relative_position(self._SHARED_SIDEBAR_POS[self._sidebar_layout]['view_pitches'])
-        if state in ('gameday_transition', 'gameday_simulation', 'gameday_final'):
-            log = self.buttons['view_game_log'].rect
-            right = self.buttons['next_inning'].rect.right
-            review.set_dimensions((right - log.right - 10, log.height))
-            review.set_relative_position((log.right + 10, log.y))
-        # In-game REVIEW is a side-panel button, so it follows the HUD rule
-        # like its neighbours; V/R/F still open Review under any HUD.
-        if state == 'in_game' and not self._is_legacy_hud():
-            return
-        if state in ('in_game', 'sandbox_gameplay',
-                     'gameday_transition', 'gameday_simulation', 'gameday_final'):
-            self.buttons['view_pitches'].show()
 
     def draw_typing_effect(self, message, counter, speed, position, use_big_font=False):
         """Draws text with a typing effect at the given position."""
@@ -800,5 +571,3 @@ class UIManager:
                 button.hide()
             # Keep banner visible - it should be unaffected by UI toggle
             # self.banner.hide()  # Commented out to keep banner visible
-            self.scouting_panel.hide()
-            self.lap_log_panel.hide()

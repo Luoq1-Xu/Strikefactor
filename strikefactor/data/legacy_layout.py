@@ -23,6 +23,8 @@ Not copied:
 * `ai/*_ai.pkl` — the package's own copies are still read as seeds whenever
   the data directory has none (`PitcherManager._ai_file`), so the training in
   them carries over without a copy.
+* `data/lap_history.json` — the lap log it fed has been removed, so nothing
+  would read the copy.
 
 Run by `strikefactor.main.main` before the game starts. Also runnable by hand::
 
@@ -50,7 +52,6 @@ _FILES = {
     paths.KEY_BINDINGS_FILE: paths.KEY_BINDINGS_FILE,
     os.path.join("data", paths.BATTING_STATS_FILE): paths.BATTING_STATS_FILE,
     os.path.join("data", paths.BATTING_STATS_LEGACY_FILE): paths.BATTING_STATS_LEGACY_FILE,
-    os.path.join("data", paths.LAP_HISTORY_FILE): paths.LAP_HISTORY_FILE,
     os.path.join("data", paths.GAMEDAY_HISTORY_FILE): paths.GAMEDAY_HISTORY_FILE,
     os.path.join("data", paths.GAMEDAY_SESSIONS_FILE): paths.GAMEDAY_SESSIONS_FILE,
 }

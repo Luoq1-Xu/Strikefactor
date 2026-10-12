@@ -5,19 +5,18 @@ from strikefactor.settings_manager import (
 )
 from strikefactor.utils.pitch_physics import DEFAULT_CAMERA
 
-# The vertical offset the batted-ball model below is tuned against is stated
-# in screen pixels, because it always has been — the DB column, the type
-# anchors and `hit_animation._pick_shape` all speak it. `bat_contact` measures
-# the real thing in feet, so it is converted once, here, rather than restating
-# every constant downstream in inches. The two scales happen to be close: the
-# reachable offset is +/- 2.75 in, which at the current `ft_per_px_z` of
-# 0.01333 is +/- 17.2 px.
+# The vertical offset is still *recorded* in screen pixels, because it always
+# has been — the DB column `vertical_offset_in` holds them. `bat_contact`
+# measures the real thing in feet, so it is converted once, here. Nothing
+# decides anything from the pixel value any more: the launch angle comes off
+# the collision. The two scales happen to be close: the reachable offset is
+# +/- 2.75 in, which at the current `ft_per_px_z` of 0.01333 is +/- 17.2 px.
 FT_PER_PX_Z = DEFAULT_CAMERA.ft_per_px_z
 
-# Batted-ball type. Classified at contact from the contact geometry, and now
-# only a *name* for it: `launch_angle_deg` is the quantity, the type is the
-# Statcast band it falls in, and `ball_flight` flies the angle rather than the
-# band. The hit/out split is not rolled here either — it emerges from fielder
+# Batted-ball type. Classified at contact from the contact geometry, and only
+# a *name* for it: the launch angle is the quantity, the type is the Statcast
+# band it falls in, and `ball_flight` flies the angle rather than the band.
+# The hit/out split is not rolled here either — it emerges from fielder
 # routing and interception inside HitAnimation.
 #
 # Convention (pygame y-down): vertical_offset = swing_y - ball_y, so positive
@@ -25,17 +24,11 @@ FT_PER_PX_Z = DEFAULT_CAMERA.ft_per_px_z
 # the ball up (POP_UP / FLY). Negative means the bat was above the ball,
 # scraping the top down into the ground (GROUNDER).
 #
-# That convention is now *load-bearing rather than descriptive*. It used to be
-# a weighted random roll over four types in which the offset only tilted a
+# That convention is *load-bearing rather than descriptive*. It used to be a
+# weighted random roll over four types in which the offset only tilted a
 # Gaussian weight, so the sign above was a tendency and not a rule: a bat 1.2
-# in over the ball drew a FLY 11% of the time. `ball_flight.launch_angle_deg`
-# owns the model now — see the long note there for what was wrong with the
-# tables this replaced and why two of them were unreachable.
-
-# Inches in a foot, for the one conversion this module makes: the offset
-# arrives in screen pixels (the scale the DB column and `hit_animation` speak)
-# and the launch model is stated in real inches.
-INCHES_PER_FT = 12.0
+# in over the ball drew a FLY 11% of the time. `bat_ball_collision` owns the
+# model now, and a bat over the ball cannot produce a fly ball at all.
 
 # **The home-run probability table is gone.** `_BBT_HR_RATE_BASE`,
 # `_BBT_HR_QUALITY_SCALE` and `_POWER_HR_RATE_BONUS` decided whether a ball
@@ -104,28 +97,18 @@ class HitOutcomeManager:
         # canonical record of what kind of contact was made.
         self.last_batted_ball_type = None
 
-        # Batter hand/pivot position used to angle the contact zone.
-        # The left-handed pivot is the right-handed one mirrored across the
-        # plate center (x=630, the strike-zone center), so a LHB's contact
-        # zone is angled symmetrically rather than reusing the RHB pivot.
-        self.rhpos = (490, 453)
-        self.lhpos = (770, 453)
+    @staticmethod
+    def launch_angle_deg(contact):
+        """This ball's launch angle, in degrees above horizontal.
 
-    def launch_angle_deg(self, contact):
-        """This ball's launch angle, drawn once.
-
-        **Drawn**, not derived: `ball_flight.launch_angle_deg` carries a
-        bounded jitter for swing-plane scatter, so calling it twice gives one
-        ball two angles. It used to be called inside `_classify_batted_ball_type`
-        and the angle thrown away the moment the band was read off it — which
-        is how a continuous geometric quantity ended up quantised to three
-        values by the time anything flew the ball. The caller draws it here and
-        carries it, the same way `exit_velocity_mph` and `spray_deg` are drawn
-        once and carried.
+        `Contact.launch_deg`: the vertical reading of the exit direction the
+        collision stamped on the contact, and the same vector `spray_deg`
+        reads. Nothing is computed here. It used to be a fit on the vertical
+        offset with a bounded jitter, so it had to be *drawn* once and carried;
+        the caller still carries it, because one batted ball has one launch
+        angle and every consumer should be handed the same number.
         """
-        _, offset_px = self.contact_metrics(contact)
-        return ball_flight.launch_angle_deg(
-            offset_px * FT_PER_PX_Z * INCHES_PER_FT)
+        return contact.launch_deg
 
     @staticmethod
     def _classify_batted_ball_type(launch_deg):
@@ -199,10 +182,10 @@ class HitOutcomeManager:
                          apply_classified_outcome() to settle stats and
                          runners.
 
-        `launch_deg` and `ev_mph` are this ball's own, drawn once by the caller
-        — see `launch_angle_deg` and `PitchSimulation.exit_velocity_mph`. They
-        are arguments rather than something recomputed here for the reason
-        every other once-drawn quantity in this pipeline is: drawing twice
+        `launch_deg` and `ev_mph` are this ball's own, settled once by the
+        caller — see `launch_angle_deg` and `PitchSimulation.exit_velocity_mph`.
+        They are arguments rather than something worked out here for the reason
+        every other once-settled quantity in this pipeline is: a second answer
         gives one ball two flights.
 
         `outs` is how many are out, for the scorer: a home run after the third
@@ -341,8 +324,8 @@ class HitOutcomeManager:
 
         The offset is bat-below-ball positive, in pygame's y-down screen
         convention — the same sign and scale the old screen-space contact test
-        produced, so the batted-ball type model and `hit_animation._pick_shape`
-        read it unchanged.
+        produced, so the DB column and the swing replay's readout mean what
+        they always have.
 
         Fouls come through here too. That path used to have a method of its
         own, which relaxed the timing sigma from 35 ms to 70 because a

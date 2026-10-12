@@ -1262,10 +1262,8 @@ class GameDayTransitionState(GameState):
 
     def enter(self):
         """Called when entering transition state."""
-        # Hide any lingering banners and panels
+        # Hide any lingering banner
         self.game.ui_manager.hide_banner()
-        self.game.ui_manager.hide_scouting_panel()
-        self.game.ui_manager.hide_lap_log_panel()
 
         # Clean up labels from previous entry
         self._clear_labels()

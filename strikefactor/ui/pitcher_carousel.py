@@ -10,7 +10,6 @@ handling and calls into these methods.
 import pygame
 
 from strikefactor.gameplay.gameday_manager import ALL_PITCHERS, GameDayManager
-from strikefactor.ui.scouting_panel import COLOR_GRAY
 
 # Pitcher handedness is encoded only in sprite paths (e.g. ".../sale/LEFTY"),
 # so keep a small static map here rather than reaching into each pitcher class.
@@ -31,6 +30,7 @@ class PitcherCarousel:
     CARD_BORDER = (90, 90, 90)
     ACCENT = (240, 240, 240)
     LABEL_COLOR = (140, 140, 140)
+    MUTED = (150, 150, 150)
     SEPARATOR = (60, 60, 60)
     PORTRAIT_BG = (0, 0, 0)
 
@@ -143,7 +143,7 @@ class PitcherCarousel:
             record_color = self.ACCENT
         else:
             record_text = "Your record: (never faced)"
-            record_color = COLOR_GRAY
+            record_color = self.MUTED
         record_surf = small.render(record_text, True, record_color)
         screen.blit(record_surf, (info_x, y))
 

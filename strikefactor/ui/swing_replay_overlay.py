@@ -21,10 +21,11 @@ across the plate, which is where pull-versus-oppo contact reads. Both project
 from the same world-feet models, so they cannot tell different stories.
 
 **Both views are seen from a real place, and both used to be mirror images of
-it.** The world's `+x` is the third-base side (`pivot_ft("R")` is at `+1.53`,
-and a right-hander stands at third). A camera on that line sees the pitcher on
-its *left* and the catcher on its right, and a camera above the field sees
-third base on the left — which is why `_project` orients its horizontal axis
+it.** The world's `+x` is the third-base side (a right-hander's spine is at
+`+bat_path.SPINE_OFFSET_FT`, and a right-hander stands at third). A camera on
+that line sees the pitcher on its *left* and the catcher on its right, and a
+camera above the field sees third base on the left — which is why `_project`
+orients its horizontal axis
 rather than taking `y` and `x` as they come. Drawn the other way the SIDE view
 was a first-base camera captioned as a third-base one, and the OVERHEAD view
 put `+x` on the right under a label reading `<- 3B`, i.e. a bird's eye from
@@ -842,8 +843,9 @@ class SwingReplayOverlay:
         The isotropic window is some 30 ft wide from above and the swing uses
         the middle six; drawn bare, the rest read as the picture having shrunk
         rather than as the field it is. The boxes say where the hitter is
-        standing (`bat_path.pivot_ft` puts a right-hander's hands at +1.53 ft,
-        inside the third-base box), and the foul lines put the spray ray's
+        standing (`bat_path` puts a right-hander's hands about 2.4 ft off the
+        centreline on a middle pitch, in the third-base box), and the foul
+        lines put the spray ray's
         verdict beside the thing it is a verdict about. They are drawn at
         `spray.FOUL_LINE_DEG` from the apex through `spray.world_direction`,
         the same number and the same frame conversion `is_foul` and the ray
@@ -1035,11 +1037,18 @@ class SwingReplayOverlay:
         upstream, and `SwingRecord.flight_path` carries the track that came of
         it.
 
+        **The ray and the drawn bat describe one collision.** The bat is near
+        square at contact and the ball leaves about 1.6 times as far round as
+        the bat's face points (`bat_ball_collision`), so on an on-time swing
+        the ray lies within a few degrees of the face normal. It did not
+        always: the bat used to be drawn 49 degrees past square on a middle
+        pitch, beside a ray `spray` had remapped to centre field.
+
         Drawn as the real path rather than its tangent, because
         `batted_ball_path` bends the flight by up to 18 ft. Anchored at the
         contact point rather than at home plate, where the animation flies it
-        from: the couple of feet between them is not worth a ray that appears
-        to leave from somewhere the ball never was.
+        from: the distance between them is not worth a ray that appears to
+        leave from somewhere the ball never was.
 
         Frozen-frame only, like the contact marker and for the same reason —
         until the two have met there is no direction yet.

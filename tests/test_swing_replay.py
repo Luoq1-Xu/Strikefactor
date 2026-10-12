@@ -51,8 +51,9 @@ def make_record(timing_ms=0.0, made_contact="hit", outcome="SINGLE",
     """A SwingRecord with `timing_ms` of error. Negative early, positive late.
 
     Zero is the ball reaching *the barrel's own contact depth*, not the plate:
-    the bat meets the ball a couple of feet out in front, and grading against
-    the plate reported a perfectly struck ball as ~17 ms early.
+    the bat meets the ball out in front of the plate (or, on a pitch away,
+    just behind its front edge), and grading against the plate reported a
+    perfectly struck ball as early.
     """
     traj = make_trajectory()
     aim = kw.get("aim_ft", (0.0, 2.5))
@@ -160,9 +161,9 @@ def test_from_simulation_builds_a_usable_record():
     from strikefactor.gameplay import swing_record
     rec = swing_record.from_simulation(_FakeSim())
     assert rec is not None
-    # A perfectly timed swing puts the ball where the barrel is, which is out
-    # in front of the plate rather than on it.
-    assert rec.barrel_depth_ft > 1.5
+    # A perfectly timed swing puts the ball where the barrel is, which on a
+    # middle pitch is about half a foot out in front of the plate.
+    assert 0.3 < rec.barrel_depth_ft < 1.0
     # Not exactly zero: `swing_starttime` is whole milliseconds, and one ms of
     # rounding is 0.13 ft of ball at 90 mph. That the residual is *this* small
     # is the check — anything larger means the arrival clock is misaligned.
@@ -535,11 +536,10 @@ def test_the_replay_draws_the_swing_that_was_swept_not_the_one_committed():
 
 @pytest.mark.parametrize("ms,label", [
     # Outside the fair window a perfectly aimed swing gets at these defaults
-    # (AMATEUR, -42.5..+45.0 ms). The late side is the forgiving one — see
+    # (AMATEUR, about -39..+51 ms). The late side is the forgiving one — see
     # `test_the_measured_windows_are_asymmetric_and_late_is_the_forgiving_side`
-    # — so the two ends are not the same distance out, and +45 sits exactly on
-    # the boundary rather than outside it.
-    (-45.0, "EARLY"), (50.0, "LATE"),
+    # — so the two ends are not the same distance out.
+    (-45.0, "EARLY"), (58.0, "LATE"),
     (-12.0, "ON TIME"), (12.0, "ON TIME"), (0.0, "ON TIME"),
 ])
 def test_timing_label_respects_this_swings_own_window(ms, label):
@@ -597,12 +597,16 @@ def test_the_screenshot_no_longer_reads_on_time_over_a_foul():
     `timing_charge_sigma_s` stopped charging a 39 ms ROOKIE slide against a
     20 ms Gaussian, and back to 2.6 when `FOUL_QUALITY_THRESHOLD` rose 0.52 ->
     0.59 to hold the total foul rate after `spray`'s location term was made to
-    saturate. Both times that is the retune working rather than this case
-    expiring. The property under test is unchanged — a foul must not read ON
-    TIME — and `test_on_time_means_exactly_that_the_swing_squared_it_up` pins
-    it across the whole ladder without depending on any particular aim error.
+    saturate. It is 2.65 now, and the room either side of it is small: with
+    the ball's direction coming off a real collision, a bat a quarter of an
+    inch further over the ball than this only tips it, and a tipped ball is
+    foul at any timing. Each time that is the retune working rather than this
+    case expiring. The property under test is unchanged — a foul must not read
+    ON TIME — and `test_on_time_means_exactly_that_the_swing_squared_it_up`
+    pins it across the whole ladder without depending on any particular aim
+    error.
     """
-    rec, contact = struck_record(40.0, aim_high_in=3.0)
+    rec, contact = struck_record(40.0, aim_high_in=2.65)
     threshold = bat_contact.foul_threshold(rec.timing_window_mult)
     assert contact.is_foul(threshold), "the model scores this a foul"
     assert rec.timing_label == "LATE", "so the panel must not call it on time"
@@ -698,7 +702,10 @@ def test_the_drawn_bat_and_the_reported_offset_agree(ms):
 
 
 def test_the_replay_uses_the_engine_resolved_aim_without_rebuilding_it():
-    rec, contact = struck_record(-40.0, aim_high_in=3.0)
+    # High enough that the bat misses the ball outright and the spatial assist
+    # has to move it, so the replayed swing is the translated one.
+    rec, contact = struck_record(-40.0, aim_high_in=4.5)
+    assert math.hypot(*contact.spatial_shift_ft) > 0.0
     assert rec.bat_swing().aim_ft == pytest.approx(contact.resolved_aim_ft)
     assert rec.bat_swing().spatial_shift_ft == pytest.approx(
         contact.spatial_shift_ft)
@@ -1378,7 +1385,7 @@ def test_the_replay_ray_is_the_bearing_the_animation_flew(hand, timing_ms):
     contact = _foul_contact(hand, timing_ms)
     if contact is None:
         pytest.skip("no contact at this timing")
-    quality, offset_px = HitOutcomeManager.contact_metrics(contact)
+    quality, _ = HitOutcomeManager.contact_metrics(contact)
     foul = contact.is_foul(bat_contact.foul_threshold(0.2))
 
     mgr = HitOutcomeManager.__new__(HitOutcomeManager)
@@ -1388,7 +1395,7 @@ def test_the_replay_ray_is_the_bearing_the_animation_flew(hand, timing_ms):
 
     anim = ha.HitAnimation(
         _AnimStubGame(hand), outcome="FOUL" if foul else "IN_PLAY",
-        on_complete=lambda: None, vertical_offset=offset_px, quality=quality,
+        on_complete=lambda: None, quality=quality,
         batted_ball_type=shape, spray_deg=departure)
 
     rec = make_record(hand=hand, contact=contact, departure_deg=departure,
@@ -1489,3 +1496,107 @@ def test_replay_stops_at_surface_entry_without_changing_scored_contact(ms, aim_h
                                 touch.swing_t_s + 1e-5)[0]
     assert before > 0.0
     assert after < 0.0
+
+
+# ---- The square bat ---------------------------------------------------------
+#
+# The replay drew two things that could not both be true: the bat as the engine
+# swung it, 49 degrees past square on a middle pitch, and a spray ray `spray`
+# had remapped to centre field. The bat is near square now and the ray is what
+# one collision gave the ball, so the two describe the same event.
+
+def _on_time_record(hand, x_in, z=2.5):
+    """A perfectly aimed, perfectly timed swing at a pitch `x_in` ft inside,
+    as a record carrying its real `Contact`. Mirrored whole for a left-hander.
+    """
+    from tools import calibrate_contact as harness
+
+    traj = harness._pitch(hand, x_in, z, 93.0)
+    cursor = harness._cursor_on_ball(traj)
+    aim = bat_contact.aim_at_pitch(cursor, traj, hand)
+    swing = bat_path.swing(aim, hand)
+    start = traj.time_at_depth(swing.contact_depth_ft) - bat_path.SWING_DURATION_S
+    contact = bat_contact.resolve_contact(swing, traj, start)
+    assert contact is not None
+    rec = make_record(0.0, hand=hand, trajectory=traj,
+                      travel_time_s=traj.travel_time, aim_ft=cursor,
+                      resolved_aim_ft=aim, contact=contact,
+                      contact_quality=contact.quality,
+                      vertical_offset_px=(contact.vertical_offset_ft
+                                          / DEFAULT_CAMERA.ft_per_px_z),
+                      departure_deg=contact.spray_deg,
+                      bat_arrival_s=start + bat_path.SWING_DURATION_S)
+    return rec, contact
+
+
+@pytest.mark.parametrize("hand", ["R", "L"])
+def test_the_ray_lies_beside_the_drawn_bats_face_on_an_on_time_middle_pitch(hand):
+    """What a player sees on the frozen OVERHEAD frame: a bat across the plate
+    and a ray leaving roughly square to it. It used to be a bat at 49 degrees
+    and a ray up the middle."""
+    rec, contact = _on_time_record(hand, 0.0)
+    state = rec.bat_swing().state_at(rec.replay_contact.swing_t_s)
+    drawn = tuple(state.barrel_ft[i] - state.knob_ft[i] for i in range(3))
+    face = spray.attack_direction_deg(drawn, spray.spin_for(hand))
+    assert abs(face) < 10.0, f"the drawn bat is {face:+.1f} deg past square"
+    ray = rec.departure_or_spray_deg
+    assert ray == pytest.approx(contact.spray_deg)
+    assert abs(ray - face) < 10.0, (
+        f"the ray leaves at {ray:+.1f} deg beside a bat facing {face:+.1f}")
+
+
+def test_the_first_touch_frame_keeps_the_direction_the_collision_stamped():
+    """`replay_contact` is an earlier look at the same contact, rebuilt by
+    hand from the sweep. It must carry the stamped exit direction over and
+    never work one out for its own frame."""
+    rec, contact = struck_record(12.0, window=0.2)
+    assert rec.replay_contact.swing_t_s < contact.swing_t_s
+    assert rec.replay_contact.exit_direction == contact.exit_direction
+    assert rec.replay_contact.spray_deg == contact.spray_deg
+    assert rec.replay_contact.launch_deg == contact.launch_deg
+
+
+@pytest.mark.parametrize("hand", ["R", "L"])
+def test_a_ball_met_behind_the_plate_is_framed_and_reported(overlay, hand,
+                                                           monkeypatch):
+    """Contact depth can be negative now: a pitch on the outside corner is met
+    a couple of inches behind the plate's front edge on a perfect swing. The
+    frame has to hold it and the readouts have to say so with their sign."""
+    rec, contact = _on_time_record(hand, -0.7)
+    assert rec.barrel_depth_ft < 0.0
+    assert contact.depth_ft < 0.0
+    assert rec.struck_depth_ft < 0.0
+
+    placed = []
+    real = sro.gdt.blit_text
+
+    def spy(screen, text, font, pos, color, align='left'):
+        placed.append(text)
+        return real(screen, text, font, pos, color, align)
+
+    monkeypatch.setattr(sro.gdt, "blit_text", spy)
+    for view in (0, 1):
+        overlay.trigger(record=rec)
+        overlay._view = view
+        lo, hi = overlay._depth_range()
+        assert lo < contact.depth_ft < hi
+        assert lo < rec.barrel_depth_ft < hi
+        _run_view(overlay, rec, view)
+        assert overlay._view_rect().collidepoint(
+            overlay._project(rec.replay_contact.ball_ft))
+    assert "%+.1f FT" % rec.barrel_depth_ft in placed
+    assert any(text.startswith("-") and text.endswith(" FT") for text in placed)
+
+
+def _run_view(overlay, record, view, ms=4000, step=16):
+    """`_run`, holding one view."""
+    surface = pygame.Surface(SCREEN)
+    overlay.trigger(record=record)
+    overlay._view = view
+    elapsed = 0
+    while elapsed < ms:
+        overlay.update(step)
+        surface.fill((0, 0, 0))
+        overlay.render(surface)
+        elapsed += step
+    return surface

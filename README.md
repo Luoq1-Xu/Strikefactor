@@ -110,8 +110,10 @@ Each pitcher has a pre-trained Q-learning AI model that adapts pitch selection b
 | **ESC** | Return to Main Menu |
 
 All key bindings (except swing controls) can be customized in the settings menu.
+Play is keyboard-driven: there are no on-screen buttons during an at-bat, apart
+from Sandbox's pitcher and pitch selectors.
 
-**Unified Review:** click **REVIEW**, or use V/T/R/F to enter the same workspace
+**Unified Review:** use V/T/R/F to enter the same workspace
 at a specific view. It is available between pitches, on completed-play screens,
 and from inning/game results. Escape closes it without advancing the game.
 
@@ -159,7 +161,6 @@ See [docs/unified-review.md](docs/unified-review.md) for the data and playback c
 ### Gameplay Options
 - Strikezone visibility toggle
 - Batter handedness (Right/Left)
-- Scouting report display
 
 ## 📊 Analytics & Visualization
 
@@ -177,21 +178,6 @@ Visual replay and analysis of thrown pitches:
 - Pitch location visualization on strikezone grid
 - Real-time pitch velocity display
 - Color-coded outcome indicators (strikes, balls, hits, outs)
-
-### Scouting Report Panel
-In-game overlay showing:
-- Current pitcher stats (K/9, BB/9, Strike%, WHIP)
-- Pitch arsenal with velocity ranges
-- Pitch count tracking
-- Color-coded performance indicators
-
-### Lap System
-Snapshot and track your batting performance over time:
-- Press the **LAP** button to save a snapshot of your current session stats
-- Each lap records: batting average, hits, at-bats, pitch count, swing count, triple slash (BA/OBP/SLG), and hit breakdown (1B/2B/3B/HR/BB)
-- **View Laps** panel shows a scrollable history of all saved laps (most recent first)
-- Lap history persists across sessions in `lap_history.json`
-- Great for tracking improvement over multiple practice sessions
 
 ### Pitch Database
 Every pitch is recorded to a SQLite database (`strikefactor.db`) with:

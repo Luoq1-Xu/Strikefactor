@@ -240,10 +240,10 @@ class PitchSimulation:
         # the moment it stopped — it is assigned exactly once now, in
         # `_evaluate_contact`, and never again.
         self.exit_velocity_mph = None
-        # This batted ball's launch angle, in degrees above horizontal. Drawn
-        # **once**, here, for exactly the reason `exit_velocity_mph` above is:
-        # `ball_flight.launch_angle_deg` carries a bounded jitter, so asking
-        # for it twice gives one ball two flights.
+        # This batted ball's launch angle, in degrees above horizontal. Read
+        # **once**, here, off the contact (`Contact.launch_deg`, the vertical
+        # half of the exit direction the collision stamped) and handed to
+        # everything that flies or records the ball.
         #
         # It used to be drawn inside `_classify_batted_ball_type` and discarded
         # the instant the Statcast band was read off it — and then the carry
@@ -285,12 +285,11 @@ class PitchSimulation:
         # are the foul's own numbers, shared by the sound and the animation.
         self._foul_quality = None
         self._foul_vertical_offset = None
-        # And the foul's trajectory shape, drawn once here rather than left to
-        # `hit_animation._pick_shape`'s fallback: that re-rolls
-        # `ball_flight.launch_angle_deg`'s jitter inside the animation, so the
-        # shape a foul animated as could not be reproduced afterwards — and
-        # the shape decides whether the ball is popped up behind the plate or
-        # sprayed past a pole. Kept off `batted_ball_type` (and so off the DB),
+        # And the foul's trajectory shape, classified once here from the same
+        # launch angle a ball in play uses — the shape decides whether the
+        # ball is popped up behind the plate or sprayed past a pole, so the
+        # animation and the replay have to be told the same one. Kept off
+        # `batted_ball_type` (and so off the DB),
         # which is only ever set on a ball in play; widening it would silently
         # change what every existing aggregate over that column means.
         self._foul_shape = None
@@ -528,14 +527,15 @@ class PitchSimulation:
         #
         # The cursor is resolved against the pitch before the bat is built.
         # A cursor is a ray: `bat_path` puts the barrel on it at the depth the
-        # barrel reaches, a couple of feet in front of the plate, but the
-        # player is pointing at a ball drawn all the way *to* the plate. The
-        # ball is two to five inches higher where the bat will be, which is
-        # the entire 2.75 in of tolerance between a bat and a ball — so a
-        # perfectly aimed, perfectly timed swing fouled everything and missed
-        # a curveball outright. `bat_contact.aim_at_pitch` translates the
-        # cursor onto the barrel's depth, and `bat_path` still never sees the
-        # pitch.
+        # barrel reaches, which is in front of the plate (or just behind its
+        # front edge on a pitch away), but the player is pointing at a ball
+        # drawn all the way *to* the plate. The ball is not at that height
+        # where the bat will be, and a bat and a ball have only 2.75 in of
+        # tolerance between them — when the barrel met everything two feet
+        # out, a perfectly aimed, perfectly timed swing fouled everything and
+        # missed a curveball outright. `bat_contact.aim_at_pitch` translates
+        # the cursor onto the barrel's depth, and `bat_path` still never sees
+        # the pitch.
         #
         # `resolve_aim` does one further thing, and it is a different kind of
         # thing: it pulls the aim a difficulty-scaled fraction of the way toward
@@ -593,11 +593,12 @@ class PitchSimulation:
         """How far off the swing was, in ms. Negative early, positive late.
 
         Measured against the ball reaching **the barrel's own contact depth**,
-        not the plate. The bat meets the ball a couple of feet out in front
-        (further on a pitch inside, which is more foreshortened and so pulled
-        earlier), and grading a swing against the plate therefore reported a
-        swing that met the ball perfectly as about 17 ms early. The datum is
-        now the thing the player is actually racing.
+        not the plate. The bat meets the ball out in front (over a foot on a
+        pitch inside, where the bat is further round) or, on a pitch away, a
+        little behind the plate's front edge, and grading a swing against the
+        plate would report one that met the ball perfectly as early or late
+        by the difference. The datum is the thing the player is actually
+        racing.
 
         The one place this is computed. It used to be written out twice —
         abs()'d at swing input for the DB, and recomputed with its sign in
@@ -706,7 +707,7 @@ class PitchSimulation:
                     self.game.hit_outcome_manager.contact_metrics(self.contact)[0],
                     "power" if self.swing_type == 2 else "contact")
                 + self.game.hit_outcome_manager.hot_streak_ev_bonus_mph())
-            # And the vertical direction, drawn once beside it. Both are
+            # And the vertical direction, read once beside it. Both are
             # inputs to the same flight, so they are settled in the same place.
             self.launch_angle_deg = (
                 self.game.hit_outcome_manager.launch_angle_deg(self.contact))
@@ -744,12 +745,11 @@ class PitchSimulation:
         self._foul_vertical_offset = vertical_offset
         # The shape, and then the deflection — in that order, because a ball
         # popped almost straight up comes down behind the plate rather than
-        # out past a pole. Both drawn once, here, so the animation and the
+        # out past a pole. Both settled once, here, so the animation and the
         # swing replay are shown one foul rather than two.
         #
-        # Through the classifier a ball in play uses, not a second copy of it:
-        # `hit_animation._shape_from_offset` is the same model again, and
-        # asking it inside the animation is what left the shape unreproducible.
+        # Through the classifier a ball in play uses, off the same launch
+        # angle, not a second copy of either.
         self._foul_shape = self.game.hit_outcome_manager._classify_batted_ball_type(
             self.launch_angle_deg)
         self.departure_deg = spray.foul_departure_deg(
@@ -798,7 +798,7 @@ class PitchSimulation:
             outs=self.game.currentouts,
         )
 
-        # Snapshot contact metrics for the hit animation (shape + HR distance).
+        # Snapshot contact metrics for the DB record and the hit animation.
         contact_quality = self.game.hit_outcome_manager.last_quality
         contact_vertical_offset = self.game.hit_outcome_manager.last_vertical_offset
 
@@ -819,9 +819,9 @@ class PitchSimulation:
         # is aimed past the wall); everything else is deferred to the
         # animation, which resolves FLYOUT / GROUNDOUT / SINGLE / DOUBLE /
         # TRIPLE from fielder routing + interception.
-        self._handle_contact_result(hit_string, score_before, contact_vertical_offset, contact_quality)
+        self._handle_contact_result(hit_string, score_before, contact_quality)
 
-    def _handle_contact_result(self, hit_string, score_before=0, vertical_offset=0.0, quality=0.0):
+    def _handle_contact_result(self, hit_string, score_before=0, quality=0.0):
         """Unified ball-in-play path.
 
         For HOME RUN, the outcome is fully known at contact (the ball
@@ -852,7 +852,7 @@ class PitchSimulation:
             if homerun_text != '':
                 self.game.homeruns_allowed += 1
             banner_text = homerun_text if homerun_text != '' else hit_string
-            self._start_hit_animation(hit_string, banner_text, vertical_offset, quality)
+            self._start_hit_animation(hit_string, banner_text, quality)
             self.game._display_pitch_results(
                 f"HIT - {self._format_display_outcome(hit_string)}",
                 self.pitchtype,
@@ -880,7 +880,7 @@ class PitchSimulation:
             self.outcome = hit_string
             self.new_entry['isHit'] = hit_string
             self._start_hit_animation(hit_string, banner_text=None,
-                                      vertical_offset=vertical_offset, quality=quality)
+                                      quality=quality)
             self.game._display_pitch_results("IN PLAY", self.pitchtype, self.speed_mph)
 
         # Reset pitch counts after contact (same as strikeout / walk).
@@ -1251,7 +1251,7 @@ class PitchSimulation:
             self.game.menu_state = 'inning_end'
             self.game.state_manager.change_state('inning_end')
 
-    def _start_hit_animation(self, outcome, banner_text, vertical_offset=0.0, quality=0.0):
+    def _start_hit_animation(self, outcome, banner_text, quality=0.0):
         """Begin the post-contact animation; defers the outcome banner until it ends.
 
         For IN_PLAY (the unified ball-in-play outcome), the resolved
@@ -1287,7 +1287,6 @@ class PitchSimulation:
             self.game,
             outcome=outcome,
             on_complete=on_complete,
-            vertical_offset=vertical_offset,
             quality=quality,
             batted_ball_type=self.game.hit_outcome_manager.last_batted_ball_type,
             # Where the ball actually left, resolved once in
@@ -1333,7 +1332,6 @@ class PitchSimulation:
         from strikefactor.gameplay.hit_animation import HitAnimation
 
         quality = self._foul_quality
-        vertical_offset = self._foul_vertical_offset
 
         def on_complete():
             self.game._display_pitch_results("FOUL", self.pitchtype, self.speed_mph)
@@ -1353,13 +1351,11 @@ class PitchSimulation:
             self.game,
             outcome="FOUL",
             on_complete=on_complete,
-            vertical_offset=vertical_offset,
             quality=quality,
             # Both resolved in `_compute_foul_contact_metrics`, which runs on
-            # every foul rather than only the animated ones. Passing the type
-            # rather than None keeps the animation from re-rolling the launch
-            # angle's jitter, and `departure_deg` is where the ball went as
-            # opposed to where the bat pointed it — see `spray`.
+            # every foul rather than only the animated ones. `departure_deg`
+            # is where the ball went as opposed to where the collision sent
+            # it before the deflection — see `spray`.
             batted_ball_type=self._foul_shape,
             spray_deg=self.departure_deg,
             defense=self._defense_profile(),

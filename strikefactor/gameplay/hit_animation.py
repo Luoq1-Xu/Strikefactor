@@ -7,10 +7,10 @@ giving the player visual payoff before the SINGLE / FLYOUT / etc. reveal.
 Geometric primitives only — no sprite assets. Three layers of motion sell
 the read:
 
-  * Trajectory shape — GROUNDER / LINER / FLY / POP_UP, picked from the
-    outcome plus the swing's vertical_offset (outs are deterministic;
-    hits are weighted-random per outcome). A SINGLE that's a screaming
-    liner reads differently from a SINGLE that's a slow roller.
+  * Trajectory shape — GROUNDER / LINER / FLY / POP_UP, the Statcast band
+    the ball's launch angle falls in. The caller classifies it at contact
+    and hands it over; a SINGLE that's a screaming liner reads differently
+    from a SINGLE that's a slow roller.
   * Nine-fielder roster — every defender visible. Per-outcome target
     assignment moves the primary fielder toward the ball, a backup
     fielder shifts to coverage (e.g. 2B at second on a SS grounder),
@@ -47,15 +47,8 @@ from strikefactor.gameplay import (
 # Aliased because `defense` is also the name of this class's constructor
 # argument, which would shadow the module inside __init__.
 from strikefactor.gameplay import defense as defense_model
-from strikefactor.utils.pitch_physics import DEFAULT_CAMERA
 
 HOME = (640, 670)
-
-# Screen pixels to real inches on the vertical axis, for the one thing in this
-# module stated in the contact's units rather than the field's: `vertical_offset`
-# arrives in pixels (the scale the DB column speaks) and the launch model in
-# `ball_flight` is stated in inches.
-_OFFSET_PX_TO_IN = DEFAULT_CAMERA.ft_per_px_z * 12.0
 
 # How many animated seconds one real second is shown over. This is the
 # *only* place presentation pacing is allowed to diverge from physics:
@@ -316,6 +309,10 @@ FOUL_LANDING_FT = {
     "FLY":      (110, 330),
 }
 FOUL_POP_BACK_FT = (15, 50)     # straight-back pop radius behind the plate
+# Where a foul's landing has to stay to be on screen: inside the side margins,
+# and on the apron below home plate, of which the camera shows about 40 px.
+FOUL_SCREEN_X_PX = (15.0, 1265.0)
+FOUL_APRON_MAX_Y_PX = 712.0
 FOUL_FLIGHT_MS = {
     "GROUNDER": 1600,
     "LINER":    2200,
@@ -1371,10 +1368,11 @@ def _pick_hit_landing(outcome, shape, quality=1.0, spray_field_rad=None,
             #
             # No spread, deliberately. The old one existed because `mid` came
             # from a deterministic map on quality, so identical contacts landed
-            # identically. Both inputs are jittered once upstream now
-            # (`LAUNCH_JITTER_DEG`, `EV_CONTACT_JITTER_MPH`), so a third draw
-            # here would be a fourth model of the same variation — and it could
-            # land a ball the fence verdict called short past the fence.
+            # identically. The exit velocity is jittered once upstream now
+            # (`EV_CONTACT_JITTER_MPH`) and the launch angle varies with the
+            # contact itself, so a draw here would be another model of the
+            # same variation — and it could land a ball the fence verdict
+            # called short past the fence.
             dist_ft = ball_flight.carry_distance_ft(launch, ev)
         # The bat's bearing, unchanged. Still no artificial pull toward gaps
         # or lines — the spray pattern is the input to the fielder simulation,
@@ -1428,32 +1426,56 @@ def _pick_hit_landing(outcome, shape, quality=1.0, spray_field_rad=None,
         LANDING_WALL_MARGIN_PX)
 
 
-def _shape_from_offset(vertical_offset):
-    """Trajectory shape for a contact `vertical_offset` screen pixels off centre.
+def _pull_onto_screen(point):
+    """A foul's landing, brought back **along its own bearing** until it is
+    on screen.
 
-    The same launch-angle model `hit_outcome_manager` classifies with, so the
-    path that has no `batted_ball_type` to be told cannot disagree with the one
-    that does. That path is not vestigial: `_start_foul_animation` passes
-    `batted_ball_type=None` on every animated foul, because a foul never runs
-    the hit pipeline that resolves a type.
+    The camera shows very little behind the plate, so a ball fouled back has
+    to land short of where its distance says. It used to be clamped one axis
+    at a time, which keeps the distance and gives up the direction: a liner
+    fouled back over the catcher's shoulder slid along the bottom edge and
+    landed up to 49 degrees from the bearing it left on. That was rare while
+    a foul's bearing came off the bat alone. It is not now: a ball the bat
+    only tipped leaves behind the plate, and those are most fouls.
 
-    It replaced a bucketing on raw pixels whose two upper thresholds were
-    unreachable — POP_UP needed an offset over 25 px when bat and ball stop
-    touching at 17.2, so no foul has ever animated as a pop-up.
+    The bearing is the thing the swing replay draws beside this, so the
+    bearing is what is kept.
     """
-    return ball_flight.shape_for_launch_angle(
-        ball_flight.launch_angle_deg(vertical_offset * _OFFSET_PX_TO_IN))
+    dx, dy = point[0] - HOME[0], point[1] - HOME[1]
+    scale = 1.0
+    if dx > 0.0:
+        scale = min(scale, (FOUL_SCREEN_X_PX[1] - HOME[0]) / dx)
+    elif dx < 0.0:
+        scale = min(scale, (FOUL_SCREEN_X_PX[0] - HOME[0]) / dx)
+    if dy > 0.0:
+        scale = min(scale, (FOUL_APRON_MAX_Y_PX - HOME[1]) / dy)
+    return (HOME[0] + dx * scale, HOME[1] + dy * scale)
 
 
-def _pick_shape(outcome, vertical_offset, batted_ball_type=None):
-    """Pick a trajectory shape from outcome + bat-vs-ball alignment.
+# The shape a caller who states neither a type nor a launch angle is taken to
+# mean: a line drive. Tests and legacy callers only; the game always states
+# both.
+DEFAULT_SHAPE = "LINER"
 
-    When batted_ball_type is supplied (by hit_outcome_manager — the canonical
-    source), use it directly so the visual matches the resolved type. HOME
-    RUN always animates as FLY regardless of underlying type (a line-drive
-    HR clearing the wall would read poorly with a low arc). Callers without a
-    type — the foul path, and legacy callers — derive one from the same
-    geometry rather than from a second model of it.
+
+def _pick_shape(outcome, batted_ball_type=None, launch_deg=None):
+    """The trajectory shape for this animation.
+
+    When `batted_ball_type` is supplied (by `hit_outcome_manager` — the
+    canonical source), it is used directly so the visual matches the resolved
+    type. HOME RUN always animates as FLY regardless of underlying type (a
+    line-drive HR clearing the wall would read poorly with a low arc).
+
+    A caller with a launch angle and no type gets the band that angle falls
+    in, through the same classifier. A caller with neither gets
+    `DEFAULT_SHAPE`.
+
+    **There is no geometry in here any more.** This used to fall back to the
+    contact's vertical offset and run the launch-angle fit a second time,
+    inside the animation, with its own draw of the jitter — so a foul's shape
+    could not be reproduced afterwards. The launch angle is one reading of one
+    collision now (`bat_contact.Contact.launch_deg`), and only the caller has
+    the contact.
     """
     if outcome == "HOME RUN":
         return "FLY"
@@ -1461,13 +1483,17 @@ def _pick_shape(outcome, vertical_offset, batted_ball_type=None):
         return batted_ball_type
     if outcome == "GROUNDOUT":
         return "GROUNDER"
+    if launch_deg is not None and outcome in ("IN_PLAY", "FOUL", "FLYOUT"):
+        shape = ball_flight.shape_for_launch_angle(launch_deg)
+        if outcome == "FLYOUT" and shape not in ("FLY", "POP_UP"):
+            # Airborne by name, so the bands may only choose *which* airborne
+            # shape it was — never demote it to one that never left the dirt.
+            return "FLY"
+        return shape
     if outcome == "FLYOUT":
-        # Airborne by name, so the bands may only choose *which* airborne
-        # shape it was — never demote it to something that never left the dirt.
-        shape = _shape_from_offset(vertical_offset)
-        return shape if shape in ("FLY", "POP_UP") else "FLY"
+        return "FLY"
     if outcome in ("IN_PLAY", "FOUL"):
-        return _shape_from_offset(vertical_offset)
+        return DEFAULT_SHAPE
     weights = SHAPE_WEIGHTS.get(outcome, [("FLY", 1.0)])
     r = random.random()
     cum = 0.0
@@ -1626,13 +1652,12 @@ class HitAnimation:
     idle sway when at rest.
     """
 
-    def __init__(self, game, outcome, on_complete, vertical_offset=0.0, quality=0.0,
+    def __init__(self, game, outcome, on_complete, quality=0.0,
                  batted_ball_type=None, spray_deg=0.0, defense=None,
                  timing_turn_deg=0.0, ev_mph=None, launch_deg=None):
         self.game = game
         self.outcome = outcome
         self.on_complete = on_complete
-        self.vertical_offset = vertical_offset
         self.quality = quality
         self.batted_ball_type = batted_ball_type
         # The nine gloves behind the pitcher, as real feet and seconds
@@ -1832,9 +1857,8 @@ class HitAnimation:
 
         # Trajectory shape (decoupled from outcome resolution). When
         # batted_ball_type is provided by hit_outcome_manager, it's the
-        # canonical source — vertical_offset is only a fallback for
-        # legacy callers.
-        self.shape = _pick_shape(outcome, vertical_offset, batted_ball_type)
+        # canonical source; a caller with only a launch angle gets its band.
+        self.shape = _pick_shape(outcome, batted_ball_type, launch_deg)
 
         # This batted ball's exit velocity. Drawn once because
         # `contact_audio.exit_velocity_mph` carries jitter — identical
@@ -1863,9 +1887,8 @@ class HitAnimation:
 
         # This ball's launch angle, in degrees above horizontal — the other
         # half of its flight, and taken from the caller for exactly the same
-        # reason the exit velocity is: `ball_flight.launch_angle_deg` carries a
-        # bounded jitter, so drawing it here as well would give one batted ball
-        # two flights.
+        # reason the exit velocity is: it is a reading of the one collision
+        # the contact was resolved from, and only the caller has the contact.
         #
         # **Everything airborne in this class is now a function of these two
         # numbers and the bearing.** Carry, hang time, whether the ball clears
@@ -2276,8 +2299,8 @@ class HitAnimation:
             # through its tall arc; the landing is clamped onto the visible
             # apron.
             dist_ft = random.uniform(*FOUL_POP_BACK_FT)
-            end = _polar_point_ft(self.spray_field_rad, dist_ft)
-            self._hit_end = (max(15.0, min(1265.0, end[0])), min(712.0, end[1]))
+            self._hit_end = _pull_onto_screen(
+                _polar_point_ft(self.spray_field_rad, dist_ft))
             self._foul_flight_ms = FOUL_FLIGHT_MS["POP_UP"]
             drift_role = "C"
         elif (q >= FOUL_HR_QUALITY_MIN and severity <= FOUL_HR_MAX_SEVERITY
@@ -2317,9 +2340,8 @@ class HitAnimation:
             spread = (dist_max - dist_min) * 0.18
             dist_ft = random.uniform(max(dist_min, mid - spread),
                                      min(dist_max, mid + spread))
-            end = _clamp_inside_wall(_polar_point_ft(angle, dist_ft),
-                                     LANDING_WALL_MARGIN_PX)
-            self._hit_end = (max(15.0, min(1265.0, end[0])), min(712.0, end[1]))
+            self._hit_end = _pull_onto_screen(_clamp_inside_wall(
+                _polar_point_ft(angle, dist_ft), LANDING_WALL_MARGIN_PX))
             if self.shape == "GROUNDER":
                 dist_px = math.hypot(self._hit_end[0] - HOME[0],
                                      self._hit_end[1] - HOME[1])

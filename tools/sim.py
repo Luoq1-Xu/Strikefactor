@@ -49,10 +49,21 @@ os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
 # holds rows from several contact-geometry vintages at once anyway.
 # Measured through the real seam — `bat_contact.resolve_contact` at AMATEUR
 # over a player model with 0.75 ft/axis of aim scatter and timing N(+19, 48) ms
-# — over 5,170 fair balls in play. Re-derive it the same way whenever the
-# contact geometry moves; CLAUDE.md lists the four sites anchored to it.
+# — over 20,353 fair balls in play:
+#
+#     uv run python -m tools.calibrate_contact --n 52000 --seed 3 --anchors
+#
+# That prints every constant in this block. Re-derive them the same way, and
+# together, whenever the contact geometry moves; CLAUDE.md lists the sites
+# anchored to them.
+#
+# The whole distribution moved up with the square bat (it was 0.649 / 0.720 /
+# 0.807 / 0.883 / 0.941). Fair contact has to be squarer than it was, because
+# the launch angle comes off a real collision now and a glancing one is a
+# pop-up or a chopper: the foul threshold rose and AMATEUR's aim assist with
+# it. See the note over `bat_contact.FOUL_QUALITY_THRESHOLD`.
 QUALITY_QUANTILES = (
-    (0.10, 0.649), (0.25, 0.720), (0.50, 0.807), (0.75, 0.883), (0.90, 0.941),
+    (0.10, 0.757), (0.25, 0.798), (0.50, 0.850), (0.75, 0.928), (0.90, 0.967),
 )
 
 # **And quality is not independent of what kind of batted ball it is**, which
@@ -64,21 +75,22 @@ QUALITY_QUANTILES = (
 #
 # The correlation is not a coincidence to be modelled around, it is the
 # geometry. `vertical_offset_ft` is the undercut, and it decides *both* things
-# at once: the launch angle (`ball_flight.launch_angle_deg`, so the shape) and
-# most of the contact quality (`Contact.centre_score`, whose sigma is 1.38 in).
-# A ball you got right under is a pop-up *and* weakly struck, for one reason.
+# at once: the launch angle (`bat_ball_collision`, so the shape) and most of
+# the contact quality (`Contact.centre_score`, whose sigma is 1.38 in). A ball
+# you got right under is a pop-up *and* weakly struck, for one reason.
 #
-# Measured over the same 5,170 contacts. Note the spread: a line drive's median
-# quality is 0.868 against a pop-up's 0.671.
+# Measured over the same 20,353 contacts. Note the spread: a line drive's
+# median quality is 0.900 against a pop-up's 0.771, with grounders and fly
+# balls level between them at about 0.85.
 QUALITY_BY_SHAPE = {
-    "GROUNDER": ((0.10, 0.639), (0.25, 0.701), (0.50, 0.788), (0.75, 0.862),
-                 (0.90, 0.927)),
-    "LINER":    ((0.10, 0.730), (0.25, 0.804), (0.50, 0.868), (0.75, 0.932),
-                 (0.90, 0.965)),
-    "FLY":      ((0.10, 0.673), (0.25, 0.736), (0.50, 0.805), (0.75, 0.875),
-                 (0.90, 0.928)),
-    "POP_UP":   ((0.10, 0.606), (0.25, 0.629), (0.50, 0.671), (0.75, 0.726),
-                 (0.90, 0.770)),
+    "GROUNDER": ((0.10, 0.759), (0.25, 0.804), (0.50, 0.849), (0.75, 0.938),
+                 (0.90, 0.975)),
+    "LINER":    ((0.10, 0.790), (0.25, 0.830), (0.50, 0.900), (0.75, 0.955),
+                 (0.90, 0.978)),
+    "FLY":      ((0.10, 0.752), (0.25, 0.787), (0.50, 0.844), (0.75, 0.895),
+                 (0.90, 0.930)),
+    "POP_UP":   ((0.10, 0.720), (0.25, 0.741), (0.50, 0.771), (0.75, 0.804),
+                 (0.90, 0.831)),
 }
 
 # **The launch angle, which is the quantity the shape is only a band of.**
@@ -88,12 +100,18 @@ QUALITY_BY_SHAPE = {
 # the angle and *deriving* the shape from it keeps the harness on the same
 # model the game runs.
 #
-# These are the jittered angles, so `LAUNCH_JITTER_DEG` is already in them.
-# Banding them reproduces `BATTED_BALL_MIX` below to within a point, which is
+# The angle is `Contact.launch_deg`, the vertical reading of the exit
+# direction the collision gives. There is no jitter in it or on top of it.
+# Banding these reproduces `BATTED_BALL_MIX` below to within a point, which is
 # the check that the two describe one batter.
+#
+# They are within two or three degrees of what the fitted model gave (-20.7 /
+# -13.5 / -0.7 / 15.6 / 32.0 / 45.9 / 53.1), and that is the calibration and
+# not a coincidence: the collision's own response is nearly twice as steep,
+# and the squarer fair contact is what brings the spread back.
 LAUNCH_ANGLE_QUANTILES = (
-    (0.05, -20.7), (0.10, -13.5), (0.25, -0.7), (0.50, 15.6), (0.75, 32.0),
-    (0.90, 45.9), (0.95, 53.1),
+    (0.05, -23.8), (0.10, -15.4), (0.25, -1.6), (0.50, 15.0), (0.75, 30.6),
+    (0.90, 43.5), (0.95, 50.9),
 )
 
 # **And spray is not uniform either** — the same trap one axis over, and it
@@ -102,33 +120,32 @@ LAUNCH_ANGLE_QUANTILES = (
 # second base, the one place middle infielders cannot reach, and reports an
 # infield-hit rate of 17% against a real 6-8%. Before `spray` the animation
 # drew its own angle, so callers got a spread for free; now the swing supplies
-# it and the harness has to. Mean +1.8°, sd 19.9°, pull-positive.
+# it and the harness has to. Pull-positive.
 #
-# The mean came in from +4.4° when the location term in `spray` was made to
-# saturate. It is *not* that the bat stopped pulling: the straight-line term
-# was sending the opposite-field tail past the foul line, so those balls were
-# missing from the fair population entirely and the surviving mean sat too far
-# to the pull side. Releasing them moves the mean back, not the bat.
-SPRAY_MEAN_DEG, SPRAY_SD_DEG = 1.25, 21.2
+# The fair mean sits well under where an on-time middle pitch goes (+6°),
+# because the pull side is the one the foul line cuts into: an inside strike
+# struck on time is already within a few degrees of the line, so the fair
+# population is dragged back toward centre.
+SPRAY_MEAN_DEG, SPRAY_SD_DEG = 1.81, 21.5
 
 # What this game's bat actually produces, measured through the real seam over
-# the same 5,170 fair balls in play as the quantiles above.
+# the same 20,353 fair balls in play as the quantiles above.
 #
 # **It used to be measured off 170 recorded rows, and those rows were from a
 # superseded model.** They read 0.459 / 0.276 / 0.235 / 0.029, which is much
-# closer to the weighted-random-prior model `ball_flight.launch_angle_deg`
-# replaced (recorded at 45.2 / 31.6 / 22.2 / 1.0) than to the launch-angle
-# geometry now in the game — the pop-up share alone was out by 2.4x. That is
+# closer to the weighted-random-prior model the launch-angle geometry
+# replaced (recorded at 45.2 / 31.6 / 22.2 / 1.0) than to the geometry then in
+# the game — the pop-up share alone was out by 2.4x. That is
 # the hazard CLAUDE.md names about `strikefactor.db` holding rows from several
 # contact-geometry vintages at once: a measurement taken from it is a
 # measurement of whichever bat was in the game when those rows were written.
 #
-# Against MLB's ~42/24/27/7 this is now close on every band.
+# Against MLB's ~42/24/27/7 this is close on every band.
 BATTED_BALL_MIX = (
-    ("GROUNDER", 0.408),
-    ("LINER", 0.241),
-    ("FLY", 0.281),
-    ("POP_UP", 0.069),
+    ("GROUNDER", 0.423),
+    ("LINER", 0.244),
+    ("FLY", 0.277),
+    ("POP_UP", 0.056),
 )
 
 
@@ -166,7 +183,8 @@ def realistic_launch_angle(rng):
     """Draw a launch angle, in degrees above horizontal.
 
     The quantity, rather than the band it falls in — `ball_flight` flies this
-    now. Its jitter is already in the anchors, so this is not re-jittered.
+    now. The anchors are the angles the collision produces, and nothing is
+    added to them.
     """
     return _from_quantiles(LAUNCH_ANGLE_QUANTILES, rng.random(),
                            floor=-45.0, ceiling=80.0)
@@ -182,8 +200,10 @@ def realistic_contact(rng):
     separately, or the two disagree), and the quality is drawn conditional on
     that shape.
 
-    Spray genuinely is independent of quality — measured at r = -0.01 through
-    the real seam — so `realistic_spray` stays a separate call.
+    Spray is drawn separately, by `realistic_spray`. It is independent of the
+    launch angle (r = 0.05 through the real seam) and nearly so of quality
+    (r = 0.24: a late swing pushes the ball and costs a little quality at
+    once), and the sampler leaves that last part out.
     """
     launch = realistic_launch_angle(rng)
     shape = ball_flight.shape_for_launch_angle(launch)

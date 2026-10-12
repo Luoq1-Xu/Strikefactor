@@ -1,15 +1,13 @@
 """Where the bat is, and whether it is where the engine said it was.
 
 The replay's whole claim is that it shows the swing that actually happened.
-That claim rests on two pins and one calibration:
+That claim rests on three things:
 
-  * the geometry constants restated in `bat_path` really are the ones
-    `HitOutcomeManager` swings;
-  * the drawn bat's screen-plane orientation matches the rectangle
-    `collision_angled` tested — its (x, z) projection lies along that ray. The
-    depth component is not free: it is *forced* by foreshortening, because the
-    pivot is where the hands are and a bat of a known length has to span the
-    gap from there to the aim point;
+  * the swing is a function of the aim and the handedness and nothing else;
+  * the contact pose is the one `_contact_pose` states — sweet spot on the
+    cursor's ray, the bat at the bearing the aim asks for, near square on a
+    middle pitch — with the hands wherever that puts them, inside a reach a
+    body has;
   * the barrel arrives at contact at a real MLB bat speed, which is what
     separates a kinematic model from an easing curve.
 
@@ -32,6 +30,7 @@ import math
 import pytest
 
 from strikefactor.gameplay import bat_path as bp
+from strikefactor.gameplay import spray
 from strikefactor.gameplay.hit_outcome_manager import HitOutcomeManager
 
 HANDS = ("R", "L")
@@ -40,6 +39,13 @@ HANDS = ("R", "L")
 # Stated for a right-hander; `_mirror` flips them for a left-hander so both
 # hitters are asked the same question about their own inside and outside.
 AIMS = [(0.0, 1.6), (0.0, 2.5), (0.2, 3.4), (0.7, 2.5), (-0.7, 2.5), (-1.2, 1.5)]
+# The last of those is a foot and a half off the plate and at the knees, past
+# what the hands can reach (`HAND_REACH_FT`). Tests about where the barrel
+# lands use the rest.
+REACHABLE = AIMS[:5]
+
+# The strike zone's own corners and middles, a ball's width outside the plate.
+ZONE = [(x, z) for x in (0.83, 0.0, -0.83) for z in (1.4, 2.5, 3.6)]
 
 
 def _mirror(aim, hand):
@@ -48,13 +54,26 @@ def _mirror(aim, hand):
 
 # ---- Pins to the engine's own geometry --------------------------------------
 
-def test_pivots_match_the_hit_outcome_manager():
-    """`bat_path` restates these so a pure module need not import gameplay.
-    If they drift, the replay draws a bat the engine never swung."""
-    mgr = HitOutcomeManager.__new__(HitOutcomeManager)
-    HitOutcomeManager.__init__(mgr, *_manager_args())
-    assert bp.PIVOT_PX["R"] == tuple(float(v) for v in mgr.rhpos)
-    assert bp.PIVOT_PX["L"] == tuple(float(v) for v in mgr.lhpos)
+def test_the_pixel_pivot_is_gone():
+    """The hands used to be one screen pixel for every pitch.
+
+    `PIVOT_PX` restated `HitOutcomeManager.rhpos` / `lhpos`, the point the
+    engine's contact rectangle rotated about, and `_contact_pose` pinned the
+    knob to it. That is what put the bat 49 degrees past square on a middle
+    pitch: 1.55 ft off the centreline with 2.46 ft of bat to get the sweet
+    spot over the plate. The hands' depth and height are stated in feet now
+    and their lateral position is solved, so none of the pivot's names may
+    come back — nor `_reach` and its slide cap, which existed to stretch a
+    pinned knob after a ball it could not span.
+    """
+    for name in ("PIVOT_PX", "pivot_ft", "hands_anchor_ft", "_reach",
+                 "MAX_HAND_SLIDE_FT"):
+        assert not hasattr(bp, name), name
+    mgr = HitOutcomeManager(None, None)
+    assert not hasattr(mgr, "rhpos")
+    assert not hasattr(mgr, "lhpos")
+    assert bp.HAND_CONTACT_DEPTH_FT == pytest.approx(0.40)
+    assert 2.5 < bp.HAND_CONTACT_HEIGHT_FT < 3.3
 
 
 def test_the_engines_contact_rectangle_is_gone():
@@ -62,9 +81,9 @@ def test_the_engines_contact_rectangle_is_gone():
 
     `CONTACT_ZONE_*` mirrored a 120 x 50 px box that `collision_angled` tested
     for one frame; keeping a copy of a rectangle nobody swings would be the
-    second model of contact this whole refactor exists to remove. The one
-    survivor is `PIVOT_PX`, because what it was all along is where the hands
-    are.
+    second model of contact this whole refactor exists to remove. Its pivot
+    outlived it for a while as the hands' position, and is gone too
+    (`test_the_pixel_pivot_is_gone`).
     """
     assert not hasattr(bp, "CONTACT_ZONE_WIDTH_PX")
     assert not hasattr(bp, "CONTACT_ZONE_HEIGHT_PX")
@@ -120,15 +139,39 @@ def test_the_load_pose_is_a_constant_of_the_stance(hand):
     This is what "standardized" means and it is what the screenshots showed
     was false: the knob started at (+2.46, -1.06) on a perfectly timed swing,
     (+7.46, +0.40) on one 51 ms late and (-0.18, -4.10) on one 68 ms early —
-    the third of those on the wrong side of the plate for a right-hander. The
-    only aim-driven movement left is the hands sliding along the aiming ray to
-    reach a ball the bat cannot otherwise span.
+    the third of those on the wrong side of the plate for a right-hander.
+
+    **It is a constant by construction now, and for a while it was one by
+    accident.** The load position was the contact position turned back through
+    the swing, which only stood still because the hands' contact position did.
+    Letting the hands move with the pitch started the swing a foot and a half
+    apart between an inside pitch and one away, with nothing failing but this
+    test. The stance states where the hands start (`LOAD_HANDS_IN_FT`,
+    `LOAD_HANDS_BACK_FT`) and each swing solves how to get from there to its
+    own contact pose.
+
+    Across the ground it is exact. In height the swing plane's dip still
+    scales with the turn radius, which is a few inches between aims.
     """
+    spin = 1.0 if hand == "R" else -1.0
     knobs = [bp.swing(_mirror(aim, hand), hand).state_at(0.0).knob_ft
              for aim in AIMS]
-    for axis in range(3):
-        spread = max(k[axis] for k in knobs) - min(k[axis] for k in knobs)
-        assert spread < 0.5, f"load pose wanders {spread:.2f} ft on axis {axis}"
+    for knob in knobs:
+        assert knob[0] == pytest.approx(
+            spin * (bp.SPINE_OFFSET_FT - bp.LOAD_HANDS_IN_FT), abs=1e-9)
+        assert knob[1] == pytest.approx(
+            bp.SPINE_DEPTH_FT - bp.LOAD_HANDS_BACK_FT, abs=1e-9)
+    heights = [k[2] for k in knobs]
+    assert max(heights) - min(heights) < 0.25
+
+
+def test_the_load_rotated_back_from_contact_is_gone():
+    """`HAND_RADIUS_B` and `HAND_LEAD_DEG` stated the load as a scale and a
+    turn applied to the contact position. Either coming back means the swing
+    starts where it finishes minus some rotation again."""
+    assert not hasattr(bp, "HAND_RADIUS_B")
+    assert not hasattr(bp, "HAND_LEAD_DEG")
+    assert not hasattr(bp, "HAND_LEAD_RAD")
 
 
 # ---- The bat lies where the player pointed it -------------------------------
@@ -137,13 +180,8 @@ def test_the_load_pose_is_a_constant_of_the_stance(hand):
 # objects that had to be checked against each other — and because that
 # rectangle spent the life of the project mirrored across the horizontal, so
 # aiming at a low pitch tilted the barrel *up*. Both the rectangle and the
-# function are gone: the bat is solved directly onto the hands-to-cursor line
-# in `_contact_pose`, which has no sign to get wrong.
-#
-# `test_the_whole_bat_projects_onto_the_hands_to_cursor_line` below is the
-# successor pin, and it is strictly stronger — it holds for every point of the
-# bat rather than for its bearing. This one guards the direction, which is the
-# half the sign bug broke.
+# function are gone. This guards the direction, which is the half the sign bug
+# broke.
 
 @pytest.mark.parametrize("hand", HANDS)
 def test_aiming_low_points_the_barrel_low(hand):
@@ -155,7 +193,6 @@ def test_aiming_low_points_the_barrel_low(hand):
     where the player is aiming and where the fault was visible.
     """
     cam = bp.DEFAULT_CAMERA
-    pivot = bp.PIVOT_PX[hand]
     previous = None
     for cursor_y in (545, 485, 425):
         s = bp.swing(bp._to_ft((630, cursor_y)), hand)
@@ -163,7 +200,7 @@ def test_aiming_low_points_the_barrel_low(hand):
         barrel_y = cam.project(*st.barrel_ft)[1]
         knob_y = cam.project(*st.knob_ft)[1]
         # Aim below the hands and the barrel goes below them, and vice versa.
-        assert (barrel_y > knob_y) is (cursor_y > pivot[1])
+        assert (barrel_y > knob_y) is (cursor_y > knob_y)
         # And it tracks the cursor monotonically, with no fold in the middle.
         if previous is not None:
             assert barrel_y < previous
@@ -173,15 +210,18 @@ def test_aiming_low_points_the_barrel_low(hand):
 # ---- The contact pose -------------------------------------------------------
 
 @pytest.mark.parametrize("hand", HANDS)
-@pytest.mark.parametrize("aim", AIMS)
+@pytest.mark.parametrize("aim", REACHABLE + ZONE)
 def test_the_sweet_spot_at_contact_lands_under_the_cursor(hand, aim):
     """The pin, and it is a *screen* pin because the aim is a screen point.
 
     A cursor names a ray. The sweet spot has to sit on that ray at the depth
     the bat reaches, which is not the same world point as the aim resolved at
-    the plate — it is 7% further out and a couple of inches higher. Asserting
+    the plate — it is further out and a little higher or lower. Asserting
     the world coordinates instead would be asserting that the player aims at
     the plate, which is exactly the bias `_unproject` exists to remove.
+
+    Asked of the whole strike zone as well as the ordinary aims: the reach
+    bounds on the hands must not bind anywhere a strike can be.
     """
     aim = _mirror(aim, hand)
     s = bp.swing(aim, hand)
@@ -199,93 +239,142 @@ def test_the_sweet_spot_at_contact_lands_under_the_cursor(hand, aim):
 def test_contact_depth_varies_with_location_the_way_real_contact_does(hand):
     """Contact depth is an *output*, and it comes out right.
 
-    How far the aim point sits from the hands is how much the bat is
-    foreshortened, so a pitch inside — close to the hands — is met well out in
-    front, and one away is met deeper. That is real: MLB contact depth runs
-    about 3 ft out front on a pulled inside pitch down to roughly the plate on
-    a ball served the other way. Nothing here is tuned to produce it; it falls
-    out of `cos(psi) = d / HANDS_TO_SWEET_SPOT_FT`.
+    The bat is further round on a pitch inside and behind square on one away,
+    and the barrel leads the hands by the bat's length times the sine of that.
+    So a pitch inside is met over a foot in front of the plate, one down the
+    middle about half a foot out, and one on the outside corner a couple of
+    inches *behind* the plate's front edge. Nothing clamps the last of those
+    at zero: it is where the ball is struck.
     """
     depths = [bp.swing(_mirror((x, 2.5), hand), hand).contact_depth_ft
-              for x in (0.7, 0.35, 0.0, -0.35, -0.7, -1.2)]
+              for x in (0.7, 0.35, 0.0, -0.35, -0.7)]
     assert depths == sorted(depths, reverse=True), "inside must be met further out front"
-    assert 2.4 < depths[0] < 3.2, "a pulled inside pitch is met well out front"
-    assert 0.0 < depths[-1] < 1.0, "a ball low and away is met at the plate"
-    assert 1.8 < depths[2] < 2.8, "an ordinary pitch is met about 2 ft out front"
+    assert 0.9 < depths[0] < 1.6, "an inside pitch is met over a foot out front"
+    assert 0.3 < depths[2] < 1.0, "a middle pitch is met about half a foot out"
+    assert -0.5 < depths[-1] < 0.0, "the outside corner is met behind the front edge"
+
+
+@pytest.mark.parametrize("hand", HANDS)
+def test_the_on_time_bat_is_near_square_on_a_middle_pitch(hand):
+    """The defect this pose replaced, stated as its fix.
+
+    With the knob pinned 1.55 ft off the centreline, the only way to put the
+    sweet spot over the plate was to point the bat at the pitcher: 49 degrees
+    past square on a middle-middle pitch, and 19 to 71 across the zone. A bat
+    meets a middle pitch about square.
+    """
+    s = bp.swing((0.0, 2.5), hand)
+    bearing = spray.attack_direction_deg(s.contact_axis, s.spin)
+    assert abs(bearing) < 10.0, f"{bearing:+.1f} deg past square"
+    assert bearing == pytest.approx(bp.POSE_MEAN_DEG, abs=1e-6)
 
 
 @pytest.mark.parametrize("hand", HANDS)
 @pytest.mark.parametrize("aim", AIMS)
-def test_the_whole_bat_projects_onto_the_hands_to_cursor_line(hand, aim):
-    """The bat lies along the axis the old rectangle was rotated to, exactly.
+def test_the_bat_has_the_bearing_the_aim_asks_for(hand, aim):
+    """The condition that closes the pose, checked against the bat itself.
 
-    Perspective maps lines to lines, so pinning the knob onto the pivot pixel
-    and the sweet spot onto the cursor pixel puts *every* point of the bat on
-    the line between them — including the tip, which is past the cursor. This
-    is the stronger form of the property the world-space `bat_axis` test used
-    to check, and it is what makes the drawn bat and the graded bat one object.
+    It replaced a pin on the projection of the bat onto a hands-to-cursor line
+    on screen, which held only because the knob was a fixed pixel. The bat's
+    bearing is stated now, and it holds for every aim — including one past the
+    hands' reach, where the barrel falls short of the cursor and the attitude
+    does not change.
     """
     aim = _mirror(aim, hand)
     s = bp.swing(aim, hand)
+    want = math.degrees(bp.pose_bearing_rad(s.spin * aim[0]))
+    assert spray.attack_direction_deg(s.contact_axis, s.spin) == pytest.approx(
+        want, abs=1e-6)
     st = s.state_at(bp.SWING_DURATION_S)
-    cam = bp.DEFAULT_CAMERA
-    pivot = bp.PIVOT_PX[hand]
-    cursor = (cam.screen_center_x - aim[0] * cam.scale_x / cam.cam_dist,
-              cam.screen_center_y - (aim[1] - cam.cam_height) * cam.scale_y / cam.cam_dist)
-    dx, dy = cursor[0] - pivot[0], cursor[1] - pivot[1]
-    span = math.hypot(dx, dy)
-    for point in (st.knob_ft, st.sweet_spot_ft, st.barrel_ft):
-        px, py, _ = cam.project(*point)
-        off = abs((px - pivot[0]) * dy - (py - pivot[1]) * dx) / span
-        assert off == pytest.approx(0.0, abs=1e-6)
+    drawn = tuple(st.barrel_ft[i] - st.knob_ft[i] for i in range(3))
+    assert spray.attack_direction_deg(drawn, s.spin) == pytest.approx(
+        want, abs=1e-6)
 
 
 @pytest.mark.parametrize("hand", HANDS)
-def test_the_depth_lead_is_bounded_by_the_geometry_not_by_a_cap(hand):
-    """The barrel leads the hands in depth by exactly what the perspective
-    demands, and nothing caps it because nothing needs to: the camera is 30 ft
-    back, so the most foreshortened a bat can get is pointing straight down the
-    view — very nearly the y axis — and it is only 2.46 ft long. Contact depth
-    therefore cannot pass `HAND_CONTACT_DEPTH_FT + HANDS_TO_SWEET_SPOT_FT`
-    however the player aims.
+def test_the_bearing_answers_the_aim_all_the_way_across(hand):
+    """Further inside is further round, at a rate that never goes slack inside
+    the zone and never reverses outside it. Measured as a rate: a step is
+    monotone too."""
+    xs = [-1.8 + 0.05 * i for i in range(73)]
+    bearings = [math.degrees(bp.pose_bearing_rad(x)) for x in xs]
+    assert bearings == sorted(bearings)
+    rates = [(b1 - b0) / 0.05 for x, b0, b1 in zip(xs, bearings, bearings[1:])
+             if -0.85 <= x <= 0.80]
+    assert min(rates) > 8.0, f"{min(rates):.1f} deg/ft inside the zone"
+    assert max(rates) == pytest.approx(bp.POSE_GAIN_DEG_PER_FT, rel=0.02)
+    # And it saturates smoothly: no aim, however far off, turns the bat past
+    # the stated span.
+    for x in (-40.0, 40.0):
+        assert abs(math.degrees(bp.pose_bearing_rad(x)) - bp.POSE_MEAN_DEG
+                   ) <= bp.POSE_SPAN_DEG + 1e-9
 
-    The *lower* end is bounded by geometry too, and it is not
-    `HAND_CONTACT_DEPTH_FT`. A ball the bat cannot span is met off the
-    quadratic's vertex, where the barrel trails the hands rather than leading
-    them — so the lead goes slightly negative and contact depth dips below the
-    hands. It used to floor at exactly the hands' depth with a lead of exactly
-    zero, which pinned the bat flat in the plane of the plate and, once the
-    bearing was read as the ball's direction, stacked a tenth of all contact on
-    one spray angle. What bounds the trail is still the bat's own length."""
+
+@pytest.mark.parametrize("hand", HANDS)
+def test_contact_depth_follows_from_the_bearing_and_nothing_caps_it(hand):
+    """`depth = hand depth + L * cos(tilt) * sin(bearing)`, checked on the bat.
+
+    So depth is bounded by the bearing's span and the bat's length, which is
+    why nothing needs to cap it, and it goes negative where the bat is behind
+    square. The old clamp at zero is gone, and with it the pile of swings met
+    at exactly the plate.
+    """
     assert not hasattr(bp, "MAX_CONTACT_LEAD_DEG")
-    ceiling = bp.HAND_CONTACT_DEPTH_FT + bp.HANDS_TO_SWEET_SPOT_FT
-    leads = []
-    for x in (0.7, 0.0, -0.7, -1.2):
-        s = bp.swing(_mirror((x, 2.5), hand), hand)
-        assert -0.2 <= s.contact_axis[1] <= 1.0
-        assert -1e-9 <= s.contact_depth_ft <= ceiling
-        leads.append(s.contact_axis[1])
-    assert leads == sorted(leads, reverse=True)
+    reach = bp.HANDS_TO_SWEET_SPOT_FT * math.sin(
+        math.radians(bp.POSE_MEAN_DEG + bp.POSE_SPAN_DEG))
+    seen_behind = False
+    for x in (1.5, 0.7, 0.0, -0.7, -1.5):
+        for z in (1.5, 2.5, 3.5):
+            s = bp.swing(_mirror((x, z), hand), hand)
+            bearing = bp.pose_bearing_rad(x)
+            want = (bp.HAND_CONTACT_DEPTH_FT + bp.HANDS_TO_SWEET_SPOT_FT
+                    * math.cos(s.contact_tilt_rad) * math.sin(bearing))
+            assert s.contact_depth_ft == pytest.approx(want, abs=1e-9)
+            assert abs(s.contact_depth_ft - bp.HAND_CONTACT_DEPTH_FT) <= reach
+            seen_behind = seen_behind or s.contact_depth_ft < 0.0
+    assert seen_behind, "no aim met the ball behind the plate's front edge"
 
 
 @pytest.mark.parametrize("hand", HANDS)
 def test_even_an_absurd_aim_keeps_the_bat_on_a_body(hand):
     """A cursor anywhere on the screen, including well off the plate, has to
-    produce a bat a person could be holding. The reach case is the one with a
-    cap on it (`MAX_HAND_SLIDE_FT`), and past that the bat honestly falls
-    short of the cursor rather than the hands being flung after it.
+    produce a bat a person could be holding.
 
-    Contact depth floors at the plate, not at the hands: on a ball the bat
-    cannot span the barrel trails the hands (see
-    `test_the_depth_lead_is_bounded_by_the_geometry_not_by_a_cap`)."""
-    ceiling = bp.HAND_CONTACT_DEPTH_FT + bp.HANDS_TO_SWEET_SPOT_FT
+    Solved without a bound, the hands run away: out over the plate's far edge
+    on a ball a foot outside, behind the batter's own body on one a foot
+    inside. So they stay within `HAND_REACH_FT` of the spine toward the plate
+    and `HAND_TUCK_FT` the other way, at their authored depth and height, in
+    front of the body. Past that the barrel honestly falls short of the cursor
+    and the sweep whiffs.
+    """
+    spin = 1.0 if hand == "R" else -1.0
     for sx in range(0, 1281, 80):
         for sy in range(200, 721, 40):
             s = bp.swing(bp._to_ft((sx, sy)), hand)
-            assert -1e-9 <= s.contact_depth_ft <= ceiling
-            reach = math.hypot(s.hands_contact[0] - s.spine_xy[0],
-                               s.hands_contact[1] - s.spine_xy[1])
-            assert reach < 3.2
+            hands_in = spin * s.hands_contact[0]
+            assert (bp.SPINE_OFFSET_FT - bp.HAND_REACH_FT - 1e-9 <= hands_in
+                    <= bp.SPINE_OFFSET_FT + bp.HAND_TUCK_FT + 1e-9)
+            assert hands_in > 0.0, "the hands crossed the plate's centreline"
+            assert s.hands_contact[1] == pytest.approx(bp.HAND_CONTACT_DEPTH_FT)
+            assert s.hands_contact[1] > s.spine_xy[1], "hands behind the body"
+            assert s.hands_contact[2] == pytest.approx(bp.HAND_CONTACT_HEIGHT_FT)
+            assert abs(math.degrees(s.contact_tilt_rad)) <= bp.MAX_CONTACT_TILT_DEG + 1e-9
+            assert math.dist(s.contact_ft, s.hands_contact) == pytest.approx(
+                bp.HANDS_TO_SWEET_SPOT_FT)
+            assert -2.5 < s.contact_depth_ft < 2.9
+
+
+@pytest.mark.parametrize("hand", HANDS)
+def test_a_ball_past_the_hands_reach_is_left_short(hand):
+    """The reach bound moves the bat, never its attitude: the barrel stops on
+    the batter's side of the cursor, at the bearing the aim asked for."""
+    aim = _mirror((-1.6, 1.4), hand)
+    s = bp.swing(aim, hand)
+    cursor_x = bp._unproject(aim, s.contact_depth_ft)[0]
+    short_by = s.spin * (s.contact_ft[0] - cursor_x)
+    assert short_by > 0.2, "the barrel reached a ball the hands could not"
+    assert spray.attack_direction_deg(s.contact_axis, s.spin) == pytest.approx(
+        math.degrees(bp.pose_bearing_rad(s.spin * aim[0])), abs=1e-6)
 
 
 # ---- Both ends pinned -------------------------------------------------------
@@ -308,7 +397,7 @@ def test_barrel_reaches_mlb_bat_speed_at_contact(hand, aim):
     """The check that `ease_k` is kinematics and not a shape parameter: the
     solved exponent has to put a real bat speed on the barrel. MLB average is
     ~72 mph, and the rotation radius it is solved against — spine to contact
-    point, about 3.7 ft — implies ~1600 deg/s, which is also right."""
+    point, a little over 3 ft — implies ~1900 deg/s."""
     s = bp.swing(_mirror(aim, hand), hand)
     assert s.state_at(bp.SWING_DURATION_S).speed_mph == pytest.approx(72.0, abs=1.5)
 
@@ -607,10 +696,33 @@ def test_a_translated_swing_moves_rigidly_without_changing_its_shape():
                      (before.sweet_spot_ft, after.sweet_spot_ft)):
             assert b == pytest.approx((a[0] + dx, a[1], a[2] + dz))
         assert after.speed_mph == pytest.approx(before.speed_mph)
+        # The collision reads the bat's velocity off whichever swing was
+        # swept, so the assisted one has to answer and answer the same.
+        assert moved.point_velocity_at(t_s, 0.9) == pytest.approx(
+            base.point_velocity_at(t_s, 0.9))
 
 
-def _manager_args():
-    """HitOutcomeManager's constructor signature, filled with throwaways."""
-    import inspect
-    params = list(inspect.signature(HitOutcomeManager.__init__).parameters)[1:]
-    return [None] * len(params)
+@pytest.mark.parametrize("hand,side", [("R", 1.0), ("L", -1.0)])
+def test_the_bats_velocity_is_asked_of_a_point_on_it(hand, side):
+    """`point_velocity_at` is the bat's half of the collision.
+
+    At contact the sweet spot is moving at the stated bat speed, forward and
+    rising at the attack angle. The handle is on the same bat and moving a
+    good deal slower, which is why the collision asks about the wood that met
+    the ball and not about the swing.
+    """
+    s = bp.swing((0.0, 2.5), hand)
+    v = s.point_velocity_at(bp.SWING_DURATION_S, bp.CONTACT_SWEET_SPOT_FRAC)
+    speed = math.sqrt(sum(c * c for c in v))
+    assert speed * bp.MPH_PER_FT_S == pytest.approx(bp.PEAK_BAT_SPEED_MPH, abs=1.5)
+    assert v[1] > 0.8 * speed, "the barrel should be moving at the pitcher"
+    assert math.degrees(math.asin(v[2] / speed)) == pytest.approx(
+        bp.ATTACK_ANGLE_DEG, abs=1.0)
+    # The barrel is sweeping across the plate toward the batter's pull side.
+    assert v[0] * side > 0.0
+    handle = s.point_velocity_at(bp.SWING_DURATION_S, 0.2)
+    assert math.sqrt(sum(c * c for c in handle)) < 0.75 * speed
+    # Defined at both ends of the swing, where a central difference has only
+    # one side to stand on.
+    for t_s in (0.0, bp.TOTAL_DURATION_S):
+        assert all(math.isfinite(c) for c in s.point_velocity_at(t_s, 0.9))

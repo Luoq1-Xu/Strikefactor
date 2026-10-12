@@ -20,7 +20,6 @@ from strikefactor.gameplay.hit_animation import (
     FT_TO_PX_Y,
     HOME,
     HitAnimation,
-    _pick_shape,
     _wall_r_at,
 )
 
@@ -38,7 +37,7 @@ class _StubGame:
         self.batter = _StubBatter(hand)
 
 
-def _make(hand="R", timing=0.5, voff=0.0, quality=0.3, seed=7):
+def _make(hand="R", timing=0.5, shape="LINER", quality=0.3, seed=7):
     """A foul, mistimed by `timing` in [-1, 1] — negative early, positive late.
 
     `timing` used to be `foul_timing_norm`, which the animation read directly
@@ -58,23 +57,19 @@ def _make(hand="R", timing=0.5, voff=0.0, quality=0.3, seed=7):
     call the game never makes, and the assertions below would be asking the
     animation to invent a direction again.
 
-    **Seeded**, because the trajectory shape is drawn from
-    `ball_flight.launch_angle_deg`'s jitter and `voff=3.0` — the offset the
-    foul-HR cases use — sits at 24.5 deg, right on the LINER/FLY band edge,
-    so it comes out GROUNDER about 3% of the time and fails the foul-HR
-    gate. That was always true (the animation drew the same jitter
-    internally), and it left this file quietly dependent on whatever had
-    consumed the global RNG before it. Nothing here is a test *of* that
-    scatter, so it is pinned.
+    `shape` is the foul's trajectory shape, stated. The engine classifies it
+    at contact from the ball's launch angle and hands it over; the animation
+    used to work one out from a vertical offset with its own draw of a
+    jitter, which left this file dependent on whatever had consumed the
+    global RNG before it. The seed that pinned that is kept for what the
+    animation does still draw (fielder reactions and sway).
     """
     random.seed(seed)
     bat_deg = -timing * 70.0
-    shape = _pick_shape("FOUL", voff)
     return HitAnimation(
         _StubGame(hand),
         outcome="FOUL",
         on_complete=lambda: None,
-        vertical_offset=voff,
         quality=quality,
         batted_ball_type=shape,
         spray_deg=spray.foul_departure_deg(bat_deg, quality, shape),
@@ -127,9 +122,9 @@ def test_foul_finishes_on_timeout_without_securing():
     ("L", +0.6, "left"),   # late LHB goes oppo toward LF
 ])
 def test_foul_direction_follows_signed_timing(hand, timing, side):
-    # voff=0 -> LINER shape; severity 0.6 > FOUL_HR_MAX_SEVERITY so the
-    # HR gate can't reroute the landing regardless of the quality roll.
-    anim = _make(hand=hand, timing=timing, voff=0.0, quality=0.5)
+    # A LINER; severity 0.6 > FOUL_HR_MAX_SEVERITY so the HR gate can't
+    # reroute the landing regardless of the quality roll.
+    anim = _make(hand=hand, timing=timing, shape="LINER", quality=0.5)
     angle = _real_field_angle_deg(anim)
     if side == "left":
         assert angle > 135.0, f"expected LF-side foul, got {angle:.1f} deg (real field)"
@@ -137,21 +132,21 @@ def test_foul_direction_follows_signed_timing(hand, timing, side):
         assert angle < 45.0, f"expected RF-side foul, got {angle:.1f} deg (real field)"
 
 
-@pytest.mark.parametrize("hand,timing,voff,quality", [
-    (hand, timing, voff, quality)
+@pytest.mark.parametrize("hand,timing,shape,quality", [
+    (hand, timing, shape, quality)
     for hand in ("R", "L")
     for timing in (-0.6, +0.6)
-    for voff, quality in ((0.0, 0.5),      # generic foul liner
-                          (3.0, 0.95))     # foul home run
+    for shape, quality in (("LINER", 0.5),     # generic foul liner
+                           ("FLY", 0.95))      # foul home run
 ])
-def test_the_fielder_who_drifts_after_a_foul_is_on_its_side(hand, timing, voff, quality):
+def test_the_fielder_who_drifts_after_a_foul_is_on_its_side(hand, timing, shape, quality):
     """The drift fielder is picked from the landing's side of the field.
 
     The side was read off the pull-positive spray angle without the
     handedness mirror, so a left-hander's pulled foul down the right-field
     line sent the third baseman after it.
     """
-    anim = _make(hand=hand, timing=timing, voff=voff, quality=quality)
+    anim = _make(hand=hand, timing=timing, shape=shape, quality=quality)
     (drift,) = anim._lean_excluded
     if _real_field_angle_deg(anim) > 90.0:
         assert drift in ("LF", "3B"), f"{hand}HB foul to LF side chased by {drift}"
@@ -160,7 +155,7 @@ def test_the_fielder_who_drifts_after_a_foul_is_on_its_side(hand, timing, voff, 
 
 
 def test_severe_undercut_pops_straight_back():
-    anim = _make(voff=40.0, quality=0.3)
+    anim = _make(shape="POP_UP", quality=0.3)
     assert anim.shape == "POP_UP"
     # Behind the plate, still on the visible apron.
     assert anim._hit_end[1] > HOME[1]
@@ -169,7 +164,7 @@ def test_severe_undercut_pops_straight_back():
 
 
 def test_severe_overcut_is_a_short_foul_grounder():
-    anim = _make(voff=-40.0, quality=0.3)
+    anim = _make(shape="GROUNDER", quality=0.3)
     assert anim.shape == "GROUNDER"
     dist = math.hypot(anim._hit_end[0] - HOME[0], anim._hit_end[1] - HOME[1])
     assert dist < 250.0
@@ -177,7 +172,7 @@ def test_severe_overcut_is_a_short_foul_grounder():
 
 
 def test_barreled_near_miss_is_a_foul_home_run():
-    anim = _make(timing=0.3, voff=3.0, quality=0.95)
+    anim = _make(timing=0.3, shape="FLY", quality=0.95)
     assert anim.shape == "FLY"
     assert anim.is_foul_hr
     # Wall clearance is a screen-space question (the wall is a screen ellipse).
@@ -196,7 +191,7 @@ def test_barreled_near_miss_is_a_foul_home_run():
     ("R", -0.3), ("R", +0.3), ("L", -0.3), ("L", +0.3),
 ])
 def test_foul_hr_lands_foul_on_the_correct_side(hand, timing):
-    anim = _make(hand=hand, timing=timing, voff=3.0, quality=0.95)
+    anim = _make(hand=hand, timing=timing, shape="FLY", quality=0.95)
     assert anim.is_foul_hr
     pull_left = (hand == "R") == (timing < 0)   # early=pull; RHB pulls to LF
     angle = _real_field_angle_deg(anim)
@@ -206,14 +201,14 @@ def test_foul_hr_lands_foul_on_the_correct_side(hand, timing):
         assert angle < 45.0, f"expected RF-side foul HR, got {angle:.1f} deg"
 
 
-@pytest.mark.parametrize("timing,voff,quality", [
-    (0.9, 0.0, 0.4),     # modest foul
-    (0.3, 3.0, 0.95),    # foul "home run" — deep flight, still no number
-    (0.5, -40.0, 0.3),   # severe overcut, foul grounder
-    (0.5, 40.0, 0.3),    # severe undercut, pop straight back
+@pytest.mark.parametrize("timing,shape,quality", [
+    (0.9, "LINER", 0.4),      # modest foul
+    (0.3, "FLY", 0.95),       # foul "home run" — deep flight, still no number
+    (0.5, "GROUNDER", 0.3),   # severe overcut, foul grounder
+    (0.5, "POP_UP", 0.3),     # severe undercut, pop straight back
 ])
-def test_no_foul_ever_shows_a_distance(timing, voff, quality):
-    anim = _make(timing=timing, voff=voff, quality=quality)
+def test_no_foul_ever_shows_a_distance(timing, shape, quality):
+    anim = _make(timing=timing, shape=shape, quality=quality)
     assert anim.hr_distance_ft is None
 
 
@@ -223,7 +218,6 @@ def test_actual_home_run_still_shows_a_distance():
         _StubGame("R"),
         outcome="HOME RUN",
         on_complete=lambda: None,
-        vertical_offset=3.0,
         quality=0.95,
         batted_ball_type=None,
         spray_deg=8.0,
@@ -238,3 +232,26 @@ def test_settings_default_enables_foul_animation():
     sm = SettingsManager()
     assert sm.default_settings["foul_animation_enabled"] is True
     assert sm.get_setting("foul_animation_enabled") in (True, False)
+
+
+@pytest.mark.parametrize("hand", ["R", "L"])
+@pytest.mark.parametrize("shape", ["GROUNDER", "LINER", "FLY", "POP_UP"])
+@pytest.mark.parametrize("bearing", [100.0, 150.0, 178.0, -120.0, -164.0])
+def test_a_ball_fouled_back_lands_on_the_bearing_it_left_on(hand, shape, bearing):
+    """Most fouls leave behind the plate now, because a ball the bat only
+    tipped carries on back. The camera shows about 40 px of ground there, so
+    the landing has to be brought in, and it is brought in **along the
+    bearing**. Clamped one axis at a time it slid along the bottom edge: a
+    liner fouled back over the catcher's shoulder landed up to 49 degrees
+    from the ray the swing replay draws for it."""
+    random.seed(3)
+    anim = HitAnimation(_StubGame(hand), outcome="FOUL",
+                        on_complete=lambda: None, quality=0.4,
+                        batted_ball_type=shape, spray_deg=bearing)
+    x, y = anim._hit_end
+    assert 0.0 <= x <= 1280.0 and y <= 712.0 + 1e-6, "landed off screen"
+    assert y > HOME[1], "a ball fouled back should land behind the plate"
+    want = spray.field_angle_deg(bearing, spray.spin_for(hand))
+    got = _real_field_angle_deg(anim)
+    assert abs(((got - want) + 180.0) % 360.0 - 180.0) < 1e-6, (
+        f"left at {want:.1f} deg (field), landed at {got:.1f}")

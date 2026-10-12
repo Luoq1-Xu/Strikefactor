@@ -10,9 +10,7 @@ or 25 px (power) tall, centred 30 px inboard of the aim point, at
 exactly one frame, in the plane of the screen, with no depth. Every question a
 timing replay wants to ask ("where was the barrel 40 ms ago", "how far in front
 of the plate did they meet it") is a question about the two axes it did not
-have. `bat_contact` sweeps this model instead now, and the rectangle is gone;
-it survives below only as the derivation of `PIVOT_PX` and the contact pose,
-which were solved against it.
+have. `bat_contact` sweeps this model instead now, and the rectangle is gone.
 
 **The swing is a function of the player's inputs and nothing else** — aim and
 handedness. Not of the pitch, and not of the swing type. This is the whole
@@ -31,44 +29,46 @@ independent motions, and `bat_contact.resolve_contact` is what computes it.
 
 Four things are worth knowing before changing anything here.
 
-**The engine's aiming pivot is the hands.** `HitOutcomeManager.rhpos` is
-(490, 453) px, which is (1.53, 2.93) ft — within a couple of inches of where a
-right-hander's hands are at contact. Read that way the whole contact pose is
-*solved* rather than fitted. The rectangle the engine used to swing was a
-screen-space object centred on the cursor with its long axis pointing at the
-pivot, so the 3D bat whose projection is that rectangle is pinned by two
-conditions — knob onto the pivot pixel, sweet spot onto the cursor pixel — and
-perspective maps lines to lines, so the whole bat lies along that axis. That
-leaves one unknown, the depth the sweet spot sits at, against one equation,
-the bat's length. See `_contact_pose`; it comes out to a quadratic.
+**The contact pose is closed by a stated bearing, and the hands move.** The
+sweet spot lands on the cursor's ray, and the bat is a known length; that
+leaves one condition to choose. It used to be "the knob sits on the engine's
+aiming pivot", one fixed point for every pitch, 1.55 ft off the plate's
+centreline. The bat is 2.46 ft from grip to sweet spot, so the only way to put
+the sweet spot over the plate from there was to point the bat at the pitcher:
+49 degrees past square on a middle pitch and anywhere from 19 to 71 across the
+zone. `spray` then subtracted the 49 and rescaled the rest, and the replay drew
+the real bat beside the remapped ball.
 
-**Contact depth is an output.** It is the root of that quadratic, and it lands
-where real contact depth lands without a single tuned number: a pitch aimed
-inside sits close to the hands on screen, so the bat is heavily foreshortened
-and the ball is met 2.7 ft out in front — pulled; a pitch away sits far from
-them, the bat lies nearly across the view, and it is met 1.2 ft out — deeper;
-a ball low and away is further off than the bat is long, has no root at all,
-and the hitter extends after it and meets it at the plate, inside-out. Nothing
-here may re-derive it from the ball.
+The condition now is that the bat has a bearing (`pose_bearing_rad`): a few
+degrees past square on a middle pitch, further round on one inside, behind
+square on one away. The hands go wherever that puts them — in toward the body
+on an inside pitch, out over the plate on one away — which is what a hitter's
+hands do. See `_contact_pose`.
+
+**Contact depth is an output.** It follows from the bearing: the barrel leads
+the hands by the bat's length times the sine of it. A middle pitch is met
+about half a foot in front of the plate, an inside one over a foot out, and
+one on the outside corner a couple of inches *behind* the plate's front edge.
+So depth can be negative, and nothing here or downstream may clamp it. Nothing
+may re-derive it from the ball either.
 
 **A cursor is a ray, not a point.** The camera is a perspective projection
 from 30 ft behind the plate, so the same pixel is a different world position at
 every depth. `_unproject` is where that is handled, and it is not a detail: the
-barrel meets the ball a couple of feet out in front, where a tracked ball sits
-about 2.3 inches higher on screen than it will at the plate, against a bat and
-ball that are 2.75 inches of tolerance between them. Resolving the aim at the
-plate and the ball at contact spends 84% of the contact window on a bias no
-player can correct.
+barrel meets the ball out in front of (or behind) the plate, where a tracked
+ball sits measurably higher or lower on screen than it will at the plate,
+against a bat and ball that are 2.75 inches of tolerance between them.
 
 **The swing is modelled hands-first: a small hand arc, and a bat swung about
 the hands.** The hands ride a curve authored in the *rotating body frame* — a
 radius that tightens into the slot and extends through contact, a height
-working down off the back shoulder — so the load pose is a constant of the
-stance rather than the contact pose rotated backwards. The bat's attitude
-about the hands (bearing wrapped by the turn plus a decaying `LAG_DEG`, tilt
-easing off `LOAD_BAT_ANGLE_DEG`) is what carries the barrel down off the
-shoulder and around. Modelled this way the rounded side-view loop and the
-overhead spiral *emerge*.
+working down off the back shoulder — from a load position that is a constant
+of the stance to the contact pose the aim solved. The bat's attitude about
+the hands
+(bearing wrapped by the turn plus a decaying `LAG_DEG`, tilt easing off
+`LOAD_BAT_ANGLE_DEG`) is what carries the barrel down off the shoulder and
+around. Modelled this way the rounded side-view loop and the overhead spiral
+*emerge*.
 
 **Bat speed is a calibration target, not a shape parameter.** The game has no
 bat-speed input — no swing-strength control, no per-batter attribute — so the
@@ -76,6 +76,14 @@ barrel arrives at contact at a stated MLB-average speed on every swing, and the
 angular profile's exponent is *solved* from that. Stating the speed and
 deriving the exponent keeps the calibration visible; the other way round hides
 a real number behind a shape parameter.
+
+**Not modelled: a tilted swing plane.** The body turns about a vertical axis
+and the hands stay low (`HAND_CONTACT_HEIGHT_FT`), so the bat is flatter than a
+real one — a real bat is 25 to 30 degrees barrel-down on a belt-high pitch.
+Raising the hands alone does not fix it: a tilted bat swept about a vertical
+axis traces a cone, and sliding along it changes the vertical offset in the
+direction that cancels the turn timing should put on the ball. It needs the
+plane tilted with the bat, and it is the known follow-up to this model.
 """
 
 import math
@@ -104,18 +112,6 @@ TOTAL_DURATION_S = SWING_DURATION_S + EXTENSION_DURATION_S
 # Phase (u) at the end of the extension. u is time in units of the swing, so
 # it runs past 1 and the whole model is written in it.
 U_MAX = TOTAL_DURATION_S / SWING_DURATION_S
-
-
-# --- The batter's hands, in screen pixels --------------------------------
-# `HitOutcomeManager.rhpos` / `lhpos`, restated so this module need not import
-# the gameplay layer, and pinned to the real attributes by a test.
-#
-# It was the pivot the engine's contact rectangle rotated about. The rectangle
-# is gone — `bat_contact` sweeps a real bat now — but the pivot survives it,
-# because what it always was is where the hitter's hands are: (490, 453) px is
-# (1.53, 2.93) ft, within a couple of inches of a right-hander's grip at
-# contact. The whole contact pose is solved from it.
-PIVOT_PX = {"R": (490.0, 453.0), "L": (770.0, 453.0)}
 
 
 # --- The bat -------------------------------------------------------------
@@ -241,6 +237,15 @@ def bat_solid_point(state, frac):
 # measured from it.
 SPINE_OFFSET_FT = 2.9
 
+# Where that axis sits in depth: level with the middle of the plate, which is
+# where a hitter stands. It was level with the plate's front edge while the
+# hands were pinned 1.55 ft off the centreline, and that only worked because
+# they were pinned: the hands meet a middle pitch about 2.4 ft off the
+# centreline now and come in to 2.9 on an inside one, which with the axis at
+# the front edge is an orbit of half a foot shrinking to nothing. Set back
+# here the hands stay 1.1 ft in front of the body wherever they are.
+SPINE_DEPTH_FT = -0.7
+
 # The body's turn from initiation to contact. Bearing sweep beyond this comes
 # from the lag term below, so the barrel's total wrap is ARC + LAG.
 SWING_ARC_DEG = 120.0
@@ -259,53 +264,115 @@ ATTACK_ANGLE_RAD = math.radians(ATTACK_ANGLE_DEG)
 
 # --- The hands -----------------------------------------------------------
 
-# Where the hands are, in depth, at contact. Authored rather than solved: it
-# is the one number in the contact pose the engine's screen-plane rectangle
-# cannot see, and a hitter's hands are a few inches out in front of the plate
-# at contact whatever the pitch was. Everything else about the pose follows
-# from it and from the aim.
+# Where the hands are at contact, in depth and height. Authored rather than
+# solved: a hitter's hands are a few inches out in front of the plate and
+# just below the belt at contact whatever the pitch was. Where they are
+# *laterally* is the part that is solved — see `_contact_pose`.
+#
+# These two were a screen pixel once (`PIVOT_PX`, the point the engine's
+# contact rectangle rotated about, restated from `HitOutcomeManager.rhpos`),
+# and this is the same point said in feet.
+#
+# The height is lower than a real hitter's, on purpose: see "Not modelled" in
+# the module docstring before raising it.
 HAND_CONTACT_DEPTH_FT = 0.40
+HAND_CONTACT_HEIGHT_FT = 2.93
 
-# How far the hands may slide along the aiming ray from the pivot. Inboard
-# never binds; outboard it is the reach on a ball the bat cannot otherwise
-# span — low and away — and past it the bat honestly falls short of the
-# cursor rather than the hands being flung after it.
-MAX_HAND_SLIDE_FT = 1.30
 
-# No cap on how far the barrel may lead the hands in depth: the geometry
-# bounds it on its own. The camera sits 30 ft behind the plate, so an aim
-# right on top of the hands puts the bat along the view ray, which is very
-# nearly the y axis — and a bat is 2.46 ft long. Contact depth therefore
-# cannot exceed HAND_CONTACT_DEPTH_FT + HANDS_TO_SWEET_SPOT_FT whatever the
-# player does. A cap here would be a second, weaker statement of that.
+# --- The bat's bearing at contact ------------------------------------------
+# How far past square the bat is when the barrel arrives, as a function of
+# where the player aimed across the plate. Zero is the bat lying straight
+# across the plate; positive is the barrel further round toward the pitcher.
+#
+#   bearing = POSE_MEAN_DEG
+#             + POSE_SPAN_DEG * tanh(POSE_GAIN_DEG_PER_FT * x_in / POSE_SPAN_DEG)
+#
+# with `x_in` the aim's distance inside of the plate's centreline, in feet.
+#
+# These are the three constants `spray` used to hold (`LEAGUE_MEAN_DEG`,
+# `LOCATION_GAIN`, `LOCATION_SPAN_DEG`), moved to where they are physically
+# true. There they remapped the direction of a ball struck by a bat that was
+# 49 degrees past square; here they say where the bat is, and
+# `bat_ball_collision` says where the ball goes off it.
+#
+#   * The mean is the bearing a middle pitch is met at, a few degrees past
+#     square. The ball leaves further round than the bat faces, so a middle
+#     pitch struck on time goes about 6 degrees to the pull side of centre.
+#   * The gain is how fast the bat comes round as the pitch moves inside,
+#     through the middle of the plate. It is what spreads contact across the
+#     field, and it is bounded from above by a constraint, not a fit: an
+#     on-time swing has to be fair at every strike-zone location with a few
+#     degrees to spare (`test_an_on_time_swing_is_fair_anywhere_in_the_zone`).
+#     The high inside corner is the one that binds.
+#   * The span is where the response saturates. It bends the response by
+#     about a fifth at the edge of the zone, which is what keeps the corners
+#     fair at this gain, and past the zone it means a ball the hitter reaches
+#     a long way for still has a bat a person could be holding.
+#
+# Fitted together through the collision, over the canonical player model
+# (`tools/calibrate_contact.py`): the corner constraint first, then the
+# pull / centre / opposite split of fair contact, which these hold where it
+# was (30 / 45 / 25 against MLB's 40 / 35 / 25). Half of all contact is on
+# time once the assist has run, so its direction is the pitch's location
+# alone, and a steeper gain to spread it would foul the corners.
+POSE_MEAN_DEG = 3.25
+POSE_GAIN_DEG_PER_FT = 30.0
+POSE_SPAN_DEG = 21.0
+
+# How far the bat may tilt out of level at contact, either way. Past it the
+# barrel falls short of the cursor rather than the bat standing on end.
+MAX_CONTACT_TILT_DEG = 60.0
+MAX_CONTACT_TILT_RAD = math.radians(MAX_CONTACT_TILT_DEG)
+
+# How far the hands may be from the body at contact, measured across the
+# plate from the spine. `HAND_REACH_FT` is toward the plate: arms extended
+# after a ball away. `HAND_TUCK_FT` is the other way: hands pulled in on a
+# ball inside until they are level with the body's own axis and a little past
+# it. Both in feet, both bounds on a body rather than dials.
+#
+# Inside the strike zone neither binds. Outside it the solved hands would run
+# away — out over the plate's far edge on a ball a foot off it — so past the
+# bound the bat honestly falls short of the cursor and the sweep whiffs.
+HAND_REACH_FT = 2.0
+HAND_TUCK_FT = 0.3
+
+# Passes of the fixed point in `_contact_pose`. Each one shrinks the error by
+# about a hundredfold, so this is far below anything a pixel could show.
+POSE_SOLVE_PASSES = 5
 
 # Hand height at initiation — up by the back shoulder. An *absolute* height,
 # like LOAD_BAT_ANGLE_DEG below: a low pitch costs the hands a longer drop,
 # it does not lower where they start.
 LOAD_HANDS_HEIGHT_FT = 4.6
 
-# The hands' distance from the spine axis over the swing, as a multiple of
-# whatever it is at contact. Stated as a quadratic in the *load* (below)
-# rather than in time, for two reasons: it is flat at contact, so the hands'
-# radial motion cannot disturb the attack angle the plane owns; and the loop
-# it describes — hands tighten into the slot, then extend through the ball —
-# is a function of how far the body still has to turn, not of the clock.
-#   scale = 1 + HAND_RADIUS_B*load + HAND_RADIUS_C*load^2
-# gives 1.00 at contact, a 0.70 minimum around two-thirds of the turn out, and
-# 0.76 at the load.
-HAND_RADIUS_B = -0.88
-HAND_RADIUS_C = 0.64
+# Where the hands are at initiation, across the ground from the spine: by the
+# back shoulder, a little toward the plate and the same toward the catcher.
+# **A constant of the stance.** Every swing starts here whatever it is aimed
+# at, and `BatSwing` solves how the hands get from here to the contact pose.
+#
+# It used to be the contact position turned back through the swing and scaled
+# (`HAND_RADIUS_B`, `HAND_LEAD_DEG`), which was only a constant because the
+# hands' contact position was one. Once the hands move with the pitch, that
+# rule starts the swing somewhere different for every aim — a foot and a half
+# apart between an inside pitch and one away.
+LOAD_HANDS_IN_FT = 0.65
+LOAD_HANDS_BACK_FT = 0.65
+
+# How far the hands tuck in toward the body between the load and contact, as a
+# share of their distance from the spine at contact: the slot. The radius runs
+# from the load's to contact's along
+#   radius = r_contact + (r_load - r_contact)*load - HAND_SLOT*r_contact*load*(1 - load)
+# Stated in the *load* (below) rather than in time, for two reasons: it is
+# flat at contact, so the hands' radial motion cannot disturb the attack angle
+# the plane owns; and the loop it describes — hands tighten into the slot,
+# then extend through the ball — is a function of how far the body still has
+# to turn, not of the clock.
+HAND_SLOT = 0.64
 # How much further the hands reach in the follow-through, and how much they
 # rise with it. Squared in the extension's own progress, so both are flat at
 # contact for the same reason.
 EXTENSION_REACH = 0.10
 EXTENSION_RISE_FT = 0.55
-
-# The hands lag the body's turn slightly at load and catch it by contact,
-# which is what turns the hand circle into the small oval a swing actually
-# draws. Small on purpose: it is a shape term, not a power source.
-HAND_LEAD_DEG = 12.0
-HAND_LEAD_RAD = math.radians(HAND_LEAD_DEG)
 
 
 # --- The load ------------------------------------------------------------
@@ -360,7 +427,7 @@ PEAK_BAT_SPEED_FT_S = PEAK_BAT_SPEED_MPH / MPH_PER_FT_S
 # *is* k, so past ~3 the swing reads as a bat that stands still and then
 # teleports; the floor only keeps the profile a swing, since k must stay above
 # 1 or the speed would peak before contact. With the rotation radius now a
-# function of aim alone these sit at about 1.8–2.2 over the plate and should
+# function of aim alone these sit at about 2.0–2.6 over the plate and should
 # never bind — a test says so, and a swing that rails is a sign the contact
 # pose has come loose again.
 EASE_K_MIN = 1.05
@@ -374,14 +441,6 @@ def _to_ft(screen_xy):
     return DEFAULT_CAMERA.screen_to_world_at_plate(screen_xy[0], screen_xy[1])
 
 
-def pivot_ft(handedness):
-    """The bat's orientation pivot in world feet, as (x, z).
-
-    Also the hands' contact position in those two axes — see `_contact_pose`.
-    """
-    return _to_ft(PIVOT_PX["R" if handedness == "R" else "L"])
-
-
 # --- The contact pose -----------------------------------------------------
 
 def _unproject(plate_xz, depth_ft):
@@ -393,13 +452,13 @@ def _unproject(plate_xz, depth_ft):
     hand this module `screen_to_world_at_plate(cursor)`, which is the ray's
     intersection with `y = 0`; this walks it back out to where the bat is.
 
-    It matters more than the 7% scale suggests. The barrel meets the ball a
-    couple of feet in front of the plate, where a tracked ball sits about 2.3
-    inches higher on the screen than it will at the plate — and a bat and a
-    ball together are only 2.75 inches of tolerance. Resolving the aim at the
-    plate and the ball at contact therefore spent 84% of the contact window on
-    a bias the player has no way to correct, which showed up as every swing
-    scoring under 0.5 for quality.
+    It matters more than the scale suggests. The barrel meets the ball out in
+    front of the plate — over a foot out on a pitch inside — where a tracked
+    ball sits an inch or two higher on the screen than it will at the plate,
+    and a bat and a ball together are only 2.75 inches of tolerance. Resolving
+    the aim at the plate and the ball at contact spends most of that on a bias
+    the player has no way to correct. When the barrel met everything two feet
+    out, it showed up as every swing scoring under 0.5 for quality.
     """
     scale = (depth_ft + DEFAULT_CAMERA.cam_dist) / DEFAULT_CAMERA.cam_dist
     cam_h = DEFAULT_CAMERA.cam_height
@@ -421,15 +480,19 @@ def to_plate_frame(point_xz, depth_ft):
     return (point_xz[0] / scale, cam_h + (point_xz[1] - cam_h) / scale)
 
 
-def hands_anchor_ft(handedness):
-    """The hands' contact position in world feet, as (x, y, z).
+def pose_bearing_rad(x_in_ft):
+    """How far past square the bat is at contact, in radians.
 
-    The engine's aiming pivot, unprojected at the depth the hands are at. It
-    is within a couple of inches of where a real hitter's hands are when they
-    meet the ball, which is the observation the whole contact pose rests on.
+    `x_in_ft` is the aim's distance inside of the plate's centreline: positive
+    toward the batter, for either hand. See the note over `POSE_MEAN_DEG`.
+
+    A `tanh`, so it has slope exactly `POSE_GAIN_DEG_PER_FT` over the middle
+    of the plate and saturates smoothly either side. Smooth matters: the
+    bearing decides where the ball goes, and a clamp would stack every aim
+    past it onto one direction.
     """
-    xz = _unproject(pivot_ft(handedness), HAND_CONTACT_DEPTH_FT)
-    return (xz[0], HAND_CONTACT_DEPTH_FT, xz[1])
+    return math.radians(POSE_MEAN_DEG + POSE_SPAN_DEG * math.tanh(
+        POSE_GAIN_DEG_PER_FT * x_in_ft / POSE_SPAN_DEG))
 
 
 def _contact_pose(aim_ft, handedness):
@@ -438,94 +501,53 @@ def _contact_pose(aim_ft, handedness):
     Returns `(hands_ft, axis3)` — the hands in world feet and the bat's unit
     long axis, knob to barrel.
 
-    The rectangle the engine used to swing was a screen-space object: centred
-    on the cursor, long axis pointing at the pivot. The 3D bat whose
-    *projection* is that rectangle is therefore pinned by two conditions — the
-    knob projects to the pivot pixel, the sweet spot projects to the cursor
-    pixel — and since a perspective projection maps lines to lines, the whole
-    bat then lies along that axis on screen.
+    Three conditions fix it. The sweet spot is on the cursor's ray. The bat is
+    `HANDS_TO_SWEET_SPOT_FT` from grip to sweet spot. And the bat has the
+    bearing `pose_bearing_rad` gives this aim. The hands' depth and height are
+    authored, so their lateral position is what the three solve for:
 
-    That leaves exactly one unknown, the depth `d` the sweet spot sits at, and
-    one equation: the bat is `HANDS_TO_SWEET_SPOT_FT` long. Both unprojected
-    coordinates are linear in depth, so the equation is a quadratic and the
-    pose is solved outright — no search and no fitted parameter. The
-    rectangle is gone; what it leaves behind is this pose, which is what
-    `bat_contact` now sweeps.
+        depth = HAND_CONTACT_DEPTH_FT + L * cos(tilt) * sin(bearing)
+        hands = sweet(depth) - L * axis(bearing, tilt)
 
-    Contact depth is the root. It is an *output*, and it lands where real
-    contact depth lands: an inside pitch sits close to the hands on screen, so
-    the bat is heavily foreshortened and the ball is met well out in front —
-    pulled; a pitch away sits far from them, the bat lies nearly across the
-    view, and the ball is met deeper. A ball further away than the bat is long
-    has no root at all — the hitter cannot reach it from where their hands are,
-    so they extend after it (`_reach`) and meet it at arm's length, inside-out,
-    off the quadratic's vertex rather than off a root that does not exist.
+    The tilt is whatever spans the height between the hands and the ray, and
+    the ray's height depends on the depth, so the two are settled together by
+    a short fixed point.
+
+    **Contact depth is an output.** It is where the barrel is when the bat has
+    that bearing with the hands that far out front: over a foot in front of
+    the plate on a pitch inside, about half a foot on one down the middle, and
+    slightly *behind* the plate's front edge on the outside corner. Negative
+    is a real answer here and is not clamped.
+
+    **The hands are bounded, and the bearing is not.** Past `HAND_REACH_FT` or
+    `HAND_TUCK_FT` the hands stop and the barrel falls short of the cursor, as
+    it does past `MAX_CONTACT_TILT_DEG` in height. The bat's attitude is
+    unaffected by any of the three, so it stays continuous in the aim however
+    absurd the aim is.
     """
-    knob = hands_anchor_ft(handedness)
-    cam_dist = DEFAULT_CAMERA.cam_dist
-    cam_h = DEFAULT_CAMERA.cam_height
+    spin = 1.0 if handedness == "R" else -1.0
+    bearing = pose_bearing_rad(spin * aim_ft[0])
+    cos_b, sin_b = math.cos(bearing), math.sin(bearing)
+    length = HANDS_TO_SWEET_SPOT_FT
+    max_sin = math.sin(MAX_CONTACT_TILT_RAD)
 
-    # sweet(d) = (ax0 + ax0*d/D, d, az0 + (az0-h)*d/D), both linear in d.
-    ax0, az0 = aim_ft
-    a_lin, g_lin = ax0 / cam_dist, (az0 - cam_h) / cam_dist
-    a_con = ax0 - knob[0]
-    g_con = az0 - knob[2]
-    h = HAND_CONTACT_DEPTH_FT
+    depth = HAND_CONTACT_DEPTH_FT
+    sweet_x = sin_t = 0.0
+    cos_t = 1.0
+    for _ in range(POSE_SOLVE_PASSES):
+        sweet_x, sweet_z = _unproject(aim_ft, depth)
+        sin_t = max(-max_sin, min(max_sin,
+                                  (sweet_z - HAND_CONTACT_HEIGHT_FT) / length))
+        cos_t = math.sqrt(1.0 - sin_t * sin_t)
+        depth = HAND_CONTACT_DEPTH_FT + length * cos_t * sin_b
 
-    qa = a_lin * a_lin + 1.0 + g_lin * g_lin
-    qb = 2.0 * (a_con * a_lin - h + g_con * g_lin)
-    qc = (a_con * a_con + h * h + g_con * g_con
-          - HANDS_TO_SWEET_SPOT_FT * HANDS_TO_SWEET_SPOT_FT)
-
-    disc = qb * qb - 4.0 * qa * qc
-    if disc < 0.0:
-        # No depth lets the bat span the ball from where the hands are. The
-        # vertex is the depth at which it comes closest, and it is the
-        # *analytic continuation* of the root — the two meet exactly where
-        # `disc` reaches zero — so taking it keeps the pose, and with it the
-        # bat's bearing, continuous in the aim.
-        #
-        # This matters because the bearing is now read downstream as the
-        # ball's direction (`spray`). The previous answer put the bat flat in
-        # the plane of the plate, which pinned its face normal at *exactly*
-        # centre field; 9.6% of swings at AMATEUR reach that pose, so a tenth
-        # of all contact would have stacked on one spray angle. Same failure
-        # as clamping the home-run angle onto the foul poles.
-        depth = -qb / (2.0 * qa)
-    else:
-        root = math.sqrt(disc)
-        depth = max((-qb + root) / (2.0 * qa), (-qb - root) / (2.0 * qa))
-    # Behind the plate the barrel is chasing a pitch already past it; the
-    # sweep will call that a whiff, and the pose only has to stay finite.
-    depth = max(0.0, depth)
-
-    sweet_xz = _unproject(aim_ft, depth)
-    sweet = (sweet_xz[0], depth, sweet_xz[1])
-    delta = tuple(sweet[i] - knob[i] for i in range(3))
-    span = math.sqrt(sum(v * v for v in delta))
-    if span < 1e-9:
-        return knob, (1.0, 0.0, 0.0)
-    axis3 = tuple(v / span for v in delta)
-    if span <= HANDS_TO_SWEET_SPOT_FT + 1e-9:
-        return knob, axis3
-    return _reach(knob, axis3, span)
-
-
-def _reach(knob, axis3, span):
-    """The pose for a ball the bat cannot span from where the hands are.
-
-    Low and away, mostly. The hands go out after it along the bat's own line
-    and get as far along it as they can, which draws as the inside-out swing
-    it is.
-
-    The *axis* is the caller's, and that is the whole difference from the
-    version this replaced. It comes from the quadratic's vertex, so the barrel
-    goes on trailing the hands further and further as the hitter has to reach
-    further — rather than snapping flat, and flattening every such swing's
-    direction onto centre field, the moment the ball stops being spannable.
-    """
-    slide = min(MAX_HAND_SLIDE_FT, span - HANDS_TO_SWEET_SPOT_FT)
-    return tuple(knob[i] + axis3[i] * slide for i in range(3)), axis3
+    axis3 = (-spin * cos_b * cos_t, sin_b * cos_t, sin_t)
+    # The hands' distance from the centreline, on the batter's own side.
+    hands_in = spin * sweet_x + length * cos_b * cos_t
+    hands_in = max(SPINE_OFFSET_FT - HAND_REACH_FT,
+                   min(SPINE_OFFSET_FT + HAND_TUCK_FT, hands_in))
+    return (spin * hands_in, HAND_CONTACT_DEPTH_FT,
+            HAND_CONTACT_HEIGHT_FT), axis3
 
 
 # --- The swing -----------------------------------------------------------
@@ -559,8 +581,14 @@ class BatState:
         return self._speed_mph
 
 
+# Half-width of the central difference `point_velocity_at` takes. The barrel
+# turns about a third of a degree in this long, so the chord is the tangent to
+# well inside a tenth of a percent.
+VELOCITY_STEP_S = 0.00025
+
+
 class _SwingTracks:
-    """The two sampling helpers shared by a swing and its translated form.
+    """The sampling helpers shared by a swing and its translated form.
 
     Both are written purely in terms of `state_at`, so a subclass gets the
     right states by defining that alone. They lived as byte-identical copies
@@ -581,6 +609,28 @@ class _SwingTracks:
             n = 2
         return [self.state_at(TOTAL_DURATION_S * i / (n - 1)) for i in range(n)]
 
+    def point_velocity_at(self, t_s, frac):
+        """Velocity, in feet per second, of one point of the bat at `t_s`.
+
+        `frac` is the profile fraction `bat_solid_point` takes — 0 at the knob
+        end of the solid, 1 at the tip — so it is `Contact.along`, and this is
+        how fast the wood that met the ball was moving and which way. That is
+        the bat's half of `bat_ball_collision`.
+
+        Differentiated numerically from `state_at`, for the reason `_speed_at`
+        is: it reports what the drawn bat does, load terms included. The bat
+        is slower at the handle than at the barrel and moving in a slightly
+        different direction, which is why this is asked of a point and not of
+        the swing.
+        """
+        lo = max(0.0, t_s - VELOCITY_STEP_S)
+        hi = min(TOTAL_DURATION_S, t_s + VELOCITY_STEP_S)
+        if hi <= lo:
+            return (0.0, 0.0, 0.0)
+        a, _ = bat_solid_point(self.state_at(lo), frac)
+        b, _ = bat_solid_point(self.state_at(hi), frac)
+        return tuple((b[i] - a[i]) / (hi - lo) for i in range(3))
+
 
 class BatSwing(_SwingTracks):
     """A swing, sampleable at any time from initiation through the finish.
@@ -588,7 +638,8 @@ class BatSwing(_SwingTracks):
     Built from the player's aim and handedness and nothing else. Hands-first:
     the knob is *authored* and the barrel follows.
 
-      * the **hands** orbit the spine axis on a radius that tightens into the
+      * the **hands** start by the back shoulder, the same place on every
+        swing, and orbit the spine axis on a radius that tightens into the
         slot and extends through the ball, working down from
         `LOAD_HANDS_HEIGHT_FT` to the contact grip as the body turns;
       * the **bat's attitude** about the hands — bearing wrapped by the turn
@@ -599,11 +650,10 @@ class BatSwing(_SwingTracks):
         the way up at exactly `ATTACK_ANGLE_DEG`, since every other term is
         momentarily still there.
 
-    `state_at(SWING_DURATION_S)` is pinned: the sweet spot sits at the aim
-    point in (x, z), and the bat's (x, z) projection lies along the ray the
-    engine's old collision tested — the pose is solved against that geometry,
-    which is why it can be stated rather than fitted. Its *depth*,
-    `contact_depth_ft`, is an output.
+    `state_at(SWING_DURATION_S)` is pinned: the sweet spot sits on the
+    cursor's ray and the bat has the bearing `pose_bearing_rad` gives the aim
+    (`_contact_pose`). Its *depth*, `contact_depth_ft`, is an output, and it
+    can be negative.
     """
 
     def __init__(self, aim_ft, handedness):
@@ -611,7 +661,7 @@ class BatSwing(_SwingTracks):
         self.handedness = "R" if handedness == "R" else "L"
         self.spin = 1.0 if self.handedness == "R" else -1.0
         self.bat_speed_mph = PEAK_BAT_SPEED_MPH
-        self.spine_xy = (SPINE_OFFSET_FT * self.spin, 0.0)
+        self.spine_xy = (SPINE_OFFSET_FT * self.spin, SPINE_DEPTH_FT)
 
         self.hands_contact, contact_axis = _contact_pose(aim_ft, self.handedness)
         self.contact_axis = contact_axis
@@ -635,6 +685,19 @@ class BatSwing(_SwingTracks):
         self.hand_bearing = ((hrel[0] / self.hand_radius_ft,
                               hrel[1] / self.hand_radius_ft)
                              if self.hand_radius_ft > 1e-9 else (0.0, -1.0))
+
+        # And where they start, which is the stance's and not this swing's.
+        # Turning the contact bearing back through the whole arc lands the
+        # hands somewhere that depends on the aim; `_hand_lead` is the extra
+        # turn, given up with the load, that lands them on the stance instead.
+        # Worked in the batter's own frame (lateral flipped by `spin`), so the
+        # two hands are mirror images by construction.
+        self.load_hand_radius_ft = math.hypot(LOAD_HANDS_IN_FT,
+                                              LOAD_HANDS_BACK_FT)
+        contact_angle = math.atan2(hrel[1], self.spin * hrel[0])
+        load_angle = math.atan2(-LOAD_HANDS_BACK_FT, -LOAD_HANDS_IN_FT)
+        lead = load_angle - contact_angle - SWING_ARC_RAD
+        self._hand_lead = math.atan2(math.sin(lead), math.cos(lead))
 
         # The rotation radius bat speed is calibrated on: spine axis to the
         # contact point. At contact every load term is flat, so the bat is
@@ -713,13 +776,15 @@ class BatSwing(_SwingTracks):
 
         # The hands: their orbit turned back by the rotation remaining, with
         # the radius tightening into the slot and extending through the ball,
-        # and their height eased up toward the load.
+        # and their height eased up toward the load. At `load = 1` this is the
+        # stance's load position exactly, and at contact the solved pose.
         sx, sy = self.spine_xy
         bearing = self._turn(self.hand_bearing,
-                             theta - self.spin * HAND_LEAD_RAD * load)
-        radius = self.hand_radius_ft * (
-            1.0 + HAND_RADIUS_B * load + HAND_RADIUS_C * load * load
-            + EXTENSION_REACH * ext * ext)
+                             theta + self.spin * self._hand_lead * load)
+        radius = (self.hand_radius_ft
+                  + (self.load_hand_radius_ft - self.hand_radius_ft) * load
+                  - HAND_SLOT * self.hand_radius_ft * load * (1.0 - load)
+                  + EXTENSION_REACH * self.hand_radius_ft * ext * ext)
         knob = (sx + radius * bearing[0],
                 sy + radius * bearing[1],
                 self.hands_contact[2]

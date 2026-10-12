@@ -48,7 +48,6 @@ shortstop are the same ball.
 """
 
 import math
-import random
 
 from strikefactor.gameplay import infield_timing
 
@@ -64,65 +63,27 @@ LAUNCH_ANGLE_DEG = {
 }
 
 
-# --- Which way the ball left the bat, vertically ---------------------------
+# --- What kind of batted ball this was --------------------------------------
 #
-# The same argument `spray` makes for the horizontal: a cylinder's surface
-# normal is radial to its own axis, so the ball leaves perpendicular to the
-# bat. `bat_contact` already hands the normal over — `axis_point_ft` is the
-# *nearest* point on the axis, so (ball - axis_point) is perpendicular to the
-# bat by construction and `vertical_offset_ft` is that normal's rise.
+# **The launch angle is not worked out here.** It is the vertical reading of
+# the one exit direction `bat_ball_collision` computes for the contact
+# (`bat_contact.Contact.launch_deg`), and this module takes it as given. What
+# lives here is the classification: which Statcast band an angle falls in.
 #
-# It replaced a weighted random roll over the four shapes in
-# `hit_outcome_manager`, where the geometry only tilted a Gaussian weight and
-# never fixed the sign. A bat 1.2 in *over* the ball drew a FLY 11% of the time
-# and a LINER 30%, and over recorded play 14.8% of every bat-over-the-ball
-# contact was classified airborne (and 29.2% of bat-under contacts came out
-# grounders). The swing replay reports that offset to the player, so they were
-# shown the contact and then handed a trajectory contradicting it.
+# The fit that used to live here read the vertical offset alone:
+# `launch_angle_deg(vertical_offset_in)`, an intercept
+# (`ZERO_OFFSET_LAUNCH_DEG`), a gain on the normal's rise (`NORMAL_GAIN`) and a
+# bounded scatter (`LAUNCH_JITTER_DEG`, `JITTER_LIMIT_SIGMA`). It was right
+# about the thing it was written to fix — a bat over the ball must not produce
+# a fly ball, which the weighted roll before it did 11% of the time — and wrong
+# about the two things a real collision adds. The response is steeper than it
+# allowed, about 30 degrees per inch of bat position against 18. And it is not
+# a function of the offset alone: on a bat tilted barrel-down, the same
+# undercut also turns the ball toward the opposite field, which a model with
+# no horizontal half could not say.
 #
-# Two of that model's three tables were also unreachable, which is worth
-# recording because the failure was silent. The largest offset at which a bat
-# and a ball still touch is the sum of their radii, 1.30 + 1.45 = 2.75 in, and
-# at the current `ft_per_px_z` that is 17.2 px — but the POP_UP offset anchor
-# sat at 22 px = 3.5 in, naming a contact that cannot happen. Pop-ups therefore
-# ran 1.0% of recorded play against MLB's 7%, winning only out of a Gaussian
-# tail. (That table's comment claimed a reach of "~+/-25 px", true back when
-# `ft_per_px_z` was ~0.0111 and stale ever since.) The sigmas had the same
-# problem from the other end: 1.4-2.2 in against a whole domain of +/-2.75 left
-# the offset term nearly flat over everything physically possible, so the base
-# prior did most of the work.
-
-# Bat radius at the sweet spot plus ball radius: the centre-to-centre
-# separation at which the two are exactly touching, and so the offset at which
-# the normal has come all the way round to vertical. Stated here rather than
-# imported from `bat_path` to keep this module free of the swing.
-CONTACT_NORMAL_RADIUS_IN = 2.75
-
-# Where a ball struck dead centre goes. Not a free parameter: the bat is coming
-# up through the ball at `bat_path.ATTACK_ANGLE_DEG` (10 deg) and the pitch is
-# coming down, and the collision hands part of that descent back as rise.
-ZERO_OFFSET_LAUNCH_DEG = 16.0
-
-# How much of the normal's rise the ball keeps. Below 1 because the tangential
-# (friction) impulse pulls the ball back toward the bat's own direction of
-# travel, so it does not leave exactly along the normal.
-NORMAL_GAIN = 0.85
-
-# Swing-to-swing scatter in the effective attack angle: swing plane, bat flex,
-# where around the barrel's circumference the ball caught it. Real launch-angle
-# scatter at a given undercut is wider than this; it is kept narrow because it
-# must not overturn the geometry's sign, which is the whole point of the model.
-LAUNCH_JITTER_DEG = 8.0
-
-# ...and it is *bounded*, which is the part that makes the guarantee a
-# guarantee. A Gaussian has infinite support, so however narrow it is set there
-# is some tail that contradicts the geometry it is perturbing — and a tail that
-# rare is worse than a common one, because it reads to a player as the model
-# being arbitrary rather than as it being noisy. The physical variations behind
-# this term are all bounded, so the scatter is too. Beyond about 0.4 in over the
-# ball a fly ball becomes unreachable and beyond 0.6 in under it a ground ball
-# does; inside that, near-square contact genuinely is ambiguous and should be.
-JITTER_LIMIT_SIGMA = 2.0
+# There is no scatter any more. The collision is deterministic, and the spread
+# of launch angles a player produces comes from their own aim and timing.
 
 # The Statcast band edges. `LAUNCH_ANGLE_DEG` above states each shape's centre;
 # these are the boundaries between them, so "what shape is this" has one
@@ -133,24 +94,6 @@ SHAPE_LAUNCH_BANDS = (
     (50.0, "FLY"),
 )
 STEEPEST_SHAPE = "POP_UP"
-
-
-def launch_angle_deg(vertical_offset_in, jitter=True, rng=random):
-    """Degrees above horizontal for a ball struck `vertical_offset_in` off centre.
-
-    The offset is ball centre minus bat axis, positive when the bat was *under*
-    the ball — the undercut. That is `bat_contact.Contact.vertical_offset_ft`'s
-    sign, and the one `hit_outcome_manager` and the swing replay both speak.
-
-    `jitter=False` gives the bare geometry, which is what a test asking about
-    the model rather than about the scatter wants.
-    """
-    u = max(-1.0, min(1.0, vertical_offset_in / CONTACT_NORMAL_RADIUS_IN))
-    angle = ZERO_OFFSET_LAUNCH_DEG + NORMAL_GAIN * math.degrees(math.asin(u))
-    if jitter and LAUNCH_JITTER_DEG > 0.0:
-        limit = JITTER_LIMIT_SIGMA * LAUNCH_JITTER_DEG
-        angle += max(-limit, min(limit, rng.gauss(0.0, LAUNCH_JITTER_DEG)))
-    return angle
 
 
 def shape_for_launch_angle(angle_deg):
@@ -165,14 +108,14 @@ def shape_for_launch_angle(angle_deg):
 # **Everything below is a function of the launch angle and the exit velocity,
 # and of nothing else.** That is new, and it is the point.
 #
-# It used to be a function of the *shape*. `launch_angle_deg` above produced a
-# real continuous angle, `shape_for_launch_angle` banded it, and then the carry
-# and the hang time threw the angle away and looked up the band's centre — so
+# It used to be a function of the *shape*. The contact produced a real
+# continuous angle, `shape_for_launch_angle` banded it, and then the carry and
+# the hang time threw the angle away and looked up the band's centre — so
 # every airborne ball in the game flew at exactly 14, 32 or 68 degrees. The
-# cost was a cliff at each band edge: at 100 mph a ball 0.2 in higher on the
-# bat, which is inside this model's own jitter, went from a 241 ft / 2.22 s
-# liner to a 357 ft / 4.47 s fly. A tenth of an inch of bat position bought
-# 116 ft of carry and two and a quarter seconds of hang time.
+# cost was a cliff at each band edge: at 100 mph a ball a fraction of an inch
+# higher on the bat went from a 241 ft / 2.22 s liner to a 357 ft / 4.47 s
+# fly. A tenth of an inch of bat position bought 116 ft of carry and two and a
+# quarter seconds of hang time.
 #
 # The fix is not a new calibration. The three fitted anchors are exactly the
 # numbers the per-shape tables held, at exactly the angles those shapes' band

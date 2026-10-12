@@ -160,8 +160,7 @@ def test_no_cliff_at_an_airborne_band_edge(edge, ev):
     *shape* and looked up its band's centre, so crossing an edge jumped the
     flight from one centre to the next. Measured at 100 mph across the
     LINER/FLY edge that was **116 ft of carry and 2.25 s of hang time**, bought
-    by a fifth of an inch of bat position — well inside this model's own
-    `LAUNCH_JITTER_DEG`.
+    by a small fraction of an inch of bat position.
     """
     lo, hi = edge - 0.1, edge + 0.1
     assert bf.shape_for_launch_angle(lo) != bf.shape_for_launch_angle(hi), (

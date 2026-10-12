@@ -43,7 +43,6 @@ def _make(shape, quality):
         _StubGame(),
         outcome="IN_PLAY",
         on_complete=lambda: None,
-        vertical_offset=0.0,
         quality=quality,
         batted_ball_type=shape,
         spray_deg=0.0,

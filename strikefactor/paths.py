@@ -6,9 +6,9 @@ Two kinds of file, never mixed:
   sounds, fonts, the umpire model, the seed pitch-selection AIs, the pitch
   location and bullpen tables. `config.get_path` resolves those.
 * **Player data** is everything the game writes — settings, key bindings, the
-  trained AIs, the pitch database and its backups, the batting, lap and
-  GameDay stores, and the maintenance tools' archives. It lives in
-  `data_dir()`, here.
+  trained AIs, the pitch database and its backups, the batting and GameDay
+  stores, and the maintenance tools' archives. It lives in `data_dir()`,
+  here.
 
 They used to share `strikefactor/`, which meant every session of play modified
 tracked files, an installed copy would have written into site-packages, and a
@@ -34,7 +34,6 @@ SETTINGS_FILE = "settings.json"
 KEY_BINDINGS_FILE = "key_bindings.json"
 BATTING_STATS_FILE = "batting_stats.json"
 BATTING_STATS_LEGACY_FILE = "batting_stats_legacy_v1.json"
-LAP_HISTORY_FILE = "lap_history.json"
 GAMEDAY_HISTORY_FILE = "gameday_history.json"
 GAMEDAY_SESSIONS_FILE = "gameday_sessions.json"
 AI_DIR = "ai"

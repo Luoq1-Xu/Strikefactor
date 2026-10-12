@@ -72,57 +72,47 @@ def test_sandbox_pitch_buttons_do_not_overlap_sidebar(ui):
     assert not clashes, f"overlapping buttons in sandbox gameplay: {clashes}"
 
 
-def test_sandbox_layout_moves_pitchviz_off_the_pitcher_column(ui):
-    """PITCHVIZ must leave its Arcade slot when the Sandbox column is up."""
-    ui.set_button_visibility('in_game', force_show=True)
-    arcade_pos = ui.buttons['view_pitches'].rect.topleft
+# ── Gameplay has no buttons ──────────────────────────────────────────────
 
+# The in-game sidebar. Each of these duplicated a key binding (Z, B, V, M,
+# ESC), or opened a feature that went with it (the scouting report and the lap
+# log). If one comes back, gameplay has grown a second way to do something a
+# key already does.
+_RETIRED_BUTTONS = [
+    'strikezone', 'toggle_batter', 'view_pitches', 'toggle_ump_sound',
+    'main_menu', 'scout', 'lap_stats', 'view_laps',
+    'sandbox_sound', 'sandbox_exit',
+]
+
+
+@pytest.mark.parametrize('name', _RETIRED_BUTTONS)
+def test_the_in_game_sidebar_buttons_are_gone(ui, name):
+    assert name not in ui.buttons
+
+
+@pytest.mark.parametrize('state', ['in_game', 'pitching', 'visualise'])
+def test_gameplay_shows_no_buttons(ui, state):
+    ui.set_button_visibility(state, force_show=True)
+    assert not _visible_rects(ui)
+
+
+def test_the_scouting_and_lap_panels_are_gone(ui):
+    for gone in ('scouting_panel', 'lap_log_panel', 'toggle_scouting_panel',
+                 'toggle_lap_log_panel'):
+        assert not hasattr(ui, gone)
+
+
+def test_inning_end_keeps_only_continue(ui):
+    ui.set_button_visibility('inning_end', force_show=True)
+    assert set(_visible_rects(ui)) == {'continue_to_summary'}
+
+
+def test_sandbox_keeps_only_its_selectors(ui):
+    """The pitcher switch and the pitch toggles are selections, not actions:
+    no key does what they do, so they are the one sidebar left."""
     ui.set_button_visibility('sandbox_gameplay', force_show=True)
-    assert ui.buttons['view_pitches'].rect.topleft != arcade_pos
-
-    # And it must go back when Arcade comes round again.
-    ui.set_button_visibility('in_game', force_show=True)
-    assert ui.buttons['view_pitches'].rect.topleft == arcade_pos
-
-
-@pytest.mark.parametrize('state', ['in_game', 'sandbox_gameplay',
-                                    'gameday_transition', 'gameday_simulation', 'gameday_final'])
-def test_one_review_entry_and_results_use_footer_not_sidebar(ui, state):
-    ui.set_button_visibility('in_game', force_show=True)
-    sidebar = ui.buttons['view_pitches'].rect.copy()
-    ui.set_button_visibility(state, force_show=True)
-    review = ui.buttons['view_pitches']
-    assert review.visible and review.text == 'REVIEW'
-    assert 'visualise' not in ui.buttons
-    assert 'fielding_replay' not in ui.buttons
-    if state not in ('in_game', 'sandbox_gameplay'):
-        assert review.rect.y >= 600
-    ui.set_button_visibility('in_game', force_show=True)
-    assert review.rect == sidebar
-
-
-@pytest.mark.parametrize('state', ['inning_end', 'summary'])
-def test_inning_end_and_summary_have_no_review_button(ui, state):
-    ui.set_button_visibility(state, force_show=True)
-    assert not ui.buttons['view_pitches'].visible
-
-
-class _HudSettings:
-    def __init__(self, mode):
-        self.mode = mode
-
-    def get_hud_mode(self):
-        return self.mode
-
-
-@pytest.mark.parametrize('mode, shown', [('legacy', True),
-                                         ('broadcast', False),
-                                         ('minimal', False)])
-def test_in_game_review_button_follows_the_hud_mode(ui, mode, shown):
-    """REVIEW sits in the side panel, which only the legacy HUD draws."""
-    ui.set_settings_manager(_HudSettings(mode))
-    try:
-        ui.set_button_visibility('in_game', force_show=True)
-        assert ui.buttons['view_pitches'].visible == shown
-    finally:
-        ui.set_settings_manager(None)
+    ui.update_sandbox_pitch_buttons(['FF', 'SL', 'CH'])
+    visible = set(_visible_rects(ui))
+    assert visible
+    assert all(name.startswith(('sandbox_pitcher_', 'sandbox_pitch_'))
+               for name in visible)

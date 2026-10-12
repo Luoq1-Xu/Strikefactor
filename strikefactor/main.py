@@ -457,8 +457,6 @@ class Game:
 
         # Set the key binding manager reference in UI manager
         self.ui_manager.set_key_binding_manager(self.key_binding_manager)
-        # Settings reference is needed for HUD-mode-aware button visibility.
-        self.ui_manager.set_settings_manager(self.settings_manager)
 
         # Three HUDs: Legacy (full bottom bar), Broadcast (4 corners), Minimal (corner widget).
         self.scorebug = Scorebug(self)
@@ -529,26 +527,12 @@ class Game:
         self.ui_manager.register_button_callback('sandbox_pitch_5', lambda: self._sandbox_select_pitch(4))
         self.ui_manager.register_button_callback('sandbox_pitch_6', lambda: self._sandbox_select_pitch(5))
 
-        # Sandbox mode - system buttons
-        self.ui_manager.register_button_callback('sandbox_sound', lambda: self.toggle_ump_sound())
-        self.ui_manager.register_button_callback('sandbox_exit', lambda: self.return_to_mode_select())
-
-        # Navigation callbacks
-        self.ui_manager.register_button_callback('main_menu', lambda: self.set_menu_state(0))
+        # Navigation callbacks. In-game actions (strike zone, batter, sound,
+        # review, menu) have no buttons; _setup_key_binding_callbacks wires
+        # them to keys.
         self.ui_manager.register_button_callback('back_to_main_menu', lambda: self.set_menu_state(0))
         self.ui_manager.register_button_callback('gameday_main_menu', lambda: self.set_menu_state(0))
-        self.ui_manager.register_button_callback('view_pitches', self.toggle_view_pitches)
         self.ui_manager.register_button_callback('continue_to_summary', lambda: self.continue_to_summary())
-        
-        # Game control callbacks
-        self.ui_manager.register_button_callback('strikezone', lambda: self.field_renderer.toggle_strikezone_mode())
-        self.ui_manager.register_button_callback('toggle_ump_sound', lambda: self.toggle_ump_sound())
-        self.ui_manager.register_button_callback('toggle_batter', self.toggle_batter_handedness)
-        self.ui_manager.register_button_callback('scout', lambda: self.toggle_scouting_report())
-
-        # Lap feature callbacks
-        self.ui_manager.register_button_callback('lap_stats', lambda: self.create_lap())
-        self.ui_manager.register_button_callback('view_laps', lambda: self.toggle_lap_log())
 
         # Settings + key-binding screens. Only the footer nav is a widget —
         # the difficulty chips and the setting/binding rows are drawn and
@@ -731,27 +715,6 @@ class Game:
         # Begin a new game in the pitch DB so all pitches share a game_id.
         self._db_start_game("arcade", pitcher_name=pitcher_name)
         self.state_manager.handle_menu_state_change(gamemode_name)
-        # Update scouting panel with new pitcher
-        self.ui_manager.update_scouting_panel(self.current_pitcher)
-
-    def toggle_scouting_report(self):
-        """Toggle the scouting report panel visibility."""
-        self.ui_manager.toggle_scouting_panel(self.current_pitcher)
-
-    def create_lap(self):
-        """Create a new lap from current batting stats."""
-        if not self.field_renderer.has_stats_to_lap():
-            self.ui_manager.show_banner("No stats to record!", typing_speed=0.02)
-            return
-
-        lap_entry = self.field_renderer.create_lap()
-        ba = lap_entry.get('batting_average', 0)
-        lap_num = lap_entry.get('lap_number', 0)
-        self.ui_manager.show_banner(f"Lap {lap_num} saved! BA: {ba:.3f}", typing_speed=0.02)
-
-    def toggle_lap_log(self):
-        """Toggle the lap log panel visibility."""
-        self.ui_manager.toggle_lap_log_panel(self.field_renderer)
 
     def enter_random_scenario(self):
         """Enter a random scenario game mode."""
@@ -795,8 +758,6 @@ class Game:
 
         # Transition to gameplay state
         self.state_manager.change_state('gameplay')
-        # Update scouting panel with new pitcher
-        self.ui_manager.update_scouting_panel(self.current_pitcher)
 
     # ---------------- Pitch DB / batter profile helpers ----------------
 
@@ -938,7 +899,6 @@ class Game:
 
         self.menu_state = 'gameday'
         self.state_manager.change_state('gameday_transition')
-        self.ui_manager.update_scouting_panel(self.current_pitcher)
 
     def resume_gameday_session(self, session_id: str):
         """Rebuild and resume a previously-saved in-progress GameDay game.
@@ -991,7 +951,6 @@ class Game:
 
         self.menu_state = 'gameday'
         self.state_manager.change_state('gameday_transition')
-        self.ui_manager.update_scouting_panel(self.current_pitcher)
 
     def autosave_gameday_session(self, phase: str):
         """Persist the in-progress GameDay game so it can be resumed later.
@@ -1187,10 +1146,6 @@ class Game:
             self.menu_state = self.current_gamemode
             self.state_manager.change_state('gameplay')
 
-    def toggle_ump_sound(self):
-        """Toggle umpire sound effects (the in-game sound button)."""
-        self.toggle_umpire_sound_setting()
-
     def toggle_batter_handedness(self):
         """Switch the batter's side of the plate and remember it."""
         self.batter.toggle_handedness()
@@ -1274,17 +1229,6 @@ class Game:
         # Big field-drawn base diamond is redundant in broadcast/minimal —
         # both draw their own bases.
         self.field_renderer.show_bases = (new_mode == "legacy")
-        # Re-apply visibility for the current state so side buttons show/hide
-        # immediately without waiting for the next state transition.
-        state_name = self.state_manager.current_state_name
-        visibility_map = {
-            'gameplay': 'in_game',
-            'sandbox_gameplay': 'sandbox_gameplay',
-            'visualization': 'visualise',
-            'inning_end': 'inning_end',
-        }
-        if state_name in visibility_map:
-            self.ui_manager.set_button_visibility(visibility_map[state_name])
 
     def reset_settings(self):
         """Reset all settings to defaults."""
@@ -1436,8 +1380,6 @@ class Game:
     def _display_pitch_results(self, outcome: str, pitchtype: str, speed_mph: float):
         """Display pitch results on the scorebug."""
         self.scorebug.set_last_pitch(pitchtype, speed_mph, outcome)
-        # Refresh scouting panel stats after each pitch
-        self.ui_manager.refresh_scouting_panel()
 
     # ------------------------------------------------------------------
     # ABS challenge system

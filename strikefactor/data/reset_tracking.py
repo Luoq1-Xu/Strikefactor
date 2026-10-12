@@ -4,8 +4,8 @@ The wider sibling of [gameday_maintenance.py](gameday_maintenance.py), which
 snapshots only the GameDay slice. This one covers everything the game records
 about how it has been played: the whole pitch log for arcade, sandbox and
 gameday alike, the at-bat and game rows around it, the batter tendency
-profiles the pitch-selection AI reads, the batting heatmap, the Sandbox lap
-log, and the GameDay career record.
+profiles the pitch-selection AI reads, the batting heatmap, and the GameDay
+career record.
 
 It exists because a change to the contact geometry makes previously recorded
 play describe a *different game*. The `collision_angled` sign fix is the case
@@ -66,7 +66,6 @@ DB_TABLES = ('pitch_trajectories', 'pitches', 'at_bats', 'games', 'batter_profil
 JSON_STORES = {
     'gameday_history.json': ('gameday_history.json', 'games', []),
     'gameday_sessions.json': ('gameday_sessions.json', 'sessions', []),
-    'lap_history.json': ('lap_history.json', 'laps', []),
     'batting_stats.json': ('batting_stats.json', 'buckets', {}),
 }
 

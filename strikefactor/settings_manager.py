@@ -45,6 +45,23 @@ class DifficultyLevel(Enum):
 # well on pitches in the zone. PROFESSIONAL and up are untouched, so the notch
 # from AMATEUR to PROFESSIONAL is now the steepest on the ladder (fair 38% ->
 # 15%); closing that is a separate decision about the hard end.
+#
+# **AMATEUR went 0.80 -> 0.88 with the square bat**, and the reason is the
+# ball, not the difficulty. The launch angle comes off a real bat-ball
+# collision now, which turns an inch of bat position into about 30 degrees of
+# launch where the fitted model gave 18. At 0.80 the swings that stayed fair
+# were spread across the bat widely enough to read as 59% grounders and 16%
+# line drives. Squarer contact is the only thing that fixes that, and this is
+# the dial that makes contact squarer; `bat_contact.FOUL_QUALITY_THRESHOLD`
+# rose with it so the fair rate holds. Measured the same way before and
+# after (`tools/calibrate_contact.py`): whiff / foul / fair 30.0 / 32.1 / 37.9
+# against 30.4 / 30.6 / 39.1.
+#
+# The rest of the ladder was left alone and got harder with the threshold:
+# fair 57.8 / 12.4 / 7.1 / 4.2% at ROOKIE / PROFESSIONAL / ALL_STAR /
+# HALL_OF_FAME became 54.0 / 8.5 / 5.1 / 3.2%. ROOKIE cannot be bought back
+# here — its response to this dial is saturated — and the hard end is the
+# same separate decision it was, with a steeper notch (39% -> 8.5%).
 DIFFICULTY_MULTIPLIERS = {
     DifficultyLevel.ROOKIE: {
         "aim_assist": 0.90,                # Reads the ball best
@@ -56,7 +73,7 @@ DIFFICULTY_MULTIPLIERS = {
         "foul_ball_chance": 1.3            # More foul balls (second chances)
     },
     DifficultyLevel.AMATEUR: {
-        "aim_assist": 0.80,                # Balanced in-swing adjustment
+        "aim_assist": 0.88,                # Balanced in-swing adjustment
         "contact_timing_window": 1.0,      # Normal timing window
         "power_timing_window": 1.0,        # Normal timing window
         "contact_zone_size": 1.0,          # Normal contact zone

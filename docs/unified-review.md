@@ -127,7 +127,7 @@ a click queued beside the review key could become Continue immediately on close.
 
 `_run_swing_replay_loop` remains a compatibility surface. The legacy PitchViz
 window (`StatSwing`) and its `ViewPitchesState` have been deleted: nothing but a
-test still entered them. The visible sidebar has one REVIEW action. `VisualizationState` is the exception
+test still entered them. There is no REVIEW button any more: V/R/F are the only entries. `VisualizationState` is the exception
 — it is live again as the T view (`Game.toggle_track`).
 
 A compatibility surface may keep an entry point alive; it may not keep a second
