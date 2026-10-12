@@ -81,3 +81,5 @@ key_bindings.json
 # Stale AI model backups (e.g. sasaki_ai.pkl.pre-fo-merge)
 *.pkl.pre-*
 
+# Claude md
+CLAUDE.md
