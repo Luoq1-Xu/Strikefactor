@@ -35,8 +35,8 @@ SEED = 20261014
 def _settle(game, seconds):
     """Run the update half of the main loop for ``seconds`` of real time.
 
-    Real time rather than a frame count because the screens that animate
-    (the menu titles, the summary) pace themselves on `pygame.time.get_ticks`.
+    Real time rather than a frame count because what animates (a scheduled
+    banner, the walk-off celebration) paces itself on `pygame.time.get_ticks`.
     """
     end = time.monotonic() + seconds
     while True:
@@ -118,12 +118,12 @@ def _sandbox_shown_again(game):
 
 
 SCENES = [
-    ('mode_select', lambda g: None, 1.6),
+    ('mode_select', lambda g: None, 0),
     ('settings', lambda g: g.enter_settings_menu(), 0),
     ('key_bindings', lambda g: g.enter_key_bindings_menu(), 0),
     ('arcade_menu',
      lambda g: (g.exit_key_bindings_menu(), g.exit_settings_menu(),
-                g.enter_arcade_mode()), 1.6),
+                g.enter_arcade_mode()), 0),
     ('arcade_gameplay_legacy',
      lambda g: (g.enter_gamemode('Sale', 'sale'), _hud('legacy')(g)), 0),
     ('banner_partial', _banner("STRIKEOUT", 3), 0),
@@ -134,10 +134,10 @@ SCENES = [
     ('arcade_gameplay_minimal', _hud('minimal'), 0),
     ('track_view', lambda g: (_hud('legacy')(g), g.toggle_track()), 0),
     ('inning_end', lambda g: (g.toggle_track(), _end_half_inning(g)), 0),
-    ('summary', lambda g: g.continue_to_summary(), 3.8),
+    ('summary', lambda g: g.continue_to_summary(), 0),
     ('sandbox_menu',
      lambda g: (g.set_menu_state(0), g.return_to_mode_select(),
-                g.enter_sandbox_mode()), 1.6),
+                g.enter_sandbox_mode()), 0),
     ('sandbox_gameplay_legacy', lambda g: g._enter_sandbox_gameplay('sale'), 0),
     ('sandbox_gameplay_broadcast', _hud('broadcast'), 0),
     ('sandbox_gameplay_minimal', _hud('minimal'), 0),

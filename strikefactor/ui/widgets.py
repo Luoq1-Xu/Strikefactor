@@ -41,9 +41,10 @@ class Button(NamedTuple):
     action: Hashable
     label: str
     rect: pygame.Rect
-    style: str = 'default'      # 'default' | 'primary'
+    style: str = 'default'      # 'default' | 'primary' | 'row'
     enabled: bool = True
     selected: bool = False
+    detail: str = ''            # the second line of a 'row'
 
 
 class ButtonGroup:
@@ -142,4 +143,5 @@ class ButtonGroup:
                           and button.rect.collidepoint(pos)))
             gdt.draw_button(screen, fonts, button.label, button.rect,
                             style=button.style, enabled=button.enabled,
-                            selected=button.selected, active=active)
+                            selected=button.selected, active=active,
+                            detail=button.detail)

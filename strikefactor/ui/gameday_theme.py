@@ -106,8 +106,33 @@ def draw_page_header(screen, fonts, header, subtitle="", headline=""):
                   (MARGIN_X, _HEADLINE_Y), FG)
 
 
+_ROW_PAD_X = 24
+
+
+def _draw_row_button(screen, fonts, label, detail, rect, enabled, active):
+    """A full-width choice: a title, a line about it, and a ``>`` to follow."""
+    lit = active and enabled
+    if lit:
+        pygame.draw.rect(screen, HOVER_BG, rect)
+    pygame.draw.rect(screen, FG if lit else DIVIDER, rect, 1)
+    title = fonts['big']
+    # Title and detail are centred as one block, so a row without a detail
+    # line still sits its title on the middle.
+    block_h = title.get_height() + (fonts['small'].get_height() + 4 if detail else 0)
+    y = rect.centery - block_h // 2
+    blit_text(screen, label, title, (rect.left + _ROW_PAD_X, y),
+              FG if enabled else DIM_SOFT)
+    if detail:
+        blit_text(screen, detail, fonts['small'],
+                  (rect.left + _ROW_PAD_X, y + title.get_height() + 4), DIM)
+    arrow = fonts['med']
+    blit_text(screen, ">", arrow,
+              (rect.right - _ROW_PAD_X, rect.centery - arrow.get_height() // 2),
+              FG if lit else DIM_SOFT, align='right')
+
+
 def draw_button(screen, fonts, label, rect, *, style='default', enabled=True,
-                selected=False, active=False):
+                selected=False, active=False, detail=""):
     """Draw one button. ``active`` is "under the pointer or the cursor".
 
     Stateless on purpose, like :func:`draw_chips`: the caller says what is
@@ -119,7 +144,13 @@ def draw_button(screen, fonts, label, rect, *, style='default', enabled=True,
     switched on). ``style='primary'`` is the screen's main action: a brighter
     border and the next font size up, never a colour. The palette is
     black, white and gray.
+
+    ``style='row'`` is a different shape for the same thing: a wide choice
+    with a ``detail`` line under its label, as on the main menu.
     """
+    if style == 'row':
+        _draw_row_button(screen, fonts, label, detail, rect, enabled, active)
+        return
     font = fonts['small' if style == 'primary' else 'micro']
     if selected:
         pygame.draw.rect(screen, HIGHLIGHT_BG, rect)
@@ -192,6 +223,33 @@ def draw_chips(screen, font, labels, active_index, x, y,
         hits.append((chip, index))
         cursor = chip.left - gap if anchor == 'right' else chip.right + gap
     return hits
+
+
+def draw_stat_grid(screen, fonts, title, cells, x, y, width):
+    """A titled row of boxed stats. ``cells`` is ``[(label, value text)]``.
+
+    The GameDay final screen's YOUR LINE and Arcade's inning summary are the
+    same object with different columns. Returns the y just below the grid.
+    """
+    blit_text(screen, title, fonts['micro'], (x, y), DIM)
+
+    cell_h = 60
+    cell_y = y + 22
+    cell_w = width // len(cells)
+    pygame.draw.rect(screen, DIVIDER,
+                     pygame.Rect(x, cell_y, cell_w * len(cells), cell_h), 1)
+
+    for i, (label, value) in enumerate(cells):
+        cx = x + i * cell_w
+        if i > 0:
+            pygame.draw.line(screen, DIVIDER,
+                             (cx, cell_y), (cx, cell_y + cell_h), 1)
+        blit_text(screen, label, fonts['tiny'],
+                  (cx + cell_w // 2, cell_y + 6), DIM, align='center')
+        blit_text(screen, value, fonts['big'],
+                  (cx + cell_w // 2, cell_y + 24), FG, align='center')
+
+    return cell_y + cell_h
 
 
 # --- Linescore ---

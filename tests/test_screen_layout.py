@@ -92,6 +92,10 @@ def _list(cls, pages=3, page=1, selected=None):
 
 # Every screen and phase that shows buttons: label -> the buttons it shows.
 SCREENS = {
+    'mode_select': lambda: gs.ModeSelectState(_game()).buttons(),
+    'arcade_menu': lambda: gs.MenuState(_game()).buttons(),
+    'sandbox_menu': lambda: gs.SandboxMenuState(_game()).buttons(),
+    'summary': lambda: gs.SummaryState(_game()).buttons(),
     'settings': lambda: SettingsPanel().footer_buttons(),
     'key_bindings': lambda: KeyBindingsPanel().footer_buttons(),
     'gameday_setup': lambda: _gameday_setup(False).buttons(),
@@ -146,7 +150,9 @@ def test_action_ids_are_unique_on_a_screen(screen):
 # BACK (or MAIN MENU, where backing out abandons a game) is the same slot on
 # every screen that has one.
 _BACK_ACTIONS = {'back', 'back_to_main', 'back_from_keybinds', 'gd_list_back',
-                 'gameday_main_menu'}
+                 'gameday_main_menu', 'back_to_main_menu'}
+# The main menu is the root, and a finished game has nothing to back out of.
+_NO_WAY_BACK = {'mode_select', 'gameday_final'}
 
 
 @pytest.mark.parametrize('screen', sorted(set(SCREENS) - _IN_GAME))
@@ -154,8 +160,180 @@ def test_the_way_back_is_always_in_the_same_place(screen):
     backs = [b for b in SCREENS[screen]() if b.action in _BACK_ACTIONS]
     for button in backs:
         assert button.rect == gdt.footer_back_rect()
-    if screen != 'gameday_final':
-        assert len(backs) == 1, f"'{screen}' needs exactly one way back"
+    assert len(backs) == (0 if screen in _NO_WAY_BACK else 1)
+
+
+# ── What each menu's buttons do ──────────────────────────────────────────
+
+class _RecordingGame:
+    """A stand-in `Game`: any method a screen calls is recorded, not run."""
+
+    menu_state = 0
+
+    def __init__(self):
+        self.calls = []
+        self.pitcher_manager = None
+        self.ui_manager = _game().ui_manager
+        self.ui_manager.set_button_visibility = lambda name: None
+
+    def __getattr__(self, name):
+        def method(*args):
+            self.calls.append((name, *args))
+        return method
+
+
+def _press(state, action):
+    """Click the button with ``action`` on ``state``."""
+    rect = {b.action: b.rect for b in state.buttons()}[action]
+    state.handle_event(pygame.event.Event(
+        pygame.MOUSEBUTTONDOWN, button=1, pos=rect.center))
+
+
+def test_the_main_menu_offers_the_three_modes_and_settings():
+    actions = [b.action for b in gs.ModeSelectState(_game()).buttons()]
+    assert actions == ['arcade_mode', 'gameday', 'sandbox_mode', 'settings']
+
+
+def test_every_main_menu_action_maps_to_a_game_method():
+    from strikefactor.main import Game
+
+    actions = {b.action for b in gs.ModeSelectState(_game()).buttons()}
+    assert actions == set(gs.ModeSelectState._ACTIONS)
+    for method in gs.ModeSelectState._ACTIONS.values():
+        assert callable(getattr(Game, method, None)), method
+
+
+@pytest.mark.parametrize('action,method', gs.ModeSelectState._ACTIONS.items())
+def test_each_main_menu_button_opens_its_screen(action, method):
+    game = _RecordingGame()
+    _press(gs.ModeSelectState(game), action)
+    assert game.calls == [(method,)]
+
+
+def test_the_main_menu_is_fully_reachable_from_the_keyboard():
+    """The cursor starts on the first mode, so ENTER has a visible target
+    before any key is pressed, and the arrows reach SETTINGS."""
+    game = _RecordingGame()
+    state = gs.ModeSelectState(game)
+    state.enter()
+    state.handle_event(_key(pygame.K_RETURN))
+    assert game.calls == [('enter_arcade_mode',)]
+
+    game.calls.clear()
+    state.enter()
+    for _ in range(3):
+        state.handle_event(_key(pygame.K_DOWN))
+    state.handle_event(_key(pygame.K_RETURN))
+    assert game.calls == [('enter_settings_menu',)]
+
+
+def test_gameday_is_a_mode_not_a_button_on_the_arcade_menu():
+    assert 'gameday' in {b.action for b in gs.ModeSelectState(_game()).buttons()}
+    assert 'gameday' not in {b.action for b in gs.MenuState(_game()).buttons()}
+
+
+def test_every_pitcher_on_the_carousel_has_an_arcade_mode_name():
+    from strikefactor.gameplay.gameday_manager import ALL_PITCHERS
+    assert set(ALL_PITCHERS) == set(gs.MenuState.ARCADE_MODE_NAMES)
+
+
+def test_the_arcade_menu_starts_an_inning_against_the_chosen_pitcher():
+    game = _RecordingGame()
+    state = gs.MenuState(game)
+    state.handle_event(_key(pygame.K_RIGHT))
+    pitcher = state.select.selected()
+    state.handle_event(_key(pygame.K_RETURN))
+    assert game.calls == [
+        ('enter_gamemode', gs.MenuState.ARCADE_MODE_NAMES[pitcher], pitcher)]
+
+
+@pytest.mark.parametrize('action,call', [
+    ('random_scenario', ('enter_random_scenario',)),
+    ('back', ('return_to_mode_select',)),
+])
+def test_the_arcade_menu_s_other_buttons(action, call):
+    game = _RecordingGame()
+    _press(gs.MenuState(game), action)
+    assert game.calls == [call]
+
+
+def test_the_sandbox_menu_starts_with_the_chosen_pitcher_or_backs_out():
+    game = _RecordingGame()
+    state = gs.SandboxMenuState(game)
+    _press(state, 'confirm')
+    assert game.calls == [('_enter_sandbox_gameplay', state.select.selected())]
+
+    game.calls.clear()
+    state.handle_event(_key(pygame.K_ESCAPE))
+    assert game.calls == [('return_to_mode_select',)]
+
+
+@pytest.mark.parametrize('event_or_action,call', [
+    ('play_again', ('set_menu_state', 0)),
+    (pygame.K_RETURN, ('set_menu_state', 0)),
+    ('back_to_main_menu', ('return_to_mode_select',)),
+    (pygame.K_ESCAPE, ('return_to_mode_select',)),
+])
+def test_the_summary_plays_again_or_returns_to_the_main_menu(event_or_action, call):
+    game = _RecordingGame()
+    state = gs.SummaryState(game)
+    if isinstance(event_or_action, str):
+        _press(state, event_or_action)
+    else:
+        state.handle_event(_key(event_or_action))
+    assert game.calls == [call]
+
+
+def test_the_summary_reads_the_inning_before_the_scorekeeper_is_reset():
+    """`enter` resets the scorekeeper, so the screen has to have taken its
+    numbers first; it cannot read them live while it draws."""
+    score = [4]
+    game = SimpleNamespace(
+        scoreKeeper=SimpleNamespace(get_score=lambda: score[0]),
+        hits=3, currentwalks=1, currentstrikeouts=2,
+        field_renderer=SimpleNamespace(
+            get_triple_slash_line=lambda: ".300/.400/.500"),
+        current_pitcher=SimpleNamespace(name="Chris Sale"))
+    state = gs.SummaryState(game)
+    state._collect_summary()
+    score[0] = 0                                    # the reset
+    assert state.runs == 4
+    assert dict(state.cells) == {"HITS": "3", "WALKS": "1", "STRIKEOUTS": "2"}
+    assert state.batting_line == ".300/.400/.500"
+    assert state.pitcher_name == "Chris Sale"
+
+
+def test_gameday_s_exits_lead_to_the_main_menu_and_its_own_setup():
+    """GameDay hangs off the main menu now, so nothing in it may drop the
+    player on the Arcade pitcher pick."""
+    game = _RecordingGame()
+    _press(gs.GameDayState(game), 'back')
+    assert game.calls == [('return_to_mode_select',)]
+
+    game = _RecordingGame()
+    _press(_transition_on(game, "SHOW_SCORE"), 'gameday_main_menu')
+    assert game.calls == [('return_to_mode_select',)]
+
+    game = _RecordingGame()
+    game.current_pitcher = SimpleNamespace(clear_fatigue_stats=lambda: None)
+    _press(_transition_on(game, "FINAL"), 'final_menu')
+    assert game.calls == [('_teardown_active_session',), ('enter_gameday_mode',)]
+
+
+def _transition_on(game, phase):
+    state = gs.GameDayTransitionState(game)
+    state.phase = phase
+    return state
+
+
+@pytest.mark.parametrize('state_cls', [
+    gs.ModeSelectState, gs.MenuState, gs.SandboxMenuState, gs.SummaryState])
+def test_the_typewriter_titles_are_gone(state_cls):
+    """These four screens typed their titles out a letter at a time. If the
+    counters come back, a screen has left the shared chrome."""
+    state = state_cls(_game())
+    for gone in ('messages', 'counter', 'textoffset', 'messages_finished'):
+        assert not hasattr(state, gone), gone
 
 
 # ── Pitcher select ───────────────────────────────────────────────────────

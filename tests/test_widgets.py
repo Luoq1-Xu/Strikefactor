@@ -160,10 +160,13 @@ def test_the_keyboard_cursor_wins_over_hover(monkeypatch):
 @pytest.mark.parametrize('kwargs', [
     {}, {'active': True}, {'selected': True}, {'enabled': False},
     {'style': 'primary'}, {'style': 'primary', 'active': True},
+    {'style': 'row', 'detail': "ONE INNING"}, {'style': 'row'},
+    {'style': 'row', 'detail': "ONE INNING", 'active': True},
 ])
 def test_a_button_is_drawn_inside_its_own_rect(kwargs):
     surface = pygame.Surface((400, 200))
-    rect = pygame.Rect(100, 60, 150, 36)
+    rect = (pygame.Rect(20, 40, 360, 84) if kwargs.get('style') == 'row'
+            else pygame.Rect(100, 60, 150, 36))
     gdt.draw_button(surface, gdt.load_fonts(), "NEXT  >", rect, **kwargs)
     lit = pygame.mask.from_threshold(surface, (0, 0, 0), (1, 1, 1, 255))
     lit.invert()

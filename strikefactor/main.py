@@ -294,7 +294,8 @@ class Game:
         self._initialize_pygame()
         self._setup_display()
         self._initialize_components()
-        self._setup_ui_callbacks()
+        # Screens dispatch their own buttons; what is wired here is the keys.
+        self._setup_key_binding_callbacks()
         # The window opens windowed; a saved fullscreen preference is applied
         # once settings exist (F11 saves it back — see `toggle_fullscreen`).
         if self.settings_manager.get_display_mode() == "fullscreen":
@@ -489,42 +490,6 @@ class Game:
         self.pitch_trajectories = []
         self.last_pitch_information = []
 
-    def _setup_ui_callbacks(self):
-        """Setup UI button callbacks."""
-        # Pitcher selection callbacks
-        self.ui_manager.register_button_callback('sale', lambda: self.enter_gamemode('Sale', 'sale'))
-        self.ui_manager.register_button_callback('degrom', lambda: self.enter_gamemode('Degrom', 'degrom'))
-        self.ui_manager.register_button_callback('sasaki', lambda: self.enter_gamemode('Sasaki', 'sasaki'))
-        self.ui_manager.register_button_callback('yamamoto', lambda: self.enter_gamemode('Yamamoto', 'yamamoto'))
-        self.ui_manager.register_button_callback('mcclanahan', lambda: self.enter_gamemode('Experimental', 'mcclanahan'))
-        self.ui_manager.register_button_callback('random_scenario', lambda: self.enter_random_scenario())
-        self.ui_manager.register_button_callback('gameday', lambda: self.enter_gameday_mode())
-
-        # Mode selection callbacks
-        self.ui_manager.register_button_callback('arcade_mode', lambda: self.enter_arcade_mode())
-        self.ui_manager.register_button_callback('sandbox_mode', lambda: self.enter_sandbox_mode())
-        self.ui_manager.register_button_callback('back_to_mode_select', lambda: self.return_to_mode_select())
-
-        # Sandbox menu callbacks - pitcher selection (enters gameplay)
-        self.ui_manager.register_button_callback('sandbox_menu_sale', lambda: self._enter_sandbox_gameplay('sale'))
-        self.ui_manager.register_button_callback('sandbox_menu_degrom', lambda: self._enter_sandbox_gameplay('degrom'))
-        self.ui_manager.register_button_callback('sandbox_menu_sasaki', lambda: self._enter_sandbox_gameplay('sasaki'))
-        self.ui_manager.register_button_callback('sandbox_menu_yamamoto', lambda: self._enter_sandbox_gameplay('yamamoto'))
-        self.ui_manager.register_button_callback('sandbox_menu_mcclanahan', lambda: self._enter_sandbox_gameplay('mcclanahan'))
-
-        # Navigation callbacks. In-game actions (strike zone, batter, sound,
-        # review, menu) have no buttons; _setup_key_binding_callbacks wires
-        # them to keys.
-        self.ui_manager.register_button_callback('back_to_main_menu', lambda: self.set_menu_state(0))
-
-        # Settings + key-binding screens. Only the footer nav is a widget —
-        # the difficulty chips and the setting/binding rows are drawn and
-        # hit-tested by ui/settings_panel.py and dispatched from MenuState.
-        self.ui_manager.register_button_callback('settings', lambda: self.enter_settings_menu())
-
-        # Setup key binding system callbacks
-        self._setup_key_binding_callbacks()
-        
     # Properties for backward compatibility
     @property
     def current_pitcher(self):
@@ -1063,14 +1028,19 @@ class Game:
     def exit_to_menu(self):
         """MAIN_MENU hotkey: return to the menu belonging to the *current* mode.
 
-        Sandbox has its own pitcher-select screen, so escaping out of a
-        Sandbox session must land there rather than in the Arcade menu.
+        Sandbox and GameDay each have their own pitcher-select screen, so
+        escaping out of either must land there rather than in the Arcade menu.
         `current_gamemode` stays `'sandbox_gameplay'` for the whole session,
         including detours through view-pitches/visualization.
         """
         if self.current_gamemode == 'sandbox_gameplay' or \
                 self.state_manager.current_state_name in ('sandbox_gameplay', 'sandbox_menu'):
             self.return_to_sandbox_menu()
+        elif self.in_gameday_mode:
+            # GameDay's menu is its setup screen, where the game just left
+            # can be resumed from its last half-inning.
+            self._teardown_active_session()
+            self.enter_gameday_mode()
         else:
             self.set_menu_state(0)
 

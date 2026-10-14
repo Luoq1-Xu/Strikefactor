@@ -63,91 +63,101 @@ class GameState(ABC):
 
 
 class ModeSelectState(GameState):
-    """Top-level mode selection menu (Arcade/Sandbox)."""
+    """The main menu: the three modes, and the way into settings."""
+
+    # (action id, title, one line on what the mode is)
+    MODES = [
+        ('arcade_mode', "ARCADE",
+         "ONE INNING AGAINST THE PITCHER YOU PICK"),
+        ('gameday', "GAMEDAY",
+         "A FULL NINE-INNING GAME AGAINST A PITCHING STAFF"),
+        ('sandbox_mode', "SANDBOX",
+         "CHOOSE THE PITCHES YOU SEE · NO LIMIT ON OUTS"),
+    ]
+    _ACTIONS = {
+        'arcade_mode': 'enter_arcade_mode',
+        'gameday': 'enter_gameday_mode',
+        'sandbox_mode': 'enter_sandbox_mode',
+        'settings': 'enter_settings_menu',
+    }
+
+    _ROW_TOP = 210
+    _ROW_H = 84
+    _ROW_STRIDE = 100
+    _HINT = "UP / DOWN  MOVE      ENTER  SELECT"
 
     def __init__(self, game):
         super().__init__(game)
-        self.messages = ["StrikeFactor", "A Baseball At-Bat Simulator"]
-        self.active_message = 0
-        self.counter = 0
-        self.textoffset = 0
-        self.messages_finished = 0
-        self.done = False
-        self.running = True
+        self._buttons = ButtonGroup(arrows=True)
+
+    def buttons(self):
+        """A row per mode down the content column, SETTINGS in the footer."""
+        width = gdt.SCREEN_W - 2 * gdt.MARGIN_X
+        out = [
+            Button(action, title,
+                   pygame.Rect(gdt.MARGIN_X,
+                               self._ROW_TOP + index * self._ROW_STRIDE,
+                               width, self._ROW_H),
+                   style='row', detail=detail)
+            for index, (action, title, detail) in enumerate(self.MODES)
+        ]
+        out.append(Button('settings', "SETTINGS",
+                          gdt.footer_row_right([150])[0]))
+        return out
 
     def enter(self):
         """Initialize mode select state."""
         self.game.ui_manager.hide_banner()
         self.game.ui_manager.set_button_visibility('mode_select')
-        # Reset typing effect
-        self.active_message = 0
-        self.counter = 0
-        self.textoffset = 0
-        self.messages_finished = 0
-        self.done = False
-        self.running = True
-        self._message_pause_until = 0
+        # Start with the keyboard cursor on the first mode, so the screen
+        # shows what ENTER will do before any key is pressed.
+        self._buttons.set(self.buttons())
+        self._buttons.clear_focus()
+        self._buttons.move_focus(1)
 
     def exit(self):
         """Clean up mode select state."""
         pass
 
     def update(self, time_delta: float):
-        """Update typing effect."""
-        if not self.running:
-            return
-
-        message = self.messages[self.active_message]
-
-        # Update typing effect
-        if self.counter < self.game.speed * len(message):
-            self.counter += 1
-        elif self.counter >= self.game.speed * len(message):
-            self.done = True
-
-        # Handle message progression (non-blocking 500ms pause between messages)
-        if (self.active_message < len(self.messages) - 1) and self.done:
-            now = pygame.time.get_ticks()
-            if getattr(self, '_message_pause_until', 0) == 0:
-                self._message_pause_until = now + 500
-            elif now >= self._message_pause_until:
-                self.active_message += 1
-                self.done = False
-                self.textoffset += 100
-                self.counter = 0
-                self.messages_finished += 1
-                self._message_pause_until = 0
+        pass
 
     def handle_event(self, event):
         """Handle mode select events."""
         self.game.ui_manager.process_events(event)
         if event.type == pygame.QUIT:
             return False
+        self._buttons.set(self.buttons())
+        action = self._buttons.handle_event(event)
+        if action is not None:
+            getattr(self.game, self._ACTIONS[action])()
         return True
 
     def render(self, screen):
         """Render the mode select screen."""
-        screen.fill("black")
-
-        # Draw completed messages
-        if self.messages_finished > 0:
-            offset = 0
-            for i in range(self.messages_finished):
-                self.game.ui_manager.draw_completed_message(
-                    self.messages[i], (150, 170 + offset), use_big_font=True
-                )
-                offset += 100
-
-        # Draw current message with typing effect
-        message = self.messages[self.active_message]
-        self.game.ui_manager.draw_typing_effect(
-            message, self.counter, self.game.speed,
-            (150, 170 + self.textoffset), use_big_font=True
-        )
+        fonts = gdt.load_fonts()
+        screen.fill(gdt.BG)
+        gdt.draw_page_header(screen, fonts, "=== MAIN MENU ===",
+                             "A BASEBALL AT-BAT SIMULATOR", "STRIKEFACTOR.")
+        self._buttons.set(self.buttons())
+        self._buttons.draw(screen, fonts)
+        gdt.blit_text(screen, self._HINT, fonts['micro'],
+                      (gdt.SCREEN_W // 2, gdt.SCREEN_H - 64),
+                      gdt.DIM_SOFT, align='center')
 
 
 class MenuState(GameState):
-    """Main menu state with pitcher selection and typing effect."""
+    """The Arcade menu: pick the pitcher to face, or a random scenario."""
+
+    # What `Game.menu_state` is called while facing each pitcher in Arcade.
+    # `GameplayState` copies it into `current_gamemode`.
+    ARCADE_MODE_NAMES = {
+        'sale': 'Sale',
+        'degrom': 'Degrom',
+        'yamamoto': 'Yamamoto',
+        'sasaki': 'Sasaki',
+        'mcclanahan': 'Experimental',
+    }
 
     # Settings / key bindings are sub-modes of the menu rather than states of
     # their own. Their bodies are drawn by ui/settings_panel.py — see that
@@ -176,15 +186,19 @@ class MenuState(GameState):
 
     def __init__(self, game):
         super().__init__(game)
-        self.messages = ["StrikeFactor", "A Baseball At-Bat Simulator"]
-        self.active_message = 0
-        self.counter = 0
-        self.textoffset = 0
-        self.messages_finished = 0
-        self.done = False
-        self.running = True
+        self.select = PitcherSelect(
+            self.game.pitcher_manager,
+            header="=== ARCADE ===",
+            subtitle="ONE INNING · CHOOSE YOUR OPPONENT",
+            extras=lambda: [('random_scenario', "RANDOM SCENARIO")],
+            default='sale',
+        )
         self._settings_panel = SettingsPanel()
         self._keybinds_panel = KeyBindingsPanel()
+
+    def buttons(self):
+        """The Arcade menu's buttons (the sub-screens list their own)."""
+        return self.select.buttons()
 
     def enter(self):
         """Initialize menu state."""
@@ -202,48 +216,17 @@ class MenuState(GameState):
             self._keybinds_panel.reset_cursor()
         else:
             self.game.ui_manager.set_button_visibility('main_menu')
+            # The carousel stays on the last pitcher faced: coming back from
+            # an inning, the likeliest next choice is the same one.
+            self.select.reset()
 
-            # Reset typing effect only for main menu
-            self.active_message = 0
-            self.counter = 0
-            self.textoffset = 0
-            self.messages_finished = 0
-            self.done = False
-            self.running = True
-            self._message_pause_until = 0
-        
     def exit(self):
         """Clean up menu state."""
         pass
-        
+
     def update(self, time_delta: float):
-        """Update typing effect and menu logic."""
-        if not self.running:
-            return
+        pass
 
-        # Only run typing effect for main menu, not settings or key bindings
-        if self.game.menu_state not in ['settings', 'key_bindings']:
-            message = self.messages[self.active_message]
-
-            # Update typing effect
-            if self.counter < self.game.speed * len(message):
-                self.counter += 1
-            elif self.counter >= self.game.speed * len(message):
-                self.done = True
-
-            # Handle message progression (non-blocking 500ms pause between messages)
-            if (self.active_message < len(self.messages) - 1) and self.done:
-                now = pygame.time.get_ticks()
-                if getattr(self, '_message_pause_until', 0) == 0:
-                    self._message_pause_until = now + 500
-                elif now >= self._message_pause_until:
-                    self.active_message += 1
-                    self.done = False
-                    self.textoffset += 100
-                    self.counter = 0
-                    self.messages_finished += 1
-                    self._message_pause_until = 0
-            
     def handle_event(self, event):
         """Handle menu events."""
         self.game.ui_manager.process_events(event)
@@ -253,7 +236,21 @@ class MenuState(GameState):
             self._handle_settings_event(event)
         elif self.game.menu_state == 'key_bindings':
             self._handle_keybinds_event(event)
+        else:
+            self._handle_arcade_event(event)
         return True
+
+    # --- arcade pitcher pick --------------------------------------------
+
+    def _handle_arcade_event(self, event):
+        action = self.select.handle_event(event)
+        if action == 'confirm':
+            pitcher = self.select.selected()
+            self.game.enter_gamemode(self.ARCADE_MODE_NAMES[pitcher], pitcher)
+        elif action == 'random_scenario':
+            self.game.enter_random_scenario()
+        elif action == 'back':
+            self.game.return_to_mode_select()
 
     # --- settings sub-screen -------------------------------------------
 
@@ -349,22 +346,7 @@ class MenuState(GameState):
                 error=getattr(self.game, 'key_rebind_error', None))
             return
 
-        screen.fill("black")
-        # Draw completed messages
-        if self.messages_finished > 0:
-            offset = 0
-            for i in range(self.messages_finished):
-                self.game.ui_manager.draw_completed_message(
-                    self.messages[i], (100, 170 + offset), use_big_font=True
-                )
-                offset += 100
-
-        # Draw current message with typing effect
-        message = self.messages[self.active_message]
-        self.game.ui_manager.draw_typing_effect(
-            message, self.counter, self.game.speed,
-            (100, 170 + self.textoffset), use_big_font=True
-        )
+        self.select.render(screen)
 
 
 class GameplayState(GameState):
@@ -492,56 +474,58 @@ class GameplayState(GameState):
 
 
 class SummaryState(GameState):
-    """End of inning summary state."""
-    
+    """Arcade's end-of-inning summary."""
+
+    _GRID_W = 620
+
     def __init__(self, game):
         super().__init__(game)
-        self.messages = []
-        self.active_message = 0
-        self.counter = 0
-        self.textoffset = 0
-        self.messages_finished = 0
-        self.done = False
-        self.running = True
+        # What the inning came to, captured on entry: the scorekeeper is
+        # reset straight after, so nothing here can be read live.
+        self.runs = 0
+        self.cells = []            # [(label, value)] for the stat grid
+        self.batting_line = ""
+        self.pitcher_name = ""
         self.stats_updated = False
-        
+        # ENTER plays another inning; ESC goes back to the main menu.
+        self._buttons = ButtonGroup(default='play_again')
+
+    def buttons(self):
+        return [
+            Button('back_to_main_menu', "<  MAIN MENU",
+                   gdt.footer_back_rect()),
+            Button('play_again', "PLAY AGAIN  >",
+                   gdt.footer_row_right([220])[0], style='primary'),
+        ]
+
     def enter(self):
         """Initialize summary state."""
-        self._generate_summary_messages()
+        self._collect_summary()
         if not self.stats_updated:
             self._update_pitcher_stats()
             self.stats_updated = True
         self.game.ui_manager.set_button_visibility('summary')
         self.game.scoreKeeper.reset()
-        
-        # Reset typing effect
-        self.active_message = 0
-        self.counter = 0
-        self.textoffset = 0
-        self.messages_finished = 0
-        self.done = False
-        self.running = True
-        self._message_pause_until = 0
-        
+        self._buttons.clear_focus()
+
     def exit(self):
         """Clean up summary state."""
         # Reset the flag so stats can be updated again for next inning
         self.stats_updated = False
-        
-    def _generate_summary_messages(self):
-        """Generate summary messages based on game stats."""
-        runs_scored = self.game.scoreKeeper.get_score()
-        triple_slash = self.game.field_renderer.get_triple_slash_line()
 
-        self.messages = [
-            "INNING OVER",
-            f"HITS : {self.game.hits}",
-            f"BATTING : {triple_slash}",  # Added triple slash line
-            f"WALKS: {self.game.currentwalks}",
-            f"STRIKEOUTS : {self.game.currentstrikeouts}",
-            f"RUNS SCORED : {runs_scored}"
+    def _collect_summary(self):
+        """Read the inning off the game before the scorekeeper is reset."""
+        # Runs are the big number on the right; the grid is the rest.
+        self.runs = self.game.scoreKeeper.get_score()
+        self.cells = [
+            ("HITS", str(self.game.hits)),
+            ("WALKS", str(self.game.currentwalks)),
+            ("STRIKEOUTS", str(self.game.currentstrikeouts)),
         ]
-        
+        self.batting_line = self.game.field_renderer.get_triple_slash_line()
+        pitcher = self.game.current_pitcher
+        self.pitcher_name = getattr(pitcher, 'name', '') or ''
+
     def _update_pitcher_stats(self):
         """Update pitcher statistics."""
         stats_update = {
@@ -571,58 +555,60 @@ class SummaryState(GameState):
         self.game.current_pitcher.print_formatted_stats()
         
     def update(self, time_delta: float):
-        """Update summary typing effect."""
-        if not self.running or self.active_message >= len(self.messages):
-            return
-            
-        message = self.messages[self.active_message]
-        
-        # Update typing effect
-        if self.counter < self.game.speed * len(message):
-            self.counter += 1
-        elif self.counter >= self.game.speed * len(message):
-            self.done = True
-            
-        # Handle message progression (non-blocking 500ms pause between messages)
-        if (self.active_message < len(self.messages) - 1) and self.done:
-            now = pygame.time.get_ticks()
-            if getattr(self, '_message_pause_until', 0) == 0:
-                self._message_pause_until = now + 500
-            elif now >= self._message_pause_until:
-                self.active_message += 1
-                self.done = False
-                self.textoffset += 70
-                self.counter = 0
-                self.messages_finished += 1
-                self._message_pause_until = 0
-            
+        pass
+
     def handle_event(self, event):
         """Handle summary events."""
         self.game.ui_manager.process_events(event)
         if event.type == pygame.QUIT:
             return False
+        self._buttons.set(self.buttons())
+        action = self._buttons.handle_event(event)
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            action = 'back_to_main_menu'
+        if action == 'play_again':
+            self.game.set_menu_state(0)         # the Arcade pitcher pick
+        elif action == 'back_to_main_menu':
+            self.game.return_to_mode_select()
         return True
-            
+
+    def _hint(self):
+        """The keys this screen answers to, review keys as actually bound."""
+        from strikefactor.ui.review_overlay import VIEW_ACTIONS
+        bindings = self.game.key_binding_manager
+        review = " / ".join(
+            bindings.get_key_name(bindings.get_key_for_action(action)).upper()
+            for action in VIEW_ACTIONS)
+        return (f"ENTER  PLAY AGAIN      ESC  MAIN MENU      "
+                f"{review}  REVIEW")
+
     def render(self, screen):
         """Render the summary screen."""
-        screen.fill("black")
-        
-        # Draw completed messages
-        if self.messages_finished > 0:
-            offset = 0
-            for i in range(self.messages_finished):
-                self.game.ui_manager.draw_completed_message(
-                    self.messages[i], (350, 100 + offset), use_big_font=False
-                )
-                offset += 70
-                
-        # Draw current message with typing effect
-        if self.active_message < len(self.messages):
-            message = self.messages[self.active_message]
-            self.game.ui_manager.draw_typing_effect(
-                message, self.counter, self.game.speed,
-                (350, 100 + self.textoffset), use_big_font=False
-            )
+        fonts = gdt.load_fonts()
+        screen.fill(gdt.BG)
+        subtitle = f"VS {self.pitcher_name.upper()}" if self.pitcher_name else ""
+        gdt.draw_page_header(screen, fonts, "=== INNING OVER · ARCADE ===",
+                             subtitle, "INNING OVER.")
+
+        # Runs, big, where the GameDay screens put the score.
+        right = gdt.SCREEN_W - gdt.MARGIN_X
+        gdt.blit_text(screen, "RUNS", fonts['micro'], (right, 56), gdt.DIM,
+                      align='right')
+        gdt.blit_text(screen, str(self.runs), fonts['mega'], (right, 76),
+                      gdt.FG, align='right')
+
+        bottom = gdt.draw_stat_grid(screen, fonts, "THIS INNING", self.cells,
+                                    gdt.MARGIN_X, 200, self._GRID_W)
+        gdt.blit_text(screen, "BATTING LINE  ·  AVG / OBP / SLG",
+                      fonts['micro'], (gdt.MARGIN_X, bottom + 28), gdt.DIM)
+        gdt.blit_text(screen, self.batting_line, fonts['big'],
+                      (gdt.MARGIN_X, bottom + 50), gdt.FG)
+
+        gdt.blit_text(screen, self._hint(), fonts['micro'],
+                      (gdt.SCREEN_W // 2, gdt.SCREEN_H - 64),
+                      gdt.DIM_SOFT, align='center')
+        self._buttons.set(self.buttons())
+        self._buttons.draw(screen, fonts)
 
 
 class VisualizationState(GameState):
@@ -953,87 +939,48 @@ class InningEndState(GameState):
 
 
 class SandboxMenuState(GameState):
-    """Sandbox mode menu with pitcher selection and typing effect."""
+    """The Sandbox menu: pick the pitcher to start against."""
 
     def __init__(self, game):
         super().__init__(game)
-        self.messages = ["Sandbox Mode", "Select A Pitcher"]
-        self.active_message = 0
-        self.counter = 0
-        self.textoffset = 0
-        self.messages_finished = 0
-        self.done = False
-        self.running = True
+        self.select = PitcherSelect(
+            self.game.pitcher_manager,
+            header="=== SANDBOX ===",
+            subtitle="NO OUTS LIMIT · CHOOSE A PITCHER TO START WITH",
+            default='sale',
+        )
+
+    def buttons(self):
+        return self.select.buttons()
 
     def enter(self):
         """Initialize sandbox menu state."""
         self.game.ui_manager.hide_banner()
         self.game.ui_manager.set_button_visibility('sandbox_menu')
-        # Reset typing effect
-        self.active_message = 0
-        self.counter = 0
-        self.textoffset = 0
-        self.messages_finished = 0
-        self.done = False
-        self.running = True
-        self._message_pause_until = 0
+        self.select.reset()
 
     def exit(self):
         """Clean up sandbox menu state."""
         pass
 
     def update(self, time_delta: float):
-        """Update typing effect."""
-        if not self.running:
-            return
-
-        message = self.messages[self.active_message]
-
-        # Update typing effect
-        if self.counter < self.game.speed * len(message):
-            self.counter += 1
-        elif self.counter >= self.game.speed * len(message):
-            self.done = True
-
-        # Handle message progression (non-blocking 500ms pause between messages)
-        if (self.active_message < len(self.messages) - 1) and self.done:
-            now = pygame.time.get_ticks()
-            if getattr(self, '_message_pause_until', 0) == 0:
-                self._message_pause_until = now + 500
-            elif now >= self._message_pause_until:
-                self.active_message += 1
-                self.done = False
-                self.textoffset += 100
-                self.counter = 0
-                self.messages_finished += 1
-                self._message_pause_until = 0
+        pass
 
     def handle_event(self, event):
         """Handle sandbox menu events."""
         self.game.ui_manager.process_events(event)
         if event.type == pygame.QUIT:
             return False
+        action = self.select.handle_event(event)
+        if action == 'confirm':
+            self.game._enter_sandbox_gameplay(self.select.selected())
+        elif action == 'back':
+            self.game.return_to_mode_select()
         return True
 
     def render(self, screen):
-        """Render the sandbox menu with typing effect."""
-        screen.fill("black")
-
-        # Draw completed messages
-        if self.messages_finished > 0:
-            offset = 0
-            for i in range(self.messages_finished):
-                self.game.ui_manager.draw_completed_message(
-                    self.messages[i], (100, 170 + offset), use_big_font=True
-                )
-                offset += 100
-
-        # Draw current message with typing effect
-        message = self.messages[self.active_message]
-        self.game.ui_manager.draw_typing_effect(
-            message, self.counter, self.game.speed,
-            (100, 170 + self.textoffset), use_big_font=True
-        )
+        """Render the sandbox menu."""
+        self.select.render(screen)
 
 
 class SandboxGameplayState(GameState):
@@ -1230,7 +1177,6 @@ class GameDayState(GameState):
             self.game.pitcher_manager,
             header="=== GAMEDAY · SETUP ===",
             subtitle="9 INN · CHOOSE YOUR OPPONENT",
-            back_label="MAIN MENU",
             extras=self._extra_buttons,
         )
         self.carousel = self.select.carousel
@@ -1277,7 +1223,7 @@ class GameDayState(GameState):
         if action == 'confirm':
             self._confirm_selection()
         elif action == 'back':
-            self.game.set_menu_state(0)
+            self.game.return_to_mode_select()
         elif action == 'gameday_resume':
             self.game.enter_gameday_resume()
         elif action == 'gameday_past_games':
@@ -1355,7 +1301,8 @@ class GameDayTransitionState(GameState):
         self._buttons.set(buttons)
 
     def _abandon_to_menu(self):
-        self.game.set_menu_state(0)
+        """MAIN MENU mid-game. The half-inning autosave makes it resumable."""
+        self.game.return_to_mode_select()
 
     def enter(self):
         """Called when entering transition state."""
@@ -1702,11 +1649,10 @@ class GameDayTransitionState(GameState):
                         gdt.DIM_SOFT, align='center')
 
     def _return_to_menu(self):
-        """Return to main menu."""
+        """NEXT GAME: close this one out and go back to GameDay's setup."""
         self.game.current_pitcher.clear_fatigue_stats()
-        self.game.in_gameday_mode = False
-        self.game.gameday_manager = None
-        self.game.set_menu_state(0)
+        self.game._teardown_active_session()
+        self.game.enter_gameday_mode()
 
     # ============================================================
     # Refreshed GameDay layout — monochrome retro/CRT aesthetic.
@@ -1833,39 +1779,12 @@ class GameDayTransitionState(GameState):
 
     def _draw_player_statline(self, screen, x, y, width):
         """Draw the AB / R / H / HR / RBI / BB / SO / AVG grid."""
-        f = self._ensure_fonts()
         stats = self._player_batting_stats()
-
-        # Section label
-        self._blit_text(screen, "YOUR LINE", f['micro'], (x, y), self._DIM)
-
-        cell_h = 60
-        cell_y = y + 22
-        n = len(self._STATLINE_COLS)
-        cell_w = width // n
-
-        # Outer border
-        pygame.draw.rect(screen, self._DIVIDER,
-                         pygame.Rect(x, cell_y, cell_w * n, cell_h), 1)
-
-        for i, col in enumerate(self._STATLINE_COLS):
-            cx = x + i * cell_w
-            # Vertical separator (except first column)
-            if i > 0:
-                pygame.draw.line(screen, self._DIVIDER,
-                                 (cx, cell_y), (cx, cell_y + cell_h), 1)
-            # Header (column label)
-            self._blit_text(screen, col, f['tiny'],
-                            (cx + cell_w // 2, cell_y + 6),
-                            self._DIM, align='center')
-            # Value
-            value = stats[col]
-            text = f"{value:.3f}".lstrip('0') if col == 'AVG' else str(value)
-            self._blit_text(screen, text, f['big'],
-                            (cx + cell_w // 2, cell_y + 24),
-                            self._FG, align='center')
-
-        return cell_y + cell_h
+        cells = [(col, f"{stats[col]:.3f}".lstrip('0') if col == 'AVG'
+                  else str(stats[col]))
+                 for col in self._STATLINE_COLS]
+        return gdt.draw_stat_grid(screen, self._ensure_fonts(), "YOUR LINE",
+                                  cells, x, y, width)
 
     # ---- Notable plays list -------------------------------------
 

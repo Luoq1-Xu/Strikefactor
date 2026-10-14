@@ -2,7 +2,6 @@ import json
 
 import pygame
 import pygame_gui
-from pygame_gui.core import ObjectID
 
 from strikefactor.config import get_path
 from strikefactor.ui.banner import OutcomeBanner
@@ -54,92 +53,10 @@ class UIManager:
         return manager
     
     def _create_game_buttons(self, manager):
-        """Creates and returns a dictionary of in-game UI buttons."""
-        buttons = {
-            # Pitcher selection buttons for main  menu
-            'sale': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((400, 500), (190, 50)),
-                text='Chris Sale', manager=manager,
-                object_id=ObjectID(class_id='@pitcher_button')),
-            'degrom': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((400, 600), (190, 50)),
-                text='Jacob deGrom', manager=manager,
-                object_id=ObjectID(class_id='@pitcher_button')),
-            'sasaki': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((600, 500), (190, 50)),
-                text='Roki Sasaki', manager=manager,
-                object_id=ObjectID(class_id='@pitcher_button')),
-            'yamamoto': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((600, 600), (190, 50)),
-                text='Y. Yamamoto', manager=manager,
-                object_id=ObjectID(class_id='@pitcher_button')),
-            'mcclanahan': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((800, 500), (190, 50)),
-                text='S. Mcclanahan', manager=manager,
-                object_id=ObjectID(class_id='@pitcher_button')),
-
-            # Random scenario button
-            'random_scenario': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((500, 400), (280, 50)),
-                text='Random Scenario', manager=manager),
-
-            # GameDay mode button
-            'gameday': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((800, 600), (190, 50)),
-                text='GameDay Mode', manager=manager),
-
-            # Button for summary screen
-            'back_to_main_menu': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((540, 600), (200, 50)),
-                text='MAIN MENU', manager=manager),
-
-            # Settings entry point (lives on the mode-select screen)
-            'settings': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((1130, 650), (140, 40)),
-                text='Settings', manager=manager),
-
-            # The settings, key-binding and GameDay screens have no widgets
-            # here any more: each draws and handles its own buttons through
-            # ui/widgets.py.
-
-            # Mode selection buttons (for top-level menu)
-            'arcade_mode': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((490, 450), (300, 70)),
-                text='ARCADE', manager=manager),
-            'sandbox_mode': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((490, 540), (300, 70)),
-                text='SANDBOX', manager=manager),
-            'back_to_mode_select': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((50, 650), (150, 50)),
-                text='Back', manager=manager),
-
-            # Sandbox menu - Pitcher selection buttons (matching arcade layout)
-            'sandbox_menu_sale': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((400, 500), (190, 50)),
-                text='Chris Sale', manager=manager,
-                object_id=ObjectID(class_id='@pitcher_button')),
-            'sandbox_menu_degrom': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((400, 600), (190, 50)),
-                text='Jacob deGrom', manager=manager,
-                object_id=ObjectID(class_id='@pitcher_button')),
-            'sandbox_menu_sasaki': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((600, 500), (190, 50)),
-                text='Roki Sasaki', manager=manager,
-                object_id=ObjectID(class_id='@pitcher_button')),
-            'sandbox_menu_yamamoto': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((600, 600), (190, 50)),
-                text='Y. Yamamoto', manager=manager,
-                object_id=ObjectID(class_id='@pitcher_button')),
-            'sandbox_menu_mcclanahan': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((800, 500), (190, 50)),
-                text='S. Mcclanahan', manager=manager,
-                object_id=ObjectID(class_id='@pitcher_button')),
-
-            # Sandbox gameplay - Pitcher switch buttons (left sidebar, broadcast style)
-
-            # Sandbox gameplay - Pitch toggle buttons (left sidebar, 2-column broadcast style)
-        }
-        return buttons
+        """No screen has a widget any more: each draws and handles its own
+        buttons through ui/widgets.py. What is left of this class goes with
+        pygame_gui itself."""
+        return {}
 
     def _create_ui_elements(self):
         """
@@ -230,43 +147,9 @@ class UIManager:
         for button in self.buttons.values():
             button.hide()
 
-        if state in ('in_game', 'pitching', 'visualise'):
-            # Gameplay shows no buttons: every in-game action is a key
-            # binding (see KeyBindingsPanel.ACTIONS).
-            pass
-        elif state == 'main_menu':
-            self.buttons['sale'].show()
-            self.buttons['degrom'].show()
-            self.buttons['sasaki'].show()
-            self.buttons['yamamoto'].show()
-            self.buttons['mcclanahan'].show()
-            self.buttons['random_scenario'].show()
-            self.buttons['gameday'].show()
-            self.buttons['back_to_mode_select'].show()
-            self.banner.hide_banner()
-        elif state == 'summary':
-            self.buttons['back_to_main_menu'].show()
-            self.banner.hide_banner()
-        elif state in ('settings', 'key_bindings'):
-            # These screens own their buttons now; all that is left to do
-            # here is what the branch always did besides showing them.
-            self.banner.hide_banner()
-        elif state == 'mode_select':
-            # Top-level mode selection (Arcade/Sandbox)
-            self.buttons['arcade_mode'].show()
-            self.buttons['sandbox_mode'].show()
-            self.buttons['settings'].show()
-            self.banner.hide_banner()
-        elif state == 'sandbox_menu':
-            # Sandbox mode menu - pitcher selection (matching arcade aesthetic)
-            self.buttons['sandbox_menu_sale'].show()
-            self.buttons['sandbox_menu_degrom'].show()
-            self.buttons['sandbox_menu_sasaki'].show()
-            self.buttons['sandbox_menu_yamamoto'].show()
-            self.buttons['sandbox_menu_mcclanahan'].show()
-            self.buttons['back_to_mode_select'].show()
-            self.banner.hide_banner()
-        elif state == 'sandbox_gameplay':
+        if state in ('main_menu', 'summary', 'settings', 'key_bindings',
+                     'mode_select', 'sandbox_menu', 'sandbox_gameplay'):
+            # What these branches did besides showing their widgets.
             self.banner.hide_banner()
 
     def draw_typing_effect(self, message, counter, speed, position, use_big_font=False):
