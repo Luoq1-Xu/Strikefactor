@@ -1,15 +1,16 @@
-"""Pitcher selection carousel used on the GameDay intro screen.
+"""Pitcher selection carousel: the card on every pitcher-pick screen.
 
-Renders a single pitcher "card" (portrait + scouting stats + career record vs.
-that pitcher) with left/right navigation handled externally through the
-`prev()` / `next()` / `get_selected()` methods. The carousel is purely
-presentational - the owning state wires up mouse arrow buttons and keyboard
-handling and calls into these methods.
+Renders a single pitcher "card" (portrait + handedness and command + career
+record vs. that pitcher) with left/right navigation handled externally through
+the `prev()` / `next()` / `get_selected()` methods. The carousel is purely
+presentational: `ui/pitcher_select.py` owns the arrows, the keys and the
+buttons around it and calls into these methods.
 """
 
 import pygame
 
 from strikefactor.gameplay.gameday_manager import ALL_PITCHERS, GameDayManager
+from strikefactor.ui import gameday_theme as gdt
 
 # Pitcher handedness is encoded only in sprite paths (e.g. ".../sale/LEFTY"),
 # so keep a small static map here rather than reaching into each pitcher class.
@@ -34,9 +35,8 @@ class PitcherCarousel:
     SEPARATOR = (60, 60, 60)
     PORTRAIT_BG = (0, 0, 0)
 
-    def __init__(self, pitcher_manager, ui_manager, default: str = 'yamamoto'):
+    def __init__(self, pitcher_manager, default: str = 'yamamoto'):
         self.pitcher_manager = pitcher_manager
-        self.ui_manager = ui_manager
         self.order = list(ALL_PITCHERS)
         self.reset(default)
 
@@ -105,8 +105,9 @@ class PitcherCarousel:
 
     def _draw_info(self, screen, pitcher, pitcher_name: str, rect: pygame.Rect):
         """Draw the name, handedness, command, stats, arsenal, and record."""
-        small = self.ui_manager.small_font
-        big = self.ui_manager.font
+        fonts = gdt.load_fonts()
+        small = fonts['big']
+        big = fonts['title']
 
         info_x = rect.left + 195
         info_right = rect.right - 18

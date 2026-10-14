@@ -291,8 +291,6 @@ def test_the_overlay_shows_every_arm_on_the_pitching_tab(fonts):
 
     state._show_game_log()
     assert state._log_open
-    # Opening the log is modal — the phase buttons have to go away.
-    assert state.game.ui_manager.visibility_state == 'pitching'
 
     state._set_log_tab(1)
     state._render_game_log_overlay(screen)
@@ -321,3 +319,33 @@ def test_clicking_a_tab_chip_switches_view_instead_of_closing_the_log(fonts):
 
     assert state._log_tab == 1
     assert state._log_open, "clicking a tab must not dismiss the overlay"
+
+
+@pytest.mark.parametrize('phase', ["SHOW_SCORE", "SIMULATING", "FINAL"])
+def test_the_open_log_is_modal_over_the_phase_buttons(fonts, monkeypatch, phase):
+    """The phase buttons are still there under the veil. A click that lands
+    on one while the log is open closes the log (it is outside the panel)
+    and must not also start the next inning."""
+    state = GameDayTransitionState(_StubGame(_bullpen_game()))
+    state._gd_fonts = fonts
+    state.phase = phase
+    fired = []
+    for action, method in GameDayTransitionState._BUTTON_ACTIONS.items():
+        monkeypatch.setattr(state, method,
+                            lambda action=action: fired.append(action))
+    state._log_open = True
+
+    for button in state.buttons():
+        if GameDayTransitionState._LOG_RECT.collidepoint(button.rect.center):
+            continue        # inside the panel: the panel's own click
+        state._log_open = True
+        state.handle_event(pygame.event.Event(
+            pygame.MOUSEBUTTONDOWN, button=1, pos=button.rect.center))
+        assert not state._log_open
+    assert fired == []
+
+    # With the log closed the same clicks do fire.
+    for button in state.buttons():
+        state.handle_event(pygame.event.Event(
+            pygame.MOUSEBUTTONDOWN, button=1, pos=button.rect.center))
+    assert fired == [b.action for b in state.buttons()]

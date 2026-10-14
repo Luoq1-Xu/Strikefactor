@@ -19,6 +19,11 @@ The panels are presentational in the same sense as
 return an **action tuple** for the owning state to dispatch. They never touch
 ``Game``, a ``SettingsManager`` write path or a key binding, which is what lets
 the tests drive them with plain fakes.
+
+The footer nav (BACK, KEY BINDINGS, RESET) was the last of the widgets on these
+screens. It is a ``widgets.ButtonGroup`` the panel owns, laid out by
+``gameday_theme``'s footer helpers; ``footer_event`` returns the action id of
+the button an event fired, in the same spirit as the rows.
 """
 
 import pygame
@@ -28,6 +33,7 @@ from strikefactor.key_binding_manager import KeyAction
 from strikefactor.settings_manager import DifficultyLevel
 from strikefactor.ui import gameday_theme as gdt
 from strikefactor.ui import pointer
+from strikefactor.ui.widgets import Button, ButtonGroup
 
 # ── Vertical rhythm ──────────────────────────────────────────────────────
 # One cursor walks the page; these are the only spacings involved. The
@@ -76,9 +82,17 @@ class _RowPanel:
     # Keys the screen actually answers to — the two screens differ, so this
     # cannot be one shared string.
     HINT = "UP / DOWN  MOVE      ESC  BACK"
+    # Footer nav as (action id, label, width). The first is BACK and sits on
+    # the left margin; the rest run in from the right one.
+    FOOTER = ()
+
+    # Keys that belong to the rows. Pressing one hands the keyboard back from
+    # a footer button TAB had reached.
+    _ROW_KEYS = (pygame.K_UP, pygame.K_DOWN, pygame.K_LEFT, pygame.K_RIGHT)
 
     def __init__(self):
         self._fonts = None
+        self._footer = ButtonGroup()
         self.selected = 0
         self._row_rects = []   # [(rect, nav_key)] rebuilt every render
         # Nav order is static, *not* accumulated during render: a row needs to
@@ -104,6 +118,33 @@ class _RowPanel:
     def reset_cursor(self):
         self.selected = 0
         self._scroll_y = 0
+        self._footer.clear_focus()
+
+    # --- footer nav ---
+    def footer_buttons(self):
+        """The footer as button specs. Nothing here carries an x of its own."""
+        if not self.FOOTER:
+            return []
+        (back_action, back_label, back_width), *rest = self.FOOTER
+        buttons = [Button(back_action, back_label,
+                          gdt.footer_back_rect(back_width))]
+        rects = gdt.footer_row_right([width for _a, _l, width in rest])
+        buttons += [Button(action, label, rect)
+                    for (action, label, _w), rect in zip(rest, rects)]
+        return buttons
+
+    def footer_event(self, event):
+        """The action id of the footer button ``event`` fired, or None.
+
+        TAB walks the footer and ENTER fires the button it stopped on. Any
+        row key drops that cursor first, so ENTER goes back to meaning "the
+        selected row" the moment the player returns to the list.
+        """
+        self._footer.set(self.footer_buttons())
+        if event.type == pygame.KEYDOWN and event.key in self._ROW_KEYS:
+            self._footer.clear_focus()
+            return None
+        return self._footer.handle_event(event)
 
     def selected_key(self):
         if 0 <= self.selected < len(self._nav_keys):
@@ -179,6 +220,8 @@ class _RowPanel:
         left, right = content_bounds()
         pygame.draw.line(screen, gdt.DIVIDER, (left, _FOOTER_DIVIDER_Y),
                          (right, _FOOTER_DIVIDER_Y), 1)
+        self._footer.set(self.footer_buttons())
+        self._footer.draw(screen, self._f())
 
     def _content_surface(self, screen):
         content = pygame.Surface((screen.get_width(), 1200))
@@ -229,6 +272,11 @@ class SettingsPanel(_RowPanel):
     SUBTITLE = "TUNE THE AT-BAT"
     HEADLINE = "SETTINGS."
     HINT = "UP / DOWN  MOVE      LEFT / RIGHT  CHANGE      ESC  BACK"
+    FOOTER = (
+        ('back_to_main', "<  BACK", 150),
+        ('key_bindings', "KEY BINDINGS  >", 190),
+        ('reset_settings', "RESET DEFAULTS", 200),
+    )
 
     # Difficulty in ladder order. The chip row *is* the selected-state
     # indicator — the five old buttons were styled identically, so the only
@@ -406,6 +454,10 @@ class KeyBindingsPanel(_RowPanel):
     SUBTITLE = "PICK A ROW, THEN PRESS A KEY"
     HEADLINE = "KEY BINDINGS."
     HINT = "UP / DOWN  MOVE      ENTER  REBIND      ESC  BACK"
+    FOOTER = (
+        ('back_from_keybinds', "<  BACK", 150),
+        ('reset_keybinds', "RESET KEYS", 170),
+    )
 
     # TOGGLE_HUD_MODE is bound (U) and dispatched like every other hotkey, but
     # the old screen had no button for it, so it was unrebindable and

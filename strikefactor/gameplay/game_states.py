@@ -8,14 +8,15 @@ from datetime import datetime
 
 import pygame
 import pygame.gfxdraw
-import pygame_gui
 
 from strikefactor import outcomes, paths
 from strikefactor.gameplay.gameday_manager import GameDayManager, get_pitcher_attrs
 from strikefactor.ui import gameday_theme as gdt
+from strikefactor.ui.pitcher_select import PitcherSelect
 from strikefactor.ui.pitching_box_panel import PitchingBoxPanel, PitchingSide
 from strikefactor.ui.play_by_play_panel import PlayByPlayPanel
 from strikefactor.ui.settings_panel import KeyBindingsPanel, SettingsPanel
+from strikefactor.ui.widgets import Button, ButtonGroup
 
 
 class GameState(ABC):
@@ -164,6 +165,15 @@ class MenuState(GameState):
         'set_difficulty': 'set_difficulty',
     }
 
+    # The footer buttons of the two panels, by action id.
+    _FOOTER_ACTIONS = {
+        'back_to_main': 'exit_settings_menu',
+        'key_bindings': 'enter_key_bindings_menu',
+        'reset_settings': 'reset_settings',
+        'back_from_keybinds': 'exit_key_bindings_menu',
+        'reset_keybinds': 'reset_key_bindings',
+    }
+
     def __init__(self, game):
         super().__init__(game)
         self.messages = ["StrikeFactor", "A Baseball At-Bat Simulator"]
@@ -260,9 +270,20 @@ class MenuState(GameState):
         method = getattr(self.game, self._SETTINGS_ACTIONS[action_id])
         method(payload) if payload is not None else method()
 
+    def _footer_event(self, panel, event):
+        """Run whichever footer button ``event`` fired. True if one did."""
+        action = panel.footer_event(event)
+        if action is None:
+            return False
+        getattr(self.game, self._FOOTER_ACTIONS[action])()
+        return True
+
     def _handle_settings_event(self, event):
         panel = self._settings_panel
         settings = self.game.settings_manager
+
+        if self._footer_event(panel, event):
+            return
 
         if event.type == pygame.MOUSEWHEEL:
             panel.move(-event.y)
@@ -289,6 +310,9 @@ class MenuState(GameState):
 
     def _handle_keybinds_event(self, event):
         panel = self._keybinds_panel
+
+        if self._footer_event(panel, event):
+            return
 
         if event.type == pygame.MOUSEWHEEL:
             panel.move(-event.y)
@@ -1126,22 +1150,39 @@ class SandboxGameplayState(GameState):
 class GameDayState(GameState):
     """Entry screen for GameDay mode - a full 9-inning simulated game."""
 
-    CARD_RECT = pygame.Rect(310, 220, 660, 280)
-
     def __init__(self, game):
         super().__init__(game)
-        from strikefactor.ui.pitcher_carousel import PitcherCarousel
-        self.carousel = PitcherCarousel(
+        self._has_resume = False
+        self.select = PitcherSelect(
             self.game.pitcher_manager,
-            self.game.ui_manager,
-            default='yamamoto',
+            header="=== GAMEDAY · SETUP ===",
+            subtitle="9 INN · CHOOSE YOUR OPPONENT",
+            back_label="MAIN MENU",
+            extras=self._extra_buttons,
         )
-        self._gd_fonts = None
+        self.carousel = self.select.carousel
+
+    def _extra_buttons(self):
+        """RESUME only appears when there's an in-progress game to resume."""
+        extras = [('gameday_past_games', "PAST GAMES")]
+        if self._has_resume:
+            extras.insert(0, ('gameday_resume', "RESUME"))
+        return extras
+
+    def buttons(self):
+        return self.select.buttons()
 
     def enter(self):
         """Show the gameday entry screen."""
         # Reset carousel to the default starter each time the screen opens.
-        self.carousel.reset('yamamoto')
+        self.select.reset('yamamoto')
+        # Read once per visit, not per frame: it opens the sessions file.
+        try:
+            from strikefactor.data import gameday_sessions
+            self._has_resume = bool(gameday_sessions.load_sessions())
+        except Exception as e:
+            self._has_resume = False
+            print(f"[gameday] resume-button visibility check failed: {e}")
         self.game.ui_manager.set_visibility_state('gameday_start')
 
     def exit(self):
@@ -1159,75 +1200,31 @@ class GameDayState(GameState):
         if event.type == pygame.QUIT:
             return False
 
-        if event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_LEFT:
-                self.carousel.prev()
-            elif event.key == pygame.K_RIGHT:
-                self.carousel.next()
-            elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-                self._confirm_selection()
-
-        if event.type == pygame_gui.UI_BUTTON_PRESSED:
-            buttons = self.game.ui_manager.buttons
-            if event.ui_element == buttons.get('start_gameday'):
-                self._confirm_selection()
-            elif event.ui_element == buttons.get('gameday_prev_pitcher'):
-                self.carousel.prev()
-            elif event.ui_element == buttons.get('gameday_next_pitcher'):
-                self.carousel.next()
-            elif event.ui_element == buttons.get('gameday_resume'):
-                self.game.enter_gameday_resume()
-            elif event.ui_element == buttons.get('gameday_past_games'):
-                self.game.enter_gameday_history()
+        action = self.select.handle_event(event)
+        if action == 'confirm':
+            self._confirm_selection()
+        elif action == 'back':
+            self.game.set_menu_state(0)
+        elif action == 'gameday_resume':
+            self.game.enter_gameday_resume()
+        elif action == 'gameday_past_games':
+            self.game.enter_gameday_history()
         return True
 
     def _confirm_selection(self):
         """Commit the chosen starter and advance into the game."""
-        starter = self.carousel.get_selected()
+        starter = self.select.selected()
         self.game.inning_ended = False
         self.game.start_gameday_with_starter(starter)
 
-    def _ensure_fonts(self):
-        """Lazily build the shared GameDay pixel font set."""
-        if not hasattr(self, '_gd_fonts') or self._gd_fonts is None:
-            self._gd_fonts = gdt.load_fonts()
-        return self._gd_fonts
-
     def render(self, screen):
         """Render the gameday entry screen."""
-        screen.fill((0, 0, 0))
-        f = self._ensure_fonts()
-        margin_x = 40
-        screen_w = 1280
-        FG = (240, 240, 240)
-        DIM = (140, 140, 140)
-        DIVIDER = (60, 60, 60)
-
-        # --- Header chrome ---
-        header = f['micro'].render("=== GAMEDAY · SETUP ===", True, FG)
-        screen.blit(header, (margin_x, 20))
-        brand = f['micro'].render("StrikeFactor 0.1", True, DIM)
-        screen.blit(brand, (screen_w - margin_x - brand.get_width(), 20))
-        pygame.draw.line(screen, DIVIDER,
-                         (margin_x, 44), (screen_w - margin_x, 44), 1)
-
-        # Subhead + headline
-        sub = f['micro'].render("9 INN · CHOOSE YOUR OPPONENT", True, DIM)
-        screen.blit(sub, (margin_x, 64))
-        head = f['huge'].render("STEP IN.", True, FG)
-        screen.blit(head, (margin_x, 84))
-
         # Career record (top-right under brand) — only show when present.
         record = GameDayManager.get_career_record()
+        note = ""
         if record['total'] > 0:
-            record_text = (f"RECORD  {record['wins']}W · "
-                           f"{record['losses']}L")
-            rec_surf = f['small'].render(record_text, True, FG)
-            screen.blit(rec_surf,
-                        (screen_w - margin_x - rec_surf.get_width(), 92))
-
-        # Pitcher carousel card
-        self.carousel.render(screen, self.CARD_RECT)
+            note = f"RECORD  {record['wins']}W · {record['losses']}L"
+        self.select.render(screen, note=note)
 
 
 class GameDayTransitionState(GameState):
@@ -1237,12 +1234,26 @@ class GameDayTransitionState(GameState):
     _BTN_PRIMARY_RECT = (780, 600, 440, 44)   # NEXT INNING / STEP IN / NEXT GAME
     _BTN_SECONDARY_RECT = (780, 650, 210, 32)  # GAME LOG
 
+    # The primary button is the phase: (action id, label).
+    _PRIMARY = {
+        "SHOW_SCORE": ('next_inning', "NEXT INNING  >"),
+        "SIMULATING": ('start_batting', "STEP IN  >"),
+        "FINAL": ('final_menu', "NEXT GAME  >"),
+    }
+    _BUTTON_ACTIONS = {
+        'next_inning': '_handle_next_inning',
+        'start_batting': '_start_player_batting',
+        'final_menu': '_return_to_menu',
+        'view_game_log': '_show_game_log',
+        'gameday_main_menu': '_abandon_to_menu',
+    }
+
     def __init__(self, game):
         super().__init__(game)
         self.phase = "SHOW_SCORE"  # Phases: SHOW_SCORE, SIMULATING, FINAL
         self.simulation_complete = False
         self.opponent_events = []
-        self._labels = []  # Track UILabels for cleanup
+        self._buttons = ButtonGroup()
         self._gd_fonts = None  # Lazy-init layout fonts
         self._pbp = None       # PlayByPlayPanel for the GAME LOG overlay
         self._pitching_box = None  # PitchingBoxPanel for the GAME LOG overlay
@@ -1250,43 +1261,35 @@ class GameDayTransitionState(GameState):
         self._log_tab = 0          # index into _LOG_TABS
         self._log_tab_rects = []   # [(rect, index)] for tab click hit-testing
 
-    def _place_button(self, btn, rect):
-        btn.set_relative_position(rect[:2])
-        btn.set_dimensions(rect[2:])
+    def buttons(self):
+        """The buttons this phase has. The game is over on the final screen,
+        so there is nothing left there to walk away from."""
+        action, label = self._PRIMARY[self.phase]
+        out = [
+            Button(action, label, pygame.Rect(self._BTN_PRIMARY_RECT),
+                   style='primary'),
+            Button('view_game_log', "GAME LOG",
+                   pygame.Rect(self._BTN_SECONDARY_RECT)),
+        ]
+        if self.phase != "FINAL":
+            out.append(Button('gameday_main_menu', "MAIN MENU",
+                              gdt.footer_back_rect()))
+        return out
 
-    def _setup_phase_ui(self):
-        """Position buttons and set visibility based on current phase."""
-        ui = self.game.ui_manager
-        primary = self._BTN_PRIMARY_RECT
-        secondary = self._BTN_SECONDARY_RECT
+    def _sync_buttons(self):
+        buttons = self.buttons()
+        self._buttons.default = buttons[0].action    # ENTER is the primary
+        self._buttons.set(buttons)
 
-        if self.phase == "FINAL":
-            ui.set_visibility_state('gameday_final')
-            self._place_button(ui.buttons['final_menu'], primary)
-            self._place_button(ui.buttons['view_game_log'], secondary)
-        elif self.phase == "SIMULATING":
-            ui.set_visibility_state('gameday_simulation')
-            self._place_button(ui.buttons['start_batting'], primary)
-            self._place_button(ui.buttons['view_game_log'], secondary)
-        else:
-            # SHOW_SCORE phase
-            ui.set_visibility_state('gameday_transition')
-            self._place_button(ui.buttons['next_inning'], primary)
-            self._place_button(ui.buttons['view_game_log'], secondary)
-
-    def _clear_labels(self):
-        """Kill all dynamic UILabels."""
-        for label in self._labels:
-            label.kill()
-        self._labels.clear()
+    def _abandon_to_menu(self):
+        self.game.set_menu_state(0)
 
     def enter(self):
         """Called when entering transition state."""
         # Hide any lingering banner
         self.game.ui_manager.hide_banner()
-
-        # Clean up labels from previous entry
-        self._clear_labels()
+        self.game.ui_manager.set_visibility_state('gameday_transition')
+        self._buttons.clear_focus()
 
         # Determine what phase we're in
         gameday_mgr = self.game.gameday_manager
@@ -1329,9 +1332,6 @@ class GameDayTransitionState(GameState):
                     if new_pitcher:
                         self._load_and_switch_pitcher(new_pitcher)
 
-        # Position buttons and set visibility for current phase
-        self._setup_phase_ui()
-
         # Persist (or clear) the resumable session at this half-inning boundary.
         # FINAL games move to history (and clear their active session in
         # _save_result_once); every other boundary is a clean resume point.
@@ -1342,7 +1342,6 @@ class GameDayTransitionState(GameState):
 
     def exit(self):
         """Called when exiting this state."""
-        self._clear_labels()
         self._log_open = False
 
     def update(self, time_delta: float):
@@ -1421,15 +1420,10 @@ class GameDayTransitionState(GameState):
                 self._close_game_log()
             return True
 
-        if event.type == pygame_gui.UI_BUTTON_PRESSED:
-            if event.ui_element == self.game.ui_manager.buttons.get('next_inning'):
-                self._handle_next_inning()
-            elif event.ui_element == self.game.ui_manager.buttons.get('start_batting'):
-                self._start_player_batting()
-            elif event.ui_element == self.game.ui_manager.buttons.get('view_game_log'):
-                self._show_game_log()
-            elif event.ui_element == self.game.ui_manager.buttons.get('final_menu'):
-                self._return_to_menu()
+        self._sync_buttons()
+        action = self._buttons.handle_event(event)
+        if action is not None:
+            getattr(self, self._BUTTON_ACTIONS[action])()
         return True
 
     def _simulate_opponent_half_inning(self):
@@ -1458,7 +1452,6 @@ class GameDayTransitionState(GameState):
         if gameday_mgr.game_over:
             self.phase = "FINAL"
             self._save_result_once()
-            self.game.ui_manager.set_visibility_state('gameday_final')
         else:
             # Between-inning relief check (lower threshold — clean break)
             if gameday_mgr.should_consider_player_relief_pitcher(between_innings=True):
@@ -1507,7 +1500,6 @@ class GameDayTransitionState(GameState):
         if self.game.gameday_manager.game_over:
             self.phase = "FINAL"
             self._save_result_once()
-            self._setup_phase_ui()
             return
 
         # Check if we need to simulate opponent or start player batting
@@ -1515,7 +1507,6 @@ class GameDayTransitionState(GameState):
             # Top of new inning - simulate opponent first
             self.phase = "SIMULATING"
             self._simulate_opponent_half_inning()
-            self._setup_phase_ui()
         else:
             # Bottom of inning - player bats
             self._start_player_batting()
@@ -1562,13 +1553,12 @@ class GameDayTransitionState(GameState):
             self._pitching_box = PitchingBoxPanel(f)
         self._pitching_box.set_sides(self._pitching_sides(),
                                      live=not gameday_mgr.game_over)
+        # Modal by construction: `handle_event` returns before it reaches the
+        # phase buttons while this is set, and the veil is drawn over them.
         self._log_open = True
-        # Modal: hide the phase buttons so they can't be clicked through the veil.
-        self.game.ui_manager.set_visibility_state('pitching')
 
     def _close_game_log(self):
         self._log_open = False
-        self._setup_phase_ui()
 
     def _pitching_sides(self):
         """Build both staffs for the pitching box, opponent first (the order the
@@ -2067,7 +2057,12 @@ class GameDayTransitionState(GameState):
             self._render_active(screen)
 
         if self._log_open:
+            # The phase buttons are left out rather than dimmed: the log's
+            # own key hints are drawn where they sit.
             self._render_game_log_overlay(screen)
+        else:
+            self._sync_buttons()
+            self._buttons.draw(screen, self._ensure_fonts())
 
 
 def _fmt_iso(iso, fmt):
@@ -2084,9 +2079,9 @@ class _GameDayListState(GameState):
 
     Owns fonts, paging, layout, hover/click hit-testing and the shared retro
     chrome. Subclasses supply the items, header/empty text, a per-row content
-    renderer, and the activation handler. Page nav + back are pygame_gui
-    buttons (``gd_page_prev`` / ``gd_page_next`` / ``gd_list_back``) plus
-    Left/Right/Esc keyboard fallbacks; rows are clicked directly.
+    renderer, and the activation handler. Page nav + back are footer buttons
+    (``gd_page_prev`` / ``gd_page_next`` / ``gd_list_back``) with
+    Left/Right/Esc as their keys; rows are clicked directly.
     """
 
     PAGE_SIZE = 7
@@ -2108,12 +2103,43 @@ class _GameDayListState(GameState):
         self.items = []
         self.page = 0
         self._row_rects = []  # list of (pygame.Rect, item) for hit-testing
+        self._buttons = ButtonGroup()
 
     # --- fonts ---
     def _f(self):
         if self._fonts is None:
             self._fonts = gdt.load_fonts()
         return self._fonts
+
+    # --- buttons ---
+    def buttons(self):
+        """BACK on the left margin, the pager on the right. A pager button
+        with nowhere to go is drawn disabled rather than removed, so the row
+        does not reflow between pages."""
+        prev_rect, next_rect = gdt.footer_row_right([150, 150])
+        return [
+            Button('gd_list_back', "<  BACK", gdt.footer_back_rect()),
+            Button('gd_page_prev', "<  PREV", prev_rect,
+                   enabled=self.page > 0),
+            Button('gd_page_next', "NEXT  >", next_rect,
+                   enabled=self.page < self._page_count() - 1),
+        ]
+
+    def _button_event(self, event):
+        """Run whichever footer button ``event`` fired. True if one did."""
+        self._buttons.set(self.buttons())
+        action = self._buttons.handle_event(event)
+        if action == 'gd_page_prev':
+            self.prev_page()
+        elif action == 'gd_page_next':
+            self.next_page()
+        elif action == 'gd_list_back':
+            self._on_back()
+        return action is not None
+
+    def _draw_buttons(self, screen):
+        self._buttons.set(self.buttons())
+        self._buttons.draw(screen, self._f())
 
     # --- hooks for subclasses ---
     def _load_items(self):
@@ -2134,6 +2160,7 @@ class _GameDayListState(GameState):
     def enter(self):
         self.items = self._load_items()
         self.page = 0
+        self._buttons.clear_focus()
         self.game.ui_manager.set_visibility_state(self.VISIBILITY_STATE)
 
     def exit(self):
@@ -2174,20 +2201,14 @@ class _GameDayListState(GameState):
             elif event.key == pygame.K_ESCAPE:
                 self._on_back()
 
+        if self._button_event(event):
+            return True
+
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             for rect, item in self._row_rects:
                 if rect.collidepoint(event.pos):
                     self._on_activate(item)
                     break
-
-        if event.type == pygame_gui.UI_BUTTON_PRESSED:
-            buttons = self.game.ui_manager.buttons
-            if event.ui_element == buttons.get('gd_page_prev'):
-                self.prev_page()
-            elif event.ui_element == buttons.get('gd_page_next'):
-                self.next_page()
-            elif event.ui_element == buttons.get('gd_list_back'):
-                self._on_back()
         return True
 
     # --- render ---
@@ -2205,6 +2226,7 @@ class _GameDayListState(GameState):
             gdt.blit_text(screen, self.EMPTY_TEXT, f['big'],
                           (gdt.SCREEN_W // 2, 320), gdt.DIM, align='center')
             self._render_footer(screen, f)
+            self._draw_buttons(screen)
             return
 
         mouse = self.game.get_mouse_pos()
@@ -2214,7 +2236,7 @@ class _GameDayListState(GameState):
             hover = rect.collidepoint(mouse)
             # Row frame — hover gets a faint fill + bright border + action hint.
             if hover:
-                pygame.draw.rect(screen, (18, 18, 18), rect)
+                pygame.draw.rect(screen, gdt.HOVER_BG, rect)
             pygame.draw.rect(screen, gdt.FG if hover else gdt.DIVIDER, rect, 1)
             self._render_row_content(screen, item, rect, f,
                                      gdt.FG if hover else gdt.DIM)
@@ -2226,6 +2248,7 @@ class _GameDayListState(GameState):
             y += self._ROW_STRIDE
 
         self._render_footer(screen, f)
+        self._draw_buttons(screen)
 
     def _render_footer(self, screen, f):
         page_txt = f"PAGE {self.page + 1} / {self._page_count()}"
@@ -2460,7 +2483,6 @@ class GameDayHistoryState(_GameDayListState):
         self._detail_plays = self._play_log_from_game(item)
         self._detail_hits = self._history_hit_totals(item)
         self._panel().set_plays(self._detail_plays)
-        self.game.ui_manager.set_visibility_state('gameday_history_detail')
 
     # --- result chip + row ---
     @staticmethod
@@ -2510,20 +2532,31 @@ class GameDayHistoryState(_GameDayListState):
             return False
         if self._panel().handle_event(event):
             return True
-        back = (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE)
-        if event.type == pygame_gui.UI_BUTTON_PRESSED:
-            back = back or (event.ui_element ==
-                            self.game.ui_manager.buttons.get('gd_list_back'))
-        if back:
-            self.selected = None
-            self.game.ui_manager.set_visibility_state('gameday_history')
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            self._on_back()
+        else:
+            self._button_event(event)
         return True
+
+    def buttons(self):
+        """The detail view has one way out; the list keeps its pager."""
+        if self.selected is None:
+            return super().buttons()
+        return [Button('gd_list_back', "<  BACK", gdt.footer_back_rect())]
+
+    def _on_back(self):
+        """Back out one level: detail to the list, the list to setup."""
+        if self.selected is None:
+            super()._on_back()
+        else:
+            self.selected = None
 
     def render(self, screen):
         if self.selected is None:
             super().render(screen)
         else:
             self._render_detail(screen, self.selected)
+            self._draw_buttons(screen)
 
     def _render_detail(self, screen, game):
         screen.fill(gdt.BG)

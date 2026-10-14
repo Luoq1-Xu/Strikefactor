@@ -109,33 +109,73 @@ def test_the_settings_button_theme_class_is_gone():
 
 # ── Footer nav is derived, not literal ───────────────────────────────────
 
-@pytest.mark.parametrize("state,names", [
-    ('settings', ['back_to_main', 'key_bindings', 'reset_settings']),
-    ('key_bindings', ['back_from_keybinds', 'reset_keybinds']),
+@pytest.mark.parametrize("panel_cls,names", [
+    (SettingsPanel, ['back_to_main', 'key_bindings', 'reset_settings']),
+    (KeyBindingsPanel, ['back_from_keybinds', 'reset_keybinds']),
 ])
-def test_footer_buttons_are_margin_anchored(ui, state, names):
-    ui.set_button_visibility(state, force_show=True)
-    visible = {n: b.rect.copy() for n, b in ui.buttons.items() if b.visible}
-    assert set(visible) == set(names)
+def test_footer_buttons_are_margin_anchored(panel_cls, names):
+    buttons = {b.action: b.rect for b in panel_cls().footer_buttons()}
+    assert list(buttons) == names
 
-    margin = UIManager.MENU_MARGIN_X
-    for rect in visible.values():
+    margin = gdt.MARGIN_X
+    for rect in buttons.values():
         assert rect.left >= margin
         assert rect.right <= SCREEN_WIDTH - margin
         assert SCREEN_RECT.contains(rect)
 
     # Back sits on the left margin; the action run ends on the right one.
-    back = visible[names[0]]
+    back = buttons[names[0]]
     assert back.left == margin
-    assert max(r.right for r in visible.values()) == SCREEN_WIDTH - margin
+    assert max(r.right for r in buttons.values()) == SCREEN_WIDTH - margin
 
 
-def test_footer_row_is_recomputed_from_screen_width():
-    """The helper is the reason a row cannot drift — check it actually uses
-    SCREEN_WIDTH rather than baking a remembered right edge."""
-    rects = UIManager._footer_row_right([100, 100], gap=10)
-    assert rects[0].left == SCREEN_WIDTH - UIManager.MENU_MARGIN_X - 210
-    assert rects[-1].right == SCREEN_WIDTH - UIManager.MENU_MARGIN_X
+@pytest.mark.parametrize("panel_cls", [SettingsPanel, KeyBindingsPanel])
+def test_footer_buttons_sit_below_the_rows_and_apart(panel_cls):
+    rects = [b.rect for b in panel_cls().footer_buttons()]
+    assert all(r.top > sp._FOOTER_DIVIDER_Y for r in rects)
+    assert not any(a.colliderect(b) for i, a in enumerate(rects)
+                   for b in rects[i + 1:])
+
+
+@pytest.mark.parametrize("panel_cls", [SettingsPanel, KeyBindingsPanel])
+def test_the_footer_is_no_longer_a_widget(ui, panel_cls):
+    """The footer was the last pygame_gui on these screens."""
+    for button in panel_cls().footer_buttons():
+        assert button.action not in ui.buttons
+
+
+@pytest.mark.parametrize("panel_cls", [SettingsPanel, KeyBindingsPanel])
+def test_a_click_on_a_footer_button_fires_its_action(panel_cls):
+    panel = panel_cls()
+    for button in panel.footer_buttons():
+        event = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+                                   pos=button.rect.center)
+        assert panel.footer_event(event) == button.action
+
+
+def test_tab_reaches_the_footer_and_a_row_key_takes_the_keyboard_back():
+    """ENTER means "the selected row" on this screen. It only means a footer
+    button while TAB has put the cursor on one, and any row key ends that."""
+    panel = SettingsPanel()
+
+    def key(code):
+        return pygame.event.Event(pygame.KEYDOWN, key=code, mod=0)
+
+    assert panel.footer_event(key(pygame.K_RETURN)) is None
+    panel.footer_event(key(pygame.K_TAB))
+    assert panel.footer_event(key(pygame.K_RETURN)) == 'back_to_main'
+    panel.footer_event(key(pygame.K_DOWN))
+    assert panel.footer_event(key(pygame.K_RETURN)) is None
+
+
+def test_every_footer_action_maps_to_a_game_method():
+    from strikefactor.main import Game
+
+    actions = {b.action for cls in (SettingsPanel, KeyBindingsPanel)
+               for b in cls().footer_buttons()}
+    assert actions == set(MenuState._FOOTER_ACTIONS)
+    for method_name in MenuState._FOOTER_ACTIONS.values():
+        assert callable(getattr(Game, method_name, None)), method_name
 
 
 # ── Panel rows stay in the content column ────────────────────────────────

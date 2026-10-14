@@ -4,7 +4,7 @@ import pygame
 import pygame_gui
 from pygame_gui.core import ObjectID
 
-from strikefactor.config import SCREEN_WIDTH, get_path
+from strikefactor.config import get_path
 from strikefactor.ui.banner import OutcomeBanner
 
 
@@ -21,34 +21,6 @@ class UIManager:
     SIDEBAR_STEP = 28
 
     # Sandbox column slots: 0-4 pitchers, 6-8 pitch toggles.
-
-    # ── Menu footer (settings / key bindings) ────────────────────────────
-    # These screens draw their body themselves (ui/settings_panel.py); the
-    # only pygame_gui widgets left on them are the nav buttons along the
-    # bottom, anchored to the same 40px margin the GameDay screens use.
-    # Positions are *derived* from SCREEN_WIDTH — the grid that used to live
-    # here was 21 literal rects whose rows centred on 620, 640, 740 and 800
-    # against a screen centre of 640, which is what read as "off centre".
-    MENU_MARGIN_X = 40
-    MENU_FOOTER_Y = 646
-    MENU_FOOTER_H = 36
-
-    @classmethod
-    def _footer_row_right(cls, widths, gap=10):
-        """Right-align a run of footer buttons; returns rects left-to-right."""
-        total = sum(widths) + gap * (len(widths) - 1)
-        x = SCREEN_WIDTH - cls.MENU_MARGIN_X - total
-        rects = []
-        for width in widths:
-            rects.append(pygame.Rect(x, cls.MENU_FOOTER_Y, width,
-                                     cls.MENU_FOOTER_H))
-            x += width + gap
-        return rects
-
-    @classmethod
-    def _footer_back_rect(cls, width=150):
-        return pygame.Rect(cls.MENU_MARGIN_X, cls.MENU_FOOTER_Y, width,
-                           cls.MENU_FOOTER_H)
 
     def __init__(self, screen, screen_size, theme_path=None):
         self.screen = screen
@@ -101,8 +73,6 @@ class UIManager:
         sandbox_h = self.SIDEBAR_H
         sandbox_top = self.SIDEBAR_TOP
         sandbox_step = self.SIDEBAR_STEP
-        settings_footer = self._footer_row_right([190, 200])
-        keybind_footer = self._footer_row_right([170])
         buttons = {
             # Pitcher selection buttons for main  menu
             'sale': pygame_gui.elements.UIButton(
@@ -152,91 +122,9 @@ class UIManager:
                 relative_rect=pygame.Rect((1130, 650), (140, 40)),
                 text='Settings', manager=manager),
 
-            # ── Settings screen nav ──────────────────────────────────────
-            # The difficulty / toggle / FPS grid that used to sit here is
-            # gone: ui/settings_panel.py draws those as rows. What is left
-            # is nav, broadcast-styled and margin-anchored like GameDay's.
-            'back_to_main': pygame_gui.elements.UIButton(
-                relative_rect=self._footer_back_rect(),
-                text='<  BACK', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'key_bindings': pygame_gui.elements.UIButton(
-                relative_rect=settings_footer[0],
-                text='KEY BINDINGS  >', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'reset_settings': pygame_gui.elements.UIButton(
-                relative_rect=settings_footer[1],
-                text='RESET DEFAULTS', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-
-            # ── Key bindings screen nav ──────────────────────────────────
-            'back_from_keybinds': pygame_gui.elements.UIButton(
-                relative_rect=self._footer_back_rect(),
-                text='<  BACK', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'reset_keybinds': pygame_gui.elements.UIButton(
-                relative_rect=keybind_footer[0],
-                text='RESET KEYS', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-
-            # GameDay mode buttons (broadcast-styled to match the refreshed UI)
-            'start_gameday': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((490, 580), (300, 44)),
-                text='STEP IN  >', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'gameday_prev_pitcher': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((255, 330), (50, 50)),
-                text='<', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'gameday_next_pitcher': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((975, 330), (50, 50)),
-                text='>', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            # Menu-screen sized "main menu" for the gameday menu states.
-            'gameday_main_menu': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((40, 660), (150, 36)),
-                text='MAIN MENU', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'next_inning': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((780, 600), (440, 44)),
-                text='NEXT INNING  >', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'start_batting': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((780, 600), (440, 44)),
-                text='STEP IN  >', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'view_game_log': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((780, 650), (210, 32)),
-                text='GAME LOG', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'final_menu': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((780, 600), (440, 44)),
-                text='NEXT GAME  >', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-
-            # GameDay setup-screen secondary entries (resume / browse history).
-            'gameday_resume': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((490, 634, 145, 36)),
-                text='RESUME', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'gameday_past_games': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((645, 634, 145, 36)),
-                text='PAST GAMES', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-
-            # Shared nav for the GameDay list screens (resume / history).
-            'gd_list_back': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((40, 640, 150, 40)),
-                text='<  BACK', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'gd_page_prev': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((900, 640, 150, 40)),
-                text='<  PREV', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'gd_page_next': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((1090, 640, 150, 40)),
-                text='NEXT  >', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
+            # The settings, key-binding and GameDay screens have no widgets
+            # here any more: each draws and handles its own buttons through
+            # ui/widgets.py.
 
             # Mode selection buttons (for top-level menu)
             'arcade_mode': pygame_gui.elements.UIButton(
@@ -462,58 +350,10 @@ class UIManager:
         elif state == 'inning_end':
             # Continue button always shown so the player can advance.
             self.buttons['continue_to_summary'].show()
-        elif state == 'settings':
-            # The body of this screen is drawn by ui/settings_panel.py; only
-            # the footer nav is a widget.
-            self.buttons['back_to_main'].show()
-            self.buttons['key_bindings'].show()
-            self.buttons['reset_settings'].show()
+        elif state in ('settings', 'key_bindings'):
+            # These screens own their buttons now; all that is left to do
+            # here is what the branch always did besides showing them.
             self.banner.hide_banner()
-        elif state == 'key_bindings':
-            self.buttons['back_from_keybinds'].show()
-            self.buttons['reset_keybinds'].show()
-            self.banner.hide_banner()
-        elif state == 'gameday_start':
-            # Initial gameday screen with pitcher carousel
-            self.buttons['start_gameday'].show()
-            self.buttons['gameday_prev_pitcher'].show()
-            self.buttons['gameday_next_pitcher'].show()
-            self.buttons['gameday_main_menu'].show()
-            self.buttons['gameday_past_games'].show()
-            # RESUME only appears when there's an in-progress game to resume.
-            try:
-                from strikefactor.data import gameday_sessions
-                if gameday_sessions.load_sessions():
-                    self.buttons['gameday_resume'].show()
-            except Exception as e:
-                print(f"[gameday] resume-button visibility check failed: {e}")
-        elif state == 'gameday_resume':
-            # Resumable-sessions list
-            self.buttons['gd_list_back'].show()
-            self.buttons['gd_page_prev'].show()
-            self.buttons['gd_page_next'].show()
-        elif state == 'gameday_history':
-            # Completed-games list
-            self.buttons['gd_list_back'].show()
-            self.buttons['gd_page_prev'].show()
-            self.buttons['gd_page_next'].show()
-        elif state == 'gameday_history_detail':
-            # Single completed-game detail (linescore) — back only
-            self.buttons['gd_list_back'].show()
-        elif state == 'gameday_transition':
-            # After player's inning ends, before opponent bats
-            self.buttons['next_inning'].show()
-            self.buttons['view_game_log'].show()
-            self.buttons['gameday_main_menu'].show()
-        elif state == 'gameday_simulation':
-            # After opponent simulation, ready to start player batting
-            self.buttons['start_batting'].show()
-            self.buttons['view_game_log'].show()
-            self.buttons['gameday_main_menu'].show()
-        elif state == 'gameday_final':
-            # Game over screen
-            self.buttons['final_menu'].show()
-            self.buttons['view_game_log'].show()
         elif state == 'mode_select':
             # Top-level mode selection (Arcade/Sandbox)
             self.buttons['arcade_mode'].show()

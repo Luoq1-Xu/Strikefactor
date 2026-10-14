@@ -531,18 +531,12 @@ class Game:
         # review, menu) have no buttons; _setup_key_binding_callbacks wires
         # them to keys.
         self.ui_manager.register_button_callback('back_to_main_menu', lambda: self.set_menu_state(0))
-        self.ui_manager.register_button_callback('gameday_main_menu', lambda: self.set_menu_state(0))
         self.ui_manager.register_button_callback('continue_to_summary', lambda: self.continue_to_summary())
 
         # Settings + key-binding screens. Only the footer nav is a widget —
         # the difficulty chips and the setting/binding rows are drawn and
         # hit-tested by ui/settings_panel.py and dispatched from MenuState.
         self.ui_manager.register_button_callback('settings', lambda: self.enter_settings_menu())
-        self.ui_manager.register_button_callback('back_to_main', lambda: self.exit_settings_menu())
-        self.ui_manager.register_button_callback('reset_settings', lambda: self.reset_settings())
-        self.ui_manager.register_button_callback('key_bindings', lambda: self.enter_key_bindings_menu())
-        self.ui_manager.register_button_callback('back_from_keybinds', lambda: self.exit_key_bindings_menu())
-        self.ui_manager.register_button_callback('reset_keybinds', lambda: self.reset_key_bindings())
 
         # Setup key binding system callbacks
         self._setup_key_binding_callbacks()
