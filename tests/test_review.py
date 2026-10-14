@@ -567,6 +567,8 @@ def test_main_loop_discards_the_pre_review_input_batch(game, monkeypatch, button
     sm.is_current_state = lambda name: False
     sm.update = lambda dt: None
     sm.render = lambda screen: None
+    sm.render_overlay = lambda screen: None
+    game._render_frame = lambda: Game._render_frame(game)
     calls = []
 
     def handle_key(code):

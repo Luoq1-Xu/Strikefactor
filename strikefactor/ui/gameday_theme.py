@@ -1,13 +1,15 @@
-"""Shared chrome for the GameDay screens — single source of truth.
+"""Shared chrome for every menu and results screen — single source of truth.
 
-The GameDay setup / transition / final screens (and the new resume + history
-screens) all share a strict black/white/gray retro aesthetic, the
-``8bitoperator_jve`` pixel font set, a common top header, and an
-inning-by-inning linescore. Those primitives live here so every screen renders
-identically and there's one place to tune them.
+It began as the GameDay screens' chrome, which is where the name comes from,
+and is now the whole game's: a strict black/white/gray retro aesthetic, the
+``8bitoperator_jve`` pixel font set, a common top header, drawn buttons and
+chips, and an inning-by-inning linescore. Those primitives live here so every
+screen renders identically and there's one place to tune them.
 
 All draw helpers are plain functions taking ``screen`` + a ``fonts`` dict from
-``load_fonts()`` so they have no dependency on any particular GameState.
+``load_fonts()`` so they have no dependency on any particular GameState. They
+are stateless: what is hovered, focused or selected is the caller's to say
+(:mod:`strikefactor.ui.widgets` is the caller that keeps track).
 """
 
 import pygame
@@ -22,16 +24,26 @@ DIM_SOFT = (90, 90, 90)
 DIVIDER = (60, 60, 60)
 HIGHLIGHT_BG = (240, 240, 240)
 HIGHLIGHT_FG = (10, 10, 10)
+HOVER_BG = (20, 20, 20)       # fill under the pointer or the keyboard cursor
 
 # --- Layout ---
 SCREEN_W = 1280
 SCREEN_H = 720
 MARGIN_X = 40
 
+# The nav row along the bottom of a menu screen: BACK on the left margin, the
+# screen's actions run in from the right one.
+FOOTER_Y = 646
+FOOTER_H = 36
+
+# Page header rhythm: a dim subtitle, then the screen's headline.
+_SUBTITLE_Y = 64
+_HEADLINE_Y = 84
+
 _FONT_PATH = "ui/font/8bitoperator_jve.ttf"
 _FONT_SIZES = {
     'micro': 14, 'tiny': 16, 'small': 18, 'med': 22,
-    'big': 30, 'huge': 60, 'mega': 110,
+    'big': 30, 'title': 48, 'huge': 60, 'mega': 110,
 }
 
 
@@ -42,7 +54,7 @@ def load_fonts() -> dict:
     """The pixel font set used across GameDay screens.
 
     Memoised, because every overlay and panel calls this to get the same
-    seven fonts and each call opens the TTF seven times. Sharing is safe
+    fonts and each call would open the TTF once per size. Sharing is safe
     precisely because nothing in this codebase mutates a font object —
     no `bold`/`italic`/`underline` is ever assigned, so a `Font` here is
     a read-only renderer, unlike the `Sound` objects in `contact_audio`
@@ -76,6 +88,74 @@ def draw_top_chrome(screen, header_text, fonts,
               (screen_w - margin_x, 20), DIM, align='right')
     pygame.draw.line(screen, DIVIDER,
                      (margin_x, 44), (screen_w - margin_x, 44), 1)
+
+
+def draw_page_header(screen, fonts, header, subtitle="", headline=""):
+    """The top of a menu screen: chrome, a dim subtitle, the big headline.
+
+    Every screen opens with this block, and each one used to restate it with
+    its own y literals. The settings screens keep a tighter variant
+    (``settings_panel._RowPanel``) because they have a page of rows to fit.
+    """
+    draw_top_chrome(screen, header, fonts)
+    if subtitle:
+        blit_text(screen, subtitle, fonts['micro'],
+                  (MARGIN_X, _SUBTITLE_Y), DIM)
+    if headline:
+        blit_text(screen, headline, fonts['huge'],
+                  (MARGIN_X, _HEADLINE_Y), FG)
+
+
+def draw_button(screen, fonts, label, rect, *, style='default', enabled=True,
+                selected=False, active=False):
+    """Draw one button. ``active`` is "under the pointer or the cursor".
+
+    Stateless on purpose, like :func:`draw_chips`: the caller says what is
+    hovered, focused or selected, so the same call serves a button a state
+    hit-tests itself and one a ``widgets.ButtonGroup`` tracks.
+
+    ``selected`` is the inverted block the chips and the linescore use for
+    "this is the current one" (the pitcher on the mound, a pitch that is
+    switched on). ``style='primary'`` is the screen's main action: a brighter
+    border and the next font size up, never a colour. The palette is
+    black, white and gray.
+    """
+    font = fonts['small' if style == 'primary' else 'micro']
+    if selected:
+        pygame.draw.rect(screen, HIGHLIGHT_BG, rect)
+        text_color = HIGHLIGHT_FG
+    else:
+        pygame.draw.rect(screen, HOVER_BG if (active and enabled) else BG, rect)
+        if not enabled:
+            border, text_color = DIVIDER, DIM_SOFT
+        elif active or style == 'primary':
+            border, text_color = FG, FG
+        else:
+            border, text_color = DIM, FG
+        pygame.draw.rect(screen, border, rect, 1)
+    surf = font.render(label, True, text_color)
+    screen.blit(surf, surf.get_rect(center=rect.center))
+
+
+def footer_row_right(widths, gap=10):
+    """Right-align a run of footer buttons; returns rects left-to-right.
+
+    Derived from ``SCREEN_W`` every call, which is why a footer cannot drift:
+    the grid these replaced was literal rects whose rows centred on 620, 640,
+    740 and 800 against a screen centre of 640.
+    """
+    total = sum(widths) + gap * (len(widths) - 1)
+    x = SCREEN_W - MARGIN_X - total
+    rects = []
+    for width in widths:
+        rects.append(pygame.Rect(x, FOOTER_Y, width, FOOTER_H))
+        x += width + gap
+    return rects
+
+
+def footer_back_rect(width=150):
+    """The BACK slot: on the left margin, on the footer row."""
+    return pygame.Rect(MARGIN_X, FOOTER_Y, width, FOOTER_H)
 
 
 def draw_chips(screen, font, labels, active_index, x, y,

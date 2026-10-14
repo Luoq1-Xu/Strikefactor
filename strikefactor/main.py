@@ -1952,19 +1952,27 @@ class Game:
             self.state_manager.update(time_delta)
             self.ui_manager.update(time_delta)
             
-            # Render current state to internal surface
-            self.screen.fill("black")
-            self.state_manager.render(self.screen)
-            # Draw whichever HUD the user has selected.
-            self._draw_active_hud(self.screen)
-            self.ui_manager.draw()
+            self._render_frame()
 
             # Scale and flip
             self.flip_display()
-            
+
         # Cleanup
         self.cleanup()
-        
+
+    def _render_frame(self):
+        """Draw one frame of the current state to the internal surface.
+
+        The main loop's frame, stated once so `tools/ui_snapshots.py` dumps
+        exactly what the player sees rather than its own idea of the layers.
+        """
+        self.screen.fill("black")
+        self.state_manager.render(self.screen)
+        # Draw whichever HUD the user has selected.
+        self._draw_active_hud(self.screen)
+        self.state_manager.render_overlay(self.screen)
+        self.ui_manager.draw()
+
     def cleanup(self):
         """Clean up resources."""
         print("Game shutting down...")

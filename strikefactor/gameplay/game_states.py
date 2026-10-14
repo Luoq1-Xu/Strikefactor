@@ -49,6 +49,17 @@ class GameState(ABC):
         """Render the state."""
         pass
 
+    def render_overlay(self, screen):
+        """Draw what belongs above the HUD. Most states have nothing to.
+
+        The frame is state, then HUD, then this, then the banner. A state's
+        own buttons normally go in `render`; the two that share the screen
+        with a HUD (inning end's CONTINUE, Sandbox's sidebar) go here, so the
+        HUD does not paint over them. Modal loops redraw the state and the
+        HUD underneath themselves and never call this, which keeps buttons
+        off the top of a modal.
+        """
+
 
 class ModeSelectState(GameState):
     """Top-level mode selection menu (Arcade/Sandbox)."""

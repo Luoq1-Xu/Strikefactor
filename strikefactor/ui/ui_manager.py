@@ -5,6 +5,7 @@ import pygame_gui
 from pygame_gui.core import ObjectID
 
 from strikefactor.config import SCREEN_WIDTH, get_path
+from strikefactor.ui.banner import OutcomeBanner
 
 
 class UIManager:
@@ -331,12 +332,7 @@ class UIManager:
             relative_rect=pygame.Rect((0, 0), self.screen.get_size()),
             manager=self.manager
         )
-        self.banner = pygame_gui.elements.UILabel(
-            relative_rect=pygame.Rect((150, 0), (980, 100)),
-            manager=self.manager,
-            text=""
-        )
-        self.banner.hide()
+        self.banner = OutcomeBanner(self.screen)
 
         # Hide all buttons initially
         for button in self.buttons.values():
@@ -352,32 +348,33 @@ class UIManager:
                     self.button_callbacks[key]()
                     break
 
+    # The banner is drawn by ui/banner.py. These forward to it so the callers
+    # that speak to `game.ui_manager` keep working while the widgets go.
     def show_banner(self, text, typing_speed=0.1):
         """Shows the banner with the given text and a typing effect."""
-        self.banner.set_text(text)
-        self.banner.set_active_effect(pygame_gui.TEXT_EFFECT_TYPING_APPEAR, {'time_per_letter': typing_speed})
-        self.banner.show()
+        self.banner.show_banner(text, typing_speed)
 
     def schedule_banner(self, text, delay=450, typing_speed=0.1):
         """Schedule a banner to show after a delay (in ms), to sync with umpire call."""
-        self._pending_banner = {
-            'text': text,
-            'typing_speed': typing_speed,
-            'show_time': pygame.time.get_ticks() + delay
-        }
+        self.banner.schedule_banner(text, delay, typing_speed)
+
+    @property
+    def _pending_banner(self):
+        return self.banner._pending_banner
+
+    @_pending_banner.setter
+    def _pending_banner(self, value):
+        self.banner._pending_banner = value
 
     def update(self, time_delta):
         """Updates the UI manager and all UI elements."""
-        # Check for pending scheduled banners
-        if hasattr(self, '_pending_banner') and self._pending_banner is not None:
-            if pygame.time.get_ticks() >= self._pending_banner['show_time']:
-                self.show_banner(self._pending_banner['text'], self._pending_banner['typing_speed'])
-                self._pending_banner = None
+        self.banner.update(time_delta)
         self.manager.update(time_delta)
 
     def draw(self):
         """Draws the UI manager and all UI elements to the screen."""
         self.manager.draw_ui(self.screen)
+        self.banner.draw()
 
     def update_sandbox_pitch_buttons(self, pitch_names: list, active_pitches: set = None):
         """Update sandbox pitch type buttons based on current pitcher's arsenal.
@@ -412,7 +409,7 @@ class UIManager:
                 btn.show()
 
     def hide_banner(self):
-        self.banner.hide()
+        self.banner.hide_banner()
 
     def set_visibility_state(self, state):
         """Alias for set_button_visibility for clearer state-based visibility."""
@@ -438,7 +435,7 @@ class UIManager:
             for button in self.buttons.values():
                 button.hide()
             # Keep banner visible - it should be unaffected by UI toggle
-            # self.banner.hide()  # Commented out to keep banner visible
+            # self.banner.hide_banner()  # Commented out to keep banner visible
             return
 
         # Hide all buttons initially
@@ -458,10 +455,10 @@ class UIManager:
             self.buttons['random_scenario'].show()
             self.buttons['gameday'].show()
             self.buttons['back_to_mode_select'].show()
-            self.banner.hide()
+            self.banner.hide_banner()
         elif state == 'summary':
             self.buttons['back_to_main_menu'].show()
-            self.banner.hide()
+            self.banner.hide_banner()
         elif state == 'inning_end':
             # Continue button always shown so the player can advance.
             self.buttons['continue_to_summary'].show()
@@ -471,11 +468,11 @@ class UIManager:
             self.buttons['back_to_main'].show()
             self.buttons['key_bindings'].show()
             self.buttons['reset_settings'].show()
-            self.banner.hide()
+            self.banner.hide_banner()
         elif state == 'key_bindings':
             self.buttons['back_from_keybinds'].show()
             self.buttons['reset_keybinds'].show()
-            self.banner.hide()
+            self.banner.hide_banner()
         elif state == 'gameday_start':
             # Initial gameday screen with pitcher carousel
             self.buttons['start_gameday'].show()
@@ -522,7 +519,7 @@ class UIManager:
             self.buttons['arcade_mode'].show()
             self.buttons['sandbox_mode'].show()
             self.buttons['settings'].show()
-            self.banner.hide()
+            self.banner.hide_banner()
         elif state == 'sandbox_menu':
             # Sandbox mode menu - pitcher selection (matching arcade aesthetic)
             self.buttons['sandbox_menu_sale'].show()
@@ -531,7 +528,7 @@ class UIManager:
             self.buttons['sandbox_menu_yamamoto'].show()
             self.buttons['sandbox_menu_mcclanahan'].show()
             self.buttons['back_to_mode_select'].show()
-            self.banner.hide()
+            self.banner.hide_banner()
         elif state == 'sandbox_gameplay':
             # Sandbox gameplay - broadcast-style left sidebar
             # Pitcher switch buttons
@@ -541,7 +538,7 @@ class UIManager:
             self.buttons['sandbox_pitcher_yamamoto'].show()
             self.buttons['sandbox_pitcher_mcclanahan'].show()
             # Pitch buttons shown via update_sandbox_pitch_buttons()
-            self.banner.hide()
+            self.banner.hide_banner()
 
     def draw_typing_effect(self, message, counter, speed, position, use_big_font=False):
         """Draws text with a typing effect at the given position."""
@@ -570,4 +567,4 @@ class UIManager:
             for button in self.buttons.values():
                 button.hide()
             # Keep banner visible - it should be unaffected by UI toggle
-            # self.banner.hide()  # Commented out to keep banner visible
+            # self.banner.hide_banner()  # Commented out to keep banner visible

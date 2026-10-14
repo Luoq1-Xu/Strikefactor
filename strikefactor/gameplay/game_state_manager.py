@@ -85,7 +85,12 @@ class GameStateManager:
         """Render the current state."""
         if self.current_state:
             self.current_state.render(screen)
-            
+
+    def render_overlay(self, screen):
+        """Draw what the current state puts above the HUD."""
+        if self.current_state:
+            self.current_state.render_overlay(screen)
+
     def handle_menu_state_change(self, menu_state_value):
         """Handle legacy menu_state changes from the original code."""
         if menu_state_value == 0:
