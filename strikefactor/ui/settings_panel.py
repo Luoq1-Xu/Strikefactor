@@ -272,10 +272,13 @@ class SettingsPanel(_RowPanel):
     SUBTITLE = "TUNE THE AT-BAT"
     HEADLINE = "SETTINGS."
     HINT = "UP / DOWN  MOVE      LEFT / RIGHT  CHANGE      ESC  BACK"
+    # Forward navigation takes the far right, where the main menu's SETTINGS
+    # button is: a click carried over from there opens key bindings at worst.
+    # RESET DEFAULTS used to sit in that slot.
     FOOTER = (
         ('back_to_main', "<  BACK", 150),
-        ('key_bindings', "KEY BINDINGS  >", 190),
         ('reset_settings', "RESET DEFAULTS", 200),
+        ('key_bindings', "KEY BINDINGS  >", 190),
     )
 
     # Difficulty in ladder order. The chip row *is* the selected-state

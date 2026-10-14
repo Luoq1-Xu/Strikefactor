@@ -1208,11 +1208,13 @@ class Game:
     def enter_key_bindings_menu(self):
         """Enter key bindings configuration menu."""
         self.menu_state = 'key_bindings'
+        self.state_manager.guard_clicks()
         self.key_rebind_error = None
 
     def exit_key_bindings_menu(self):
         """Exit key bindings menu back to settings."""
         self.menu_state = 'settings'
+        self.state_manager.guard_clicks()
         self.key_rebind_action = None  # Cancel any active rebind
         self.key_rebind_error = None
 

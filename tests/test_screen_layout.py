@@ -635,3 +635,57 @@ def test_the_scouting_and_lap_panels_are_gone():
                  'toggle_lap_log_panel'):
         assert not hasattr(Game, gone)
         assert not hasattr(gs.GameplayState, gone)
+
+
+# ── A click must not carry into the next screen ──────────────────────────
+
+def _manager(monkeypatch, now):
+    """A `GameStateManager` around one stub state, on a clock the test owns."""
+    from strikefactor.gameplay.game_state_manager import GameStateManager
+
+    monkeypatch.setattr(pygame.time, 'get_ticks', lambda: now[0])
+    events = []
+    state = SimpleNamespace(enter=lambda: None, exit=lambda: None,
+                            handle_event=lambda e: events.append(e) or True)
+    manager = object.__new__(GameStateManager)
+    manager.states = {'next': state}
+    manager.current_state = None
+    manager.current_state_name = ""
+    manager._clicks_from_ms = 0
+    return manager, events
+
+
+def test_the_second_half_of_a_double_click_does_not_reach_the_new_screen(monkeypatch):
+    """The first press changes the screen; the second arrives a moment later
+    and would land on whatever the new screen has under the pointer."""
+    now = [1000]
+    manager, events = _manager(monkeypatch, now)
+    manager.change_state('next')
+
+    now[0] += 150
+    manager.handle_event(_click((1100, 660)))
+    assert events == []
+
+    now[0] += manager.CLICK_GUARD_MS
+    manager.handle_event(_click((1100, 660)))
+    assert len(events) == 1
+
+
+def test_the_click_guard_holds_back_only_clicks(monkeypatch):
+    """Keys were typed at this screen, not carried from the last one."""
+    now = [1000]
+    manager, events = _manager(monkeypatch, now)
+    manager.change_state('next')
+    manager.handle_event(_key(pygame.K_RETURN))
+    assert len(events) == 1
+
+
+def test_the_main_menu_s_settings_button_is_not_over_a_reset_button():
+    """SETTINGS opens a screen with a footer of its own. What sits under the
+    pointer there must be navigation, never RESET DEFAULTS, which a slow
+    double-click would otherwise fire with no confirmation."""
+    settings = next(b.rect for b in gs.ModeSelectState(_game()).buttons()
+                    if b.action == 'settings')
+    under = {b.action for b in SettingsPanel().footer_buttons()
+             if b.rect.colliderect(settings)}
+    assert under == {'key_bindings'}

@@ -102,7 +102,7 @@ def test_nothing_pushes_text_into_settings_buttons_any_more():
 # ── Footer nav is derived, not literal ───────────────────────────────────
 
 @pytest.mark.parametrize("panel_cls,names", [
-    (SettingsPanel, ['back_to_main', 'key_bindings', 'reset_settings']),
+    (SettingsPanel, ['back_to_main', 'reset_settings', 'key_bindings']),
     (KeyBindingsPanel, ['back_from_keybinds', 'reset_keybinds']),
 ])
 def test_footer_buttons_are_margin_anchored(panel_cls, names):
