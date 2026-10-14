@@ -85,6 +85,7 @@ class _RowPanel:
         # know whether it is the selected one while it is being drawn, and a
         # list built as we go is always short by exactly the row in hand.
         self._nav_keys = []
+        self._scroll_y = 0
 
     # --- fonts ---
     def _f(self):
@@ -102,6 +103,7 @@ class _RowPanel:
 
     def reset_cursor(self):
         self.selected = 0
+        self._scroll_y = 0
 
     def selected_key(self):
         if 0 <= self.selected < len(self._nav_keys):
@@ -178,6 +180,47 @@ class _RowPanel:
         pygame.draw.line(screen, gdt.DIVIDER, (left, _FOOTER_DIVIDER_Y),
                          (right, _FOOTER_DIVIDER_Y), 1)
 
+    def _content_surface(self, screen):
+        content = pygame.Surface((screen.get_width(), 1200))
+        content.fill(gdt.BG)
+        return content
+
+    def _show_content(self, screen, content, end_y):
+        """Scroll the selected row into view while preserving row/font sizes."""
+        viewport = pygame.Rect(0, _CONTENT_TOP, screen.get_width(),
+                               _FOOTER_DIVIDER_Y - 10 - _CONTENT_TOP)
+        selected = next((r for r, key in self._row_rects if key == self.selected_key()), None)
+        if self.selected == 0:
+            self._scroll_y = 0
+        elif selected is not None:
+            self._scroll_y = max(self._scroll_y, selected.bottom - viewport.bottom)
+            self._scroll_y = min(self._scroll_y, selected.top - viewport.top)
+        self._scroll_y = max(0, min(self._scroll_y, max(0, end_y - viewport.bottom)))
+        source = viewport.move(0, self._scroll_y)
+        screen.blit(content, viewport.topleft, source)
+        # Partly clipped controls are not clickable. Hide their fragments
+        # too, so scrolling never leaves half a chip label under the header.
+        for rect, _ in self._row_rects + getattr(self, '_chip_rects', []):
+            shown = rect.move(0, -self._scroll_y)
+            if shown.colliderect(viewport) and not viewport.contains(shown):
+                screen.fill(gdt.BG, shown.clip(viewport))
+        self._row_rects = [(r.move(0, -self._scroll_y), key) for r, key in self._row_rects
+                           if viewport.contains(r.move(0, -self._scroll_y))]
+        if hasattr(self, '_chip_rects'):
+            self._chip_rects = [(r.move(0, -self._scroll_y), key) for r, key in self._chip_rects
+                                if viewport.contains(r.move(0, -self._scroll_y))]
+        _, right = content_bounds()
+        if self._scroll_y:
+            gdt.blit_text(screen, "UP  MORE", self._f()['micro'],
+                          (right, _CONTENT_TOP - 12), gdt.DIM, align='right')
+        height = end_y - _CONTENT_TOP
+        if height > viewport.height:
+            track = pygame.Rect(right-4, viewport.top, 3, viewport.height)
+            pygame.draw.rect(screen, gdt.DIVIDER, track)
+            thumb_height = round(viewport.height**2 / height)
+            thumb_top = viewport.top + round(self._scroll_y * viewport.height / height)
+            pygame.draw.rect(screen, gdt.DIM, (track.x, thumb_top, 3, thumb_height))
+
 
 class SettingsPanel(_RowPanel):
     """The settings screen: difficulty chips over three sections of rows."""
@@ -204,6 +247,7 @@ class SettingsPanel(_RowPanel):
     SECTIONS = [
         ("GAMEPLAY", [
             ('defense', "DEFENSE", 'cycle_defense_strength'),
+            ('baserunning', "BASERUNNING", 'cycle_baserunning_mode'),
             ('strikezone', "STRIKEZONE", 'toggle_strikezone'),
             ('abs', "ABS CHALLENGE", 'toggle_abs'),
             ('foul_animation', "FOUL ANIMATION", 'toggle_foul_animation'),
@@ -247,6 +291,8 @@ class SettingsPanel(_RowPanel):
             # transform that have to keep agreeing.
             level = settings_manager.get_defense_level()
             return defense.profile_for(level).label.upper(), False
+        if key == 'baserunning':
+            return settings_manager.get_baserunning_mode().upper(), False
         if key == 'hud':
             return settings_manager.get_hud_mode().upper(), False
         if key == 'display_fps':
@@ -315,9 +361,12 @@ class SettingsPanel(_RowPanel):
     # --- render ---
     def render(self, screen, settings_manager):
         f = self._draw_chrome(screen)
+        target = screen
+        screen = self._content_surface(target)
         self._row_rects = []
         self._chip_rects = []
-        mouse = pointer.pos()
+        mx, my = pointer.pos()
+        mouse = (mx, my + self._scroll_y)
 
         y = self._draw_section(screen, "DIFFICULTY", _CONTENT_TOP)
         self._chip_rects = gdt.draw_chips(
@@ -346,7 +395,8 @@ class SettingsPanel(_RowPanel):
                 y = self._draw_row(screen, key, label, value, y, mouse,
                                    value_dim=dim)
 
-        self._draw_footer(screen)
+        self._show_content(target, screen, y)
+        self._draw_footer(target)
 
 
 class KeyBindingsPanel(_RowPanel):
@@ -372,6 +422,8 @@ class KeyBindingsPanel(_RowPanel):
         KeyAction.CHALLENGE,
         KeyAction.SWING_REPLAY,
         KeyAction.FIELDING_REPLAY,
+        KeyAction.SEND_RUNNER,
+        KeyAction.RETREAT_RUNNER,
         KeyAction.MAIN_MENU,
     ]
 
@@ -386,8 +438,11 @@ class KeyBindingsPanel(_RowPanel):
     def render(self, screen, key_binding_manager, pending=None, error=None):
         """Draw the list. ``pending`` is the action awaiting a keypress."""
         f = self._draw_chrome(screen)
+        target = screen
+        screen = self._content_surface(target)
         self._row_rects = []
-        mouse = pointer.pos()
+        mx, my = pointer.pos()
+        mouse = (mx, my + self._scroll_y)
 
         y = self._draw_section(screen, "CONTROLS", _CONTENT_TOP)
         for action in self.ACTIONS:
@@ -405,4 +460,5 @@ class KeyBindingsPanel(_RowPanel):
             gdt.blit_text(screen, error.upper(), f['small'],
                           (gdt.MARGIN_X, y + 4), gdt.FG)
 
-        self._draw_footer(screen)
+        self._show_content(target, screen, y + (28 if error else 0))
+        self._draw_footer(target)

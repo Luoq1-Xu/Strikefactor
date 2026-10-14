@@ -233,6 +233,9 @@ class HitOutcomeManager:
         )
         return self.score_keeper.last_play
     
+    def apply_running_result(self, result, outs=0):
+        return self.score_keeper.update_running_play(result, outs=outs)
+
     def resolve_swing(self, swing, trajectory, swing_start_s, swing_type=1):
         """Sweep the bat against the ball. Returns a `bat_contact.Contact` or None.
 

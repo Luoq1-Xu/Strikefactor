@@ -267,7 +267,7 @@ def init_headless(size=(1280, 720)):
 # ---- One ball in play -----------------------------------------------------
 
 FRAME_MS = 16
-MAX_PLAY_MS = 14000
+MAX_PLAY_MS = 30000  # full circuits and live relay/tag sequences can exceed 14 s
 
 
 def ball_in_play(seed, quality, shape, spray_deg, profile, handedness="R",

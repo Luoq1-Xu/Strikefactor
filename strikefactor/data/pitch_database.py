@@ -24,7 +24,7 @@ from datetime import datetime, timedelta
 
 from strikefactor import outcomes, paths
 
-SCHEMA_VERSION = 12  # Bumped when migrations are added; see PitchDB._migrate.
+SCHEMA_VERSION = 14  # Bumped when migrations are added; see PitchDB._migrate.
 
 # v5 renamed the pop-up outcome from "POP_UP" to "POP UP", so it reads like
 # every other recorded outcome ("HOME RUN", "LINEOUT"). Data written before v5
@@ -111,6 +111,11 @@ class PitchDB:
         fielder_role TEXT,
         play_margin_s REAL,
         extra_base_margin_s REAL,
+        baserunning_outs INTEGER,
+        batter_final_base INTEGER,
+        tag_margin_s REAL,
+        running_play_json TEXT,
+        baserunning_mode TEXT,
         spray_angle_deg REAL,
 
         -- Umpire / ABS
@@ -369,6 +374,17 @@ class PitchDB:
         ("earned_runs_on_pitch", "INTEGER"),
     ]
 
+    # v13 separates hit credit from a later running out, and records the
+    # played routes/tags. Existing race margins keep their meanings. NULL
+    # on old rows and when the play has no live baserunning result.
+    V13_PITCHES_COLUMNS = [
+        ("baserunning_outs", "INTEGER"), ("batter_final_base", "INTEGER"),
+        ("tag_margin_s", "REAL"), ("running_play_json", "TEXT"),
+    ]
+
+    # Control mode is unknown on historical rows, never backfilled as Auto.
+    V14_PITCHES_COLUMNS = [("baserunning_mode", "TEXT")]
+
     # Backup policy
     BACKUP_DIR_NAME = "backups"
     BACKUP_MIN_INTERVAL = timedelta(hours=1)  # don't backup more than once per hour
@@ -403,7 +419,8 @@ class PitchDB:
                              + self.V4_PITCHES_COLUMNS + self.V6_PITCHES_COLUMNS
                              + self.V7_PITCHES_COLUMNS + self.V8_PITCHES_COLUMNS
                              + self.V9_PITCHES_COLUMNS + self.V10_PITCHES_COLUMNS
-                             + self.V11_PITCHES_COLUMNS + self.V12_PITCHES_COLUMNS):
+                             + self.V11_PITCHES_COLUMNS + self.V12_PITCHES_COLUMNS
+                             + self.V13_PITCHES_COLUMNS + self.V14_PITCHES_COLUMNS):
                 if col not in existing_pitches:
                     self.conn.execute(f"ALTER TABLE pitches ADD COLUMN {col} {decl}")
 
@@ -723,6 +740,11 @@ class PitchDataExtractor:
             "fielder_role": getattr(sim, "fielder_role", None),
             "play_margin_s": getattr(sim, "play_margin_s", None),
             "extra_base_margin_s": getattr(sim, "extra_base_margin_s", None),
+            "baserunning_outs": getattr(sim, "baserunning_outs", None),
+            "batter_final_base": getattr(sim, "batter_final_base", None),
+            "tag_margin_s": getattr(sim, "tag_margin_s", None),
+            "running_play_json": getattr(sim, "running_play_json", None),
+            "baserunning_mode": getattr(sim, "baserunning_mode", None),
             "spray_angle_deg": getattr(sim, "spray_angle_deg", None),
             "ai_umpire_strike": _nullable_int(getattr(sim, "ai_umpire_strike", None)),
             "truth_strike": _nullable_int(getattr(sim, "truth_strike", None)),

@@ -145,6 +145,7 @@ class MenuState(GameState):
         'toggle_abs': 'toggle_abs_setting',
         'toggle_foul_animation': 'toggle_foul_animation_setting',
         'cycle_defense_strength': 'cycle_defense_strength',
+        'cycle_baserunning_mode': 'cycle_baserunning_mode',
         'cycle_hud_mode': 'toggle_hud_mode',
         'toggle_umpire_sound': 'toggle_umpire_sound_setting',
         'cycle_display_fps': 'cycle_display_fps',
@@ -252,6 +253,10 @@ class MenuState(GameState):
         panel = self._settings_panel
         settings = self.game.settings_manager
 
+        if event.type == pygame.MOUSEWHEEL:
+            panel.move(-event.y)
+            return
+
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             key = panel.hit_test(event.pos)
             if key is not None:
@@ -273,6 +278,10 @@ class MenuState(GameState):
 
     def _handle_keybinds_event(self, event):
         panel = self._keybinds_panel
+
+        if event.type == pygame.MOUSEWHEEL:
+            panel.move(-event.y)
+            return
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             action = panel.hit_test(event.pos)

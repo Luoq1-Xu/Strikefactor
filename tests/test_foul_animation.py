@@ -115,6 +115,27 @@ def test_foul_finishes_on_timeout_without_securing():
     assert anim.finished
 
 
+@pytest.mark.parametrize("hand", ["R", "L"])
+def test_foul_keeps_the_batter_stationary_in_the_correct_box_and_replay(hand):
+    from strikefactor.gameplay.fielding_record import FieldingRecorder
+
+    anim = _make(hand=hand)
+    recorder = FieldingRecorder(anim, "foul")
+    pose = anim.presentation_frame().runner
+    assert pose is not None
+    assert (pose.pos[0] < HOME[0]) == (hand == "R")
+    assert not pose.reached_first
+    for t in (0, anim.duration_ms / 2, anim.duration_ms + 1):
+        anim.update(t)
+        recorder.capture(anim)
+        assert anim.presentation_frame().runner == pose
+    assert recorder.record is not None
+    assert all(f.runner == pose for f in recorder.record.frames)
+    assert not any(e.label == "RUNNER AT FIRST" for e in recorder.record.events)
+    assert anim.runner is None
+    assert anim._runner_fts is None  # a stationary batter draws no running speed
+
+
 @pytest.mark.parametrize("hand,timing,side", [
     ("R", -0.6, "left"),   # early RHB pulls foul past the 3B/LF line
     ("R", +0.6, "right"),  # late RHB glances oppo past the 1B/RF line

@@ -16,24 +16,25 @@ same contract as engine/contact_audio.py, and for the same reason: the
 numbers are calibrated against the real world, so they have to be
 testable without a renderer in the way.
 
-The verdict is a *probability*, not a boolean. A hard `margin > 0` makes
-every play deterministic and brittle exactly at the boundary that matters
-most; the logistic absorbs throw accuracy, the first baseman's scoop,
-umpire error and the batter's own variance. It is also what makes a
-bang-bang play feel like one — at SIGMA_S a play that is "out by a tenth"
-comes out around 70% an out, not a certainty.
+The logistic estimates a play's difficulty and supports scoring chances
+that never became throws (a ball through a fielder). A live first-base race
+uses scheduled possession and bag-contact times, including coverage and
+misplays, and a deterministic verdict. Randomness belongs in those physical
+inputs; a final coin flip must never contradict the runner on screen.
 """
 
 import math
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+
+from strikefactor.gameplay.base_geometry import BASE_FT
 
 MPH_TO_FTS = 5280.0 / 3600.0            # 1.46667
 
 # Bases in real feet, home at the origin, +y toward centre field. Matches
 # hit_animation's _BASE_AXIS_FT = 90/sqrt(2) exactly — same diamond, so
 # fielder positions can be handed straight across after unprojection.
-FIRST_BASE_FT = (63.64, 63.64)
+FIRST_BASE_FT = BASE_FT[1]
 
 
 # ---- Runner ---------------------------------------------------------------
@@ -184,15 +185,59 @@ class PlayTiming:
     runner_s: float
     margin_s: float                     # runner_s - defense_s; > 0 favours defense
     p_out: float
-    # How much of `release_s` was a misplay, and what `p_out` would have been
-    # without it. Kept as components rather than folded away because the
-    # difference between them *is* the scorer's rule — see `roll_verdict`.
+    # The sampled bobble cost and estimated clean-play difficulty. Coverage
+    # can absorb some of that cost; clean_defense_s records the rescheduled
+    # alternative used by timed_verdict for live error scoring.
     p_out_clean: float
     misplay_s: float = 0.0
+    clean_defense_s: float | None = None
 
     @property
     def is_bang_bang(self):
         return abs(self.margin_s) < BANG_BANG_S
+
+
+def schedule_first_base(timing, runner_s, *, cover_at_s=0.0,
+                        throw_flight_s=None, carry_s=None):
+    """Finalize the race before drawing it, including the clean alternative.
+
+    A receiver must be on the bag when the throw arrives. Waiting for them
+    delays release, not ball speed. The same wait may absorb part or all of
+    a bobble, so the clean play is rescheduled rather than simply subtracting
+    the bobble from the defensive total. An unassisted carry needs no throw
+    transfer; only the misplay delays the defender's approach to the base.
+    """
+    if carry_s is not None:
+        release_s = timing.misplay_s
+        clean_release_s = 0.0
+        flight_s = carry_s
+    else:
+        flight_s = timing.throw_flight_s if throw_flight_s is None else throw_flight_s
+        wait_s = max(0.0, cover_at_s - timing.ball_to_glove_s - flight_s)
+        release_s = max(timing.release_s, wait_s)
+        clean_release_s = max(timing.release_s - timing.misplay_s, wait_s)
+    defense_s = max(cover_at_s, timing.ball_to_glove_s + release_s + flight_s)
+    clean_s = max(cover_at_s, timing.ball_to_glove_s + clean_release_s + flight_s)
+    margin_s = runner_s - defense_s
+    return replace(timing, release_s=release_s, throw_flight_s=flight_s,
+                   defense_s=defense_s, clean_defense_s=clean_s,
+                   runner_s=runner_s, margin_s=margin_s,
+                   p_out=p_out_from_margin(margin_s),
+                   p_out_clean=p_out_from_margin(runner_s - clean_s))
+
+
+def timed_verdict(timing):
+    """The runner is out only if possession at the bag occurred first.
+
+    Exact simultaneous arrival is safe. The clean and actual alternatives
+    share every input except the misplay, with no additional random draw.
+    """
+    if timing.defense_s < timing.runner_s:
+        return "OUT"
+    if (timing.misplay_s > 0 and timing.clean_defense_s is not None
+            and timing.clean_defense_s < timing.runner_s):
+        return "ERROR"
+    return "HIT"
 
 
 def _interpolate(x, table):
@@ -404,30 +449,11 @@ def resolve_infield_play(ev_mph, fielder_xy_ft, ball_distance_ft,
 
 
 def roll_verdict(timing, rng=random):
-    """OUT / ERROR / HIT from a single draw.
+    """Sample OUT / ERROR / HIT for analysis and legacy model callers.
 
-    The one draw is the whole point. `u` is the same play under both
-    clocks, so the window [p_out, p_out_clean) is *precisely* the set of
-    plays that would have been outs without the misplay and were not with
-    it — which is the official scorer's rule, arrived at exactly rather
-    than by judgement. Two independent draws could not express it: they
-    would let a play be charged an error that the runner was beating
-    anyway, and let one the misplay genuinely cost go uncharged.
-
-    It also makes the picture and the record structurally unable to
-    disagree. The throw the player watches is scheduled off `release_s`,
-    which *contains* `misplay_s`; the verdict is drawn against `p_out`,
-    computed from the same number. A bobble that still gets the out shows
-    a bobble and says GROUNDOUT; one that costs the out says the batter
-    reached on an error; the rest say SINGLE — which is also what a scorer
-    would rule.
-
-    With `misplay_s == 0` the window is empty and this is a plain
-    `rng.random() < p_out`.
-
-    Kept separate from `resolve_infield_play` so the timing can be
-    computed, logged and displayed without consuming randomness — and so a
-    replay can re-derive the numbers.
+    A shared draw evaluates the clean and misplayed chances together. This
+    probability model does not guarantee agreement with visible arrivals;
+    live first-base plays use schedule_first_base and timed_verdict instead.
     """
     return verdict_from(timing.p_out, timing.p_out_clean, rng)
 

@@ -1247,6 +1247,9 @@ class Game:
         """
         self.settings_manager.cycle_defense_level()
 
+    def cycle_baserunning_mode(self):
+        self.settings_manager.cycle_baserunning_mode()
+
     def cycle_display_fps(self):
         """Cycle through display FPS options."""
         self.settings_manager.cycle_display_fps()
@@ -1372,7 +1375,8 @@ class Game:
                     used_by = self.key_binding_manager.get_action_name(action)
                     break
             else:
-                used_by = "another action"
+                used_by = {pygame.K_w: "Contact Swing", pygame.K_e: "Power Swing",
+                           pygame.K_F11: "Fullscreen"}.get(new_key, "another action")
             self.key_rebind_error = f"{key_name} is already bound to {used_by}"
 
         self.key_rebind_action = None

@@ -117,6 +117,7 @@ class SettingsManager:
     ENGINE_FPS_OPTIONS = [60, 120]  # 60 is baseline for original physics
 
     HUD_MODES = ["legacy", "broadcast", "minimal"]
+    BASERUNNING_MODES = ["auto", "manual"]
 
     # How good the nine gloves behind the pitcher are. Deliberately a separate
     # axis from `difficulty`: difficulty is about the bat (aim assist, timing
@@ -141,7 +142,8 @@ class SettingsManager:
             "abs_enabled": True,         # MLB-style ball/strike challenge system
             "foul_animation_enabled": True,  # Play the hit animation for foul balls
             "hud_mode": "legacy",        # "legacy" | "broadcast" | "minimal"
-            "defense_strength": "league" # How good the defense behind the pitcher is
+            "defense_strength": "league", # How good the defense behind the pitcher is
+            "baserunning_mode": "auto",
         }
         self.current_settings = self.load_settings()
 
@@ -272,6 +274,15 @@ class SettingsManager:
         """Return the current defense level, defaulting to league if invalid."""
         level = self.get_setting("defense_strength")
         return level if level in self.DEFENSE_LEVELS else "league"
+
+    def get_baserunning_mode(self) -> str:
+        mode = self.get_setting("baserunning_mode")
+        return mode if mode in self.BASERUNNING_MODES else "auto"
+
+    def cycle_baserunning_mode(self) -> str:
+        mode = "manual" if self.get_baserunning_mode() == "auto" else "auto"
+        self.set_setting("baserunning_mode", mode)
+        return mode
 
     def cycle_defense_level(self) -> str:
         """Advance sandlot -> minors -> league -> gold glove -> sandlot."""

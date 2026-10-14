@@ -348,7 +348,8 @@ def test_finalizing_a_ball_that_got_through_carries_its_base_race():
     game = SimpleNamespace(
         currentouts=0, hits=0, last_pitch_information=[], ball=(640, 400),
         in_gameday_mode=False,
-        hit_outcome_manager=SimpleNamespace(apply_classified_outcome=lambda *a, **k: Play()),
+        hit_outcome_manager=SimpleNamespace(apply_classified_outcome=lambda *a, **k: Play(),
+                                           apply_running_result=lambda *a, **k: Play()),
         field_renderer=SimpleNamespace(record_hit=lambda *a, **k: None,
                                        record_at_bat=lambda: None),
         ui_manager=SimpleNamespace(show_banner=lambda text: None),

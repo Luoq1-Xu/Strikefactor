@@ -38,6 +38,8 @@ class Play(NamedTuple):
     runs: int = 0                 # runners who crossed the plate on it
     rbi: int = 0                  # of those, the batter's (Rule 9.04)
     sacrifice_fly: bool = False   # Rule 9.08(d): no at-bat is charged
+    running_outs: int = 0         # a hit and a later running out can coexist
+    batter_on_throw_base: int | None = None
 
 
 def _out_advance(outcome, base):
@@ -284,6 +286,78 @@ class ScoreKeeper:
 
         basesFilled = self._rebuild_base_state()
         return (basesFilled, scored)
+
+    def update_running_play(self, result, outs=0):
+        """Apply observed base movements and outs, ordered by event time.
+
+        A tag third out cancels only later runs. A third out on a caught
+        batter or the force at first cancels all runs, even earlier touches.
+        Hit credit does not imply the batter survived on that base.
+        The original runners retain pitcher responsibility and error history.
+        """
+        before = {str(r.base): r for r in self.runners}
+        reconstructed = self._reconstructed()[:]
+        retired = sorted(m.out_s for m in result.movements if m.out_s is not None)
+        # A cumulative Sandbox count can already exceed three; those old
+        # outs cannot make one of this play's retirements a third out.
+        outs_needed = 3 - outs
+        third_s = retired[outs_needed - 1] if 0 < outs_needed <= len(retired) else None
+        batter_out_third = (third_s is not None and result.outcome in outcomes.BATTED_OUT_OUTCOMES
+                            and result.batter.out_s == third_s)
+        error = result.outcome == outcomes.REACHED_ON_ERROR
+        clean_third = self._clean_outs(self.pitcher, outs) >= 2
+        rbi_allowed = {r for r in self.runners if r.base + _out_advance(result.error_out, r.base) > 3}
+        if error:
+            self.missed_outs += 1
+        # Earlier scored runners waiting in the reconstruction still respond
+        # to this hit, or to the clean out an error concealed.
+        for r in reconstructed:
+            if r in self._home_early:
+                r.clean_base += (result.hit_bases if not error else
+                                 0 if clean_third else _out_advance(result.error_out, r.clean_base))
+        scoring = []
+        for move in result.movements:
+            if move.runner_id == "B":
+                runner = Runner(max(1, result.hit_bases), self.pitcher, reached_on_error=error)
+                self.runners.append(runner)
+            else:
+                runner = before[move.runner_id]
+            runner.scored = False
+            if runner.clean_base is not None:
+                if move.runner_id == "B" and not error:
+                    # A clean advance on another throw is earned running,
+                    # even when it does not increase the credited hit length.
+                    runner.clean_base = max((base for base, _ in move.touches), default=runner.clean_base)
+                elif move.runner_id != "B":
+                    if error:
+                        runner.clean_base += 0 if clean_third else _out_advance(result.error_out, runner.clean_base)
+                    else:
+                        end = max((base for base, t in move.touches), default=move.start_base)
+                        runner.clean_base += end - move.start_base
+            if move.out_s is not None:
+                self.runners.remove(runner)
+                runner.onBase = False
+                continue
+            runner.base = move.final_base
+            runner.onBase = move.final_base in (1, 2, 3)
+            crossed = move.scored_s
+            if crossed is not None and not batter_out_third and (third_s is None or crossed < third_s):
+                scoring.append((crossed, runner))
+            elif crossed is not None:
+                # An annulled run cannot remain in a surviving on-base slot.
+                # The half-inning is over.
+                self.runners.remove(runner)
+        scored = rbi = 0
+        for time_s, runner in sorted(scoring, key=lambda item: item[0]):
+            runner.scored = True
+            scored += self._settle(outs + sum(t <= time_s for t in retired))
+            rbi += int(not error or (outs < 2 and runner in rbi_allowed))
+        self._settle(outs + len(retired))
+        sacrifice = ((result.outcome == outcomes.FLYOUT and scored > 0)
+                     or (error and result.error_out == outcomes.FLYOUT and rbi > 0))
+        self.last_play = Play(scored, rbi, sacrifice, result.running_outs, result.batter_on_throw_base)
+        self._rebuild_base_state()
+        return self.last_play
 
     def update_walk_event(self, outs=0):
         """Put the batter on first and push along whoever that forces.

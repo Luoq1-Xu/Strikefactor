@@ -30,6 +30,19 @@ def draw_frame(screen, frame):
     for f in frame.fielders:
         pygame.draw.circle(screen, ha.BODY_COLOR, tuple(map(int, f.pos)), ha.BODY_RADIUS_PX)
         pygame.draw.circle(screen, ha.GLOVE_COLOR, tuple(map(int, f.glove)), 3)
+    for runner in ((frame.runner,) if frame.runner is not None else ()) + frame.runners:
+        # The small foot marker is the contact anchor. The body sits above
+        # it so its radius cannot imply an early arrival at the bag.
+        x, y = map(round, runner.pos)
+        color = (71, 204, 252) if runner.runner_id == "B" else (100, 220, 175)
+        if runner.state == "out":
+            color = (130, 140, 150)
+        if runner.state == "sliding":
+            pygame.draw.line(screen, color, (x-9, y-3), (x+3, y-3), 5)
+        else:
+            pygame.draw.circle(screen, (15, 25, 30), (x, y - 9), 8)
+            pygame.draw.circle(screen, color, (x, y - 9), 6)
+        pygame.draw.circle(screen, color, (x, y), 2)
     if frame.error is not None:
         x, y, alpha = frame.error
         _label(screen, "!", 30, ha.ERROR_MARK_COLOR, (int(x), int(y)), alpha, 1)
@@ -44,6 +57,55 @@ def draw_frame(screen, frame):
         feet, x, y, alpha = frame.distance
         y = max(_font(36).get_height() // 2 + 4, y)
         _label(screen, f"{feet} FT", 36, (255, 230, 120), (int(x), int(y)), alpha, 2)
+    if frame.first_base_call is not None:
+        verdict, margin_s = frame.first_base_call
+        gap = abs(margin_s)
+        detail = "EVEN" if gap == 0 else ("<0.01s" if gap < 0.01 else f"{gap:.2f}s")
+        text = f"{verdict} · {detail}" if gap == 0 else f"{verdict} BY {detail}"
+        color = (71, 204, 252) if verdict == "SAFE" else (255, 195, 120)
+        bx, by = ha.BASES["1B"]
+        _label(screen, text, 24, color, (round(bx + 40), round(by - 43)), 1.0, 1)
+    if frame.base_call is not None:
+        verdict, base, margin_s = frame.base_call
+        where = "HOME" if base == 4 else f"{base}B"
+        color = (71, 204, 252) if verdict == "SAFE" else (255, 195, 120)
+        point = ha.HOME if base == 4 else ha.BASES[f"{base}B"]
+        _label(screen, f"{verdict} AT {where}", 24, color,
+               (round(point[0]), round(point[1]-43)), 1.0, 1)
+    if frame.send_control is not None:
+        rid, state, remaining, destination, key = frame.send_control[:5]
+        runners = ((frame.runner,) if frame.runner is not None else ()) + frame.runners
+        selected = next((r for r in runners if r.runner_id == rid), None)
+        color = (255, 230, 120)
+        if selected is not None:
+            x, y = map(round, selected.pos)
+            pygame.draw.circle(screen, color, (x, y-7), 13, 2)
+
+        def base_name(base):
+            return "HOME" if base == 4 else f"{base}B"
+
+        if len(frame.send_control) == 5:
+            text = (f"{key.upper()}  SEND LEAD RUNNER" if state == "available" else
+                    "SEND QUEUED" if state == "armed" else f"GOING TO {base_name(destination)}")
+            _label(screen, text, 25, color, (screen.get_width()//2, 46), 1.0, 1)
+        else:
+            retreat, retreat_key, send, pending, cancel = frame.send_control[5:]
+            verb = ("AT" if selected is not None and selected.state == "holding" else
+                    "RETURNING TO" if selected is not None and selected.state == "returning" else "TO")
+            heading = f"LEAD  {verb} {base_name(destination)}"
+            if pending is not None:
+                heading += f"  /  THEN {base_name(pending)}"
+            choices = []
+            if send is not None:
+                choices.append(f"{key.upper()}  SEND TO {base_name(send)}")
+            if retreat is not None:
+                choices.append(f"{retreat_key.upper()}  {'HOLD AT' if cancel else 'RETURN TO'} {base_name(retreat)}")
+            _label(screen, heading, 25, color, (screen.get_width()//2, 42), 1.0, 1)
+            _label(screen, "     ".join(choices), 23, color, (screen.get_width()//2, 66), 1.0, 1)
+        if remaining is not None:
+            bar = pygame.Rect(screen.get_width()//2-100, 84, 200, 4)
+            pygame.draw.rect(screen, (65, 65, 65), bar)
+            pygame.draw.rect(screen, color, (bar.x, bar.y, round(bar.width*remaining), bar.height))
 
 
 def draw_field(screen):

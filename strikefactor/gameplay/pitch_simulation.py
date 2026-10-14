@@ -262,6 +262,11 @@ class PitchSimulation:
         self.fielder_role = None
         self.play_margin_s = None           # the infield throw-to-first race
         self.extra_base_margin_s = None     # the base race, on a ball that got through
+        self.baserunning_outs = self.batter_final_base = self.tag_margin_s = None
+        self.running_play_json = None
+        self.baserunning_mode = None
+        self._send_key_held = False
+        self._retreat_key_held = False
         # Which way the ball left the bat, pull-positive degrees. Set on every
         # bat-on-ball event including fouls — a foul has a direction and it is
         # often *why* it was a foul — and left None on a whiff, where there is
@@ -483,6 +488,15 @@ class PitchSimulation:
                 self.running = False
                 return
             if window:
+                continue
+            from strikefactor.key_binding_manager import KeyAction
+            bindings = getattr(self.game, 'key_binding_manager', None)
+            command_keys = {
+                bindings.get_key_for_action(KeyAction.SEND_RUNNER) if bindings else pygame.K_g: '_send_key_held',
+                bindings.get_key_for_action(KeyAction.RETREAT_RUNNER) if bindings else pygame.K_d: '_retreat_key_held',
+            }
+            if event.type in (pygame.KEYDOWN, pygame.KEYUP) and event.key in command_keys:
+                setattr(self, command_keys[event.key], event.type == pygame.KEYDOWN)
                 continue
             if event.type == pygame.KEYDOWN:
                 if current_time < self.arrival_time - 100:
@@ -826,8 +840,8 @@ class PitchSimulation:
 
         For HOME RUN, the outcome is fully known at contact (the ball
         carries past the wall by definition) and the inline path advances
-        runners, records stats, and fires the banner once the HR animation
-        completes.
+        runners, records stats, and fires the banner as the ball clears
+        the yard. Watching the rest of the base tour is optional.
 
         For IN_PLAY — the generic ball-in-play outcome — the final result
         is whatever the animation resolves to: FLYOUT or GROUNDOUT if a
@@ -918,6 +932,22 @@ class PitchSimulation:
         # hit, and the old binary put it in the `else` — crediting the batter
         # a hit, incrementing `game.hits`, and feeding it to the batting
         # heatmap as though they had earned it.
+        running_result = getattr(self.hit_animation, "running_result", None)
+        control = getattr(self.hit_animation, "baserunning", None)
+        self.baserunning_mode = control.mode if control is not None else None
+        if running_result is not None:
+            import json
+            from dataclasses import asdict
+            payload = asdict(running_result)
+            payload["schema_version"] = 3
+            payload["control"] = asdict(control) if control is not None else None
+            self.running_play_json = json.dumps(payload, separators=(",", ":"))
+        running_outs = running_result.running_outs if running_result is not None else 0
+        self.baserunning_outs = running_outs if running_result is not None else None
+        self.batter_final_base = running_result.batter.final_base if running_result is not None else None
+        race = getattr(self.hit_animation, "_return_race", None)
+        self.tag_margin_s = race.tag_margin_s if race is not None else None
+        outs_before = self.game.currentouts
         is_out = classified in outcomes.BATTED_OUT_OUTCOMES
         is_error = classified in outcomes.REACH_OUTCOMES
         if is_out:
@@ -928,6 +958,8 @@ class PitchSimulation:
         else:
             self.is_hit = True
             self.game.hits += 1
+
+        self.game.currentouts += running_outs
 
         # Recolor the trail dot now that we know whether contact resolved
         # as a hit or an out. _start_hit_animation appended a placeholder
@@ -949,13 +981,15 @@ class PitchSimulation:
         # Advance runners + score. The scorer wants the outs before the play
         # (`currentouts` already counts this one), and for an error the out it
         # should have been — the reconstructed inning is built from it.
-        play = self.game.hit_outcome_manager.apply_classified_outcome(
-            classified,
-            outs=self.game.currentouts - (1 if is_out else 0),
-            bases=getattr(self.hit_animation, 'error_bases', 1),
-            clean_outcome=getattr(self.hit_animation, 'error_out', None),
-        )
-
+        if running_result is not None:
+            play = self.game.hit_outcome_manager.apply_running_result(running_result, outs=outs_before)
+        else:
+            play = self.game.hit_outcome_manager.apply_classified_outcome(
+                classified,
+                outs=self.game.currentouts - (1 if is_out else 0),
+                bases=getattr(self.hit_animation, 'error_bases', 1),
+                clean_outcome=getattr(self.hit_animation, 'error_out', None),
+            )
         # A sacrifice fly is a plate appearance and not an at-bat.
         if play.sacrifice_fly:
             self.game.field_renderer.record_sacrifice_fly()
@@ -977,7 +1011,7 @@ class PitchSimulation:
                 classified, runs_scored=runs_scored, pitches_thrown=pitches_thrown,
                 play=play, charges=self.game.scoreKeeper.take_charges(),
             )
-            if not is_out:
+            if not is_out or (running_result is not None and play.runs > 0):
                 self._check_walkoff()
 
         # No sound here — the contact sound already played at impact via
@@ -987,7 +1021,14 @@ class PitchSimulation:
         self.new_entry['isHit'] = classified
         self.outcome = classified
 
-        self.game.ui_manager.show_banner(self._format_display_outcome(classified))
+        display = self._format_display_outcome(classified)
+        if running_result is not None and running_result.batter_on_throw_base is not None:
+            base = running_result.batter_on_throw_base
+            where = "HOME" if base == 4 else f"{base}B"
+            display += f" · TO {where} ON THROW"
+        if running_outs:
+            display += " · OUT ADVANCING"
+        self.game.ui_manager.show_banner(display)
 
     def _check_walkoff(self):
         """Check for walk-off win and flag a deferred game-end transition.
@@ -1252,7 +1293,7 @@ class PitchSimulation:
             self.game.state_manager.change_state('inning_end')
 
     def _start_hit_animation(self, outcome, banner_text, quality=0.0):
-        """Begin the post-contact animation; defers the outcome banner until it ends.
+        """Begin fielding; show the banner when the outcome is resolved.
 
         For IN_PLAY (the unified ball-in-play outcome), the resolved
         classification isn't known until the animation fields the ball,
@@ -1283,11 +1324,15 @@ class PitchSimulation:
             self.game.fourseamballsize, trail_color, trail_label,
         ])
 
+        self.baserunning_mode = self._baserunning_mode()
         self.hit_animation = HitAnimation(
             self.game,
             outcome=outcome,
             on_complete=on_complete,
             quality=quality,
+            baserunning_mode=self.baserunning_mode,
+            send_key_name=self._send_key_name(),
+            retreat_key_name=self._retreat_key_name(),
             batted_ball_type=self.game.hit_outcome_manager.last_batted_ball_type,
             # Where the ball actually left, resolved once in
             # `_evaluate_contact`. On fair contact this is the bat's own
@@ -1298,7 +1343,31 @@ class PitchSimulation:
                              - self.contact.pose_attack_deg),
             ev_mph=self.exit_velocity_mph,
             launch_deg=self.launch_angle_deg,
+            initial_bases=tuple(b for b, key in ((1, "RunnerFirst"), (2, "RunnerSecond"), (3, "RunnerThird"))
+                                if getattr(self, "new_data_entry", {}).get(key, False)),
         )
+
+    def _baserunning_mode(self):
+        try:
+            return self.game.settings_manager.get_baserunning_mode()
+        except AttributeError:
+            return "auto"
+
+    def _send_key_name(self):
+        from strikefactor.key_binding_manager import KeyAction
+        try:
+            bindings = self.game.key_binding_manager
+            return bindings.get_key_name(bindings.get_key_for_action(KeyAction.SEND_RUNNER))
+        except AttributeError:
+            return "G"
+
+    def _retreat_key_name(self):
+        from strikefactor.key_binding_manager import KeyAction
+        try:
+            bindings = self.game.key_binding_manager
+            return bindings.get_key_name(bindings.get_key_for_action(KeyAction.RETREAT_RUNNER))
+        except AttributeError:
+            return "D"
 
     def _defense_profile(self):
         """The nine gloves behind this pitcher, resolved once per batted ball.
@@ -1370,7 +1439,8 @@ class PitchSimulation:
 
         Events are drained every frame — pre-banner presses (e.g. a stale
         swing key from before contact resolved) are silently dropped. Once
-        the banner has fired, the next key or click advances the play.
+        the banner has fired, or a clear first-base out has actually been
+        made, the next key or click advances the play.
         """
         from strikefactor.gameplay.fielding_record import FieldingRecorder
 
@@ -1381,23 +1451,11 @@ class PitchSimulation:
             self.game._fielding_play_number += 1
             label = f"PLAY {self.game._fielding_play_number} / {self.pitchtype} {self.speed_mph:.0f} MPH"
             self._fielding_recorder = FieldingRecorder(self.hit_animation, label, self.game.screen.get_size())
-        self.hit_animation.update(current_time)
-        self._fielding_recorder.capture(self.hit_animation)
-        self.hit_animation.draw(self.game.screen)
-
-        if self.hit_animation.finished and not self.hit_animation.banner_fired:
-            self.hit_animation.on_complete()
-            self.hit_animation.banner_fired = True
-            # None deliberately clears a stale clip if this recording overflowed.
-            self.game.last_fielding_play = self._fielding_recorder.record
-            self._publish_review()
-
-        self.game.ui_manager.update(time_delta)
-        self.game.ui_manager.draw()
-        self.game.flip_display()
-
         from strikefactor.key_binding_manager import KeyAction
         from strikefactor.ui.review_overlay import view_for_key
+        deferred = []
+        if self.hit_animation.start_time is None:
+            self.hit_animation.start_time = current_time
         for event in pygame.event.get():
             window = _handle_window_event(self.game, event)
             if window == "quit":
@@ -1405,11 +1463,53 @@ class PitchSimulation:
                 return
             if window:
                 continue
-            if not self.hit_animation.banner_fired:
+            commands = {
+                self.game.key_binding_manager.get_key_for_action(KeyAction.SEND_RUNNER):
+                    ('_send_key_held', self.hit_animation.send_runner),
+                self.game.key_binding_manager.get_key_for_action(KeyAction.RETREAT_RUNNER):
+                    ('_retreat_key_held', self.hit_animation.retreat_runner),
+            }
+            if event.type in (pygame.KEYDOWN, pygame.KEYUP) and event.key in commands:
+                latch, command = commands[event.key]
+                if event.type == pygame.KEYUP:
+                    setattr(self, latch, False)
+                    continue
+                if not getattr(self, latch, False) and not getattr(event, 'repeat', False):
+                    event_time = getattr(event, 'timestamp', current_time)
+                    played_time = self.hit_animation.start_time + self.hit_animation._elapsed
+                    self.hit_animation.update(max(played_time, min(current_time, event_time)))
+                    command()
+                    self._fielding_recorder.capture(self.hit_animation)
+                setattr(self, latch, True)
                 continue
+            deferred.append(event)
+        self.hit_animation.update(current_time)
+        self._fielding_recorder.capture(self.hit_animation)
+        self.hit_animation.draw(self.game.screen)
+
+        self._complete_hit_animation()
+
+        self.game.ui_manager.update(time_delta)
+        self.game.ui_manager.draw()
+        self.game.flip_display()
+
+        for event in deferred:
             review_view = (view_for_key(self.game.key_binding_manager, event.key)
                            if event.type == pygame.KEYDOWN else None)
+            if not self.hit_animation.banner_fired:
+                if (not review_view and event.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN)
+                        and self.hit_animation.skip_remaining()):
+                    # Record the actual terminal pose; do not fast-forward
+                    # or invent a runner arrival after the player skipped.
+                    self._fielding_recorder.capture(self.hit_animation)
+                    self._complete_hit_animation()
+                    self._finish_pitch()
+                    return
+                continue
             if review_view:
+                if self.hit_animation.skip_remaining():
+                    self._fielding_recorder.capture(self.hit_animation)
+                    self._complete_hit_animation()
                 if hasattr(self.game, 'request_review'):
                     self.game.request_review(view=review_view,
                                              record_id=self.review_id, simulation=self)
@@ -1421,8 +1521,22 @@ class PitchSimulation:
                 # original continue screen, not a new request to advance.
                 return
             if event.type in (pygame.KEYDOWN, pygame.MOUSEBUTTONDOWN):
+                if self.hit_animation.skip_remaining():
+                    self._fielding_recorder.capture(self.hit_animation)
+                    self._complete_hit_animation()
                 self._finish_pitch()
                 return
+
+    def _complete_hit_animation(self):
+        """Finalize statistics and publish the clip once, including early exits."""
+        if self.hit_animation.banner_ready and not self.hit_animation.banner_fired:
+            self.hit_animation.on_complete()
+            self.hit_animation.banner_fired = True
+        if self.hit_animation.finished and not self.hit_animation.completion_published:
+            self.hit_animation.completion_published = True
+            # None deliberately clears a stale clip if this recording overflowed.
+            self.game.last_fielding_play = self._fielding_recorder.record
+            self._publish_review()
 
     def _get_outcome_display(self) -> str:
         """Get display-friendly outcome string from internal outcome."""

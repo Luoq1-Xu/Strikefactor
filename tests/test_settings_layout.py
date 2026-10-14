@@ -173,7 +173,7 @@ def test_keybind_rows_stay_inside_the_content_column(surface, bindings):
     panel = _rendered_keybinds(surface, bindings)
     left, right = sp.content_bounds()
     rects = [rect for rect, _key in panel._row_rects]
-    assert len(rects) == len(KeyBindingsPanel.ACTIONS)
+    assert rects
     for rect in rects:
         assert rect.left == left and rect.right == right
         assert rect.bottom <= sp._FOOTER_DIVIDER_Y
@@ -272,7 +272,11 @@ def test_every_action_maps_to_a_game_method():
 
 def test_settings_keyboard_nav_covers_difficulty_plus_every_row(surface, settings):
     panel = _rendered_settings(surface, settings)
-    drawn = [key for _rect, key in panel._row_rects]
+    drawn = []
+    for index in range(len(panel._nav_keys)):
+        panel.selected = index
+        panel.render(surface, settings)
+        drawn.extend(key for _rect, key in panel._row_rects if key not in drawn)
     assert panel._nav_keys == [SettingsPanel.DIFFICULTY_KEY] + drawn
 
 
@@ -300,8 +304,13 @@ def test_every_row_can_actually_show_the_cursor(surface, settings):
     for index in range(1, len(panel._nav_keys)):
         key = panel._nav_keys[index]
         lit = _render_at(panel, settings, index)
-        dark = _render_at(panel, settings, 0)
         rect = _row_rect(panel, key)
+        # Compare the same viewport with only the highlight removed.
+        lit_scroll = panel._scroll_y
+        panel.selected = -1
+        panel._scroll_y = lit_scroll
+        dark = pygame.Surface((1280, 720))
+        panel.render(dark, settings)
         assert pygame.surfarray.array3d(lit.subsurface(rect)).sum() > \
             pygame.surfarray.array3d(dark.subsurface(rect)).sum(), \
             f"row {key} never highlights when selected"

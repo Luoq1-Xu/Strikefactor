@@ -288,7 +288,13 @@ def test_a_ball_nobody_reaches_still_comes_off_the_wall():
     """
     anim = _play(conftest.uncaught(_wall_ball(3)))
     assert anim._wall_hit
-    assert anim.classified_outcome in ("DOUBLE", "TRIPLE")
+    # A live wall carom is an opportunity, not an automatic double. The
+    # physical route, retrieval and return throw settle the base actually held.
+    assert anim.running_result is not None
+    assert anim.classified_outcome == anim.running_result.outcome
+    assert anim._return_legs
+    if anim.running_result.batter.final_base is not None:
+        assert anim.running_result.batter.final_base == anim.running_result.hit_bases
 
 
 def test_a_ball_that_clears_the_fence_is_still_a_home_run():

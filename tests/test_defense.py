@@ -461,16 +461,12 @@ def test_the_batter_runner_has_one_speed_for_the_whole_play():
 
 
 def test_the_unassisted_carry_and_the_sprint_are_the_same_legs():
-    """`_resolve_ground_ball` feeds the model a sprint speed when nobody
-    throws, because the fielder carries it to the bag. That has to be *this*
-    defense's legs, or a Gold Glove first baseman runs at 29 ft/s and carries
-    the ball at 27."""
-    import inspect
-
-    from strikefactor.gameplay import hit_animation as ha
-    src = inspect.getsource(ha.HitAnimation._resolve_ground_ball)
-    assert "self.defense.sprint_fts" in src
-    assert "FIELDER_SPRINT_FT_S" not in src
+    """A carry uses this fielder's actual jittered legs, including momentum."""
+    anim = _anim(d.DefenseLevel.GOLD_GLOVE)
+    fielder = anim.fielders["1B"]
+    path = anim._base_approach(fielder, 0.0)
+    assert path.speed_fts == fielder.base_max_speed
+    assert path.initial_fraction == fielder.current_speed_frac
 
 
 def test_the_settings_seam_is_total():
