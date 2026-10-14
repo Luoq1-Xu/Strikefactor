@@ -36,7 +36,7 @@ directory it is using at startup. Data saved by older versions inside
 originals are left where they were.
 
 ### How to Play
-1. **Choose your mode** - Select Arcade or Sandbox from the main menu
+1. **Choose your mode** - Select Arcade, GameDay or Sandbox from the main menu
 2. **Choose your opponent** - Select which pitcher you want to face
 3. **Watch the pitch** - Follow the ball as it flies toward home plate
 4. **Time your swing** - Move your mouse cursor to where you think the ball will be
@@ -49,7 +49,7 @@ Contact quality is scored on a continuous 0.0–1.0 scale using timing accuracy 
 ## 🎯 Game Modes
 
 ### Arcade Mode
-Face a single inning of continuous at-bats against your selected pitcher. Access settings, key bindings, and pitcher selection from the arcade menu.
+Face a single inning of continuous at-bats against your selected pitcher, or start a Random Scenario from the same screen. Settings and key bindings are on the main menu.
 
 ### GameDay Mode
 Full 9-inning baseball simulation featuring:
@@ -267,7 +267,7 @@ Power swings increase extra-base hit potential but require more precise timing. 
 ## 🔧 Requirements
 
 - Python 3.12+ (uv installs it for you)
-- Runtime: pygame-ce, pygame_gui, numpy, pandas, matplotlib, scikit-learn, rich.
+- Runtime: pygame-ce, numpy, pandas, matplotlib, scikit-learn, rich.
   They are declared in `pyproject.toml` and locked in `uv.lock`.
 
 For development, `uv sync` also installs the dev tools (pytest, pytest-xdist, ruff):

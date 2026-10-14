@@ -6,8 +6,8 @@ score column, and scoring plays visually promoted. Filters let the viewer
 narrow to scoring plays or a single side.
 
 Palette/fonts come from :mod:`ui.gameday_theme` so the panel matches the rest
-of the GameDay chrome. The panel owns no pygame_gui elements — it draws itself
-into a caller-supplied rect and consumes raw events.
+of the GameDay chrome. The panel draws itself into a caller-supplied rect and
+consumes raw events.
 """
 
 import pygame

@@ -114,8 +114,8 @@ between pitches, completed-play screens and result screens. A live pitch or
 unfinished fielding play cannot open it.
 
 Only the review handles input. Mouse coordinates cross from the window to the
-internal surface once. Resize, fullscreen and QUIT remain operational. Background
-pygame_gui widgets are neither drawn nor sent input. Close leaves the actual
+internal surface once. Resize, fullscreen and QUIT remain operational. The
+underlying state's buttons are neither drawn nor sent input. Close leaves the actual
 underlying state object in place—no `exit()`/`enter()` reconstruction, no menu
 routing and no repeated inning/walk-off transitions.
 
