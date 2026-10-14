@@ -16,7 +16,6 @@ requires-python = ">=3.12"
 # any other version. Re-save the pickle before moving this pin.
 dependencies = [
     "pygame-ce>=2.5.1",
-    "pygame_gui>=0.6.12",
     "numpy>=1.26",
     "pandas>=2.2",
     "matplotlib>=3.9",
@@ -53,7 +52,6 @@ include-package-data = false
 strikefactor = [
     "assets/**/*.png",
     "assets/**/*.mp3",
-    "assets/theme.json",
     "ai/*.pkl",                          # umpire model + seed pitch-selection AIs
     "data/pitch_locations.json",
     "data/pitcher_attributes.json",

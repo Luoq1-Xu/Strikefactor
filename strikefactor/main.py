@@ -454,10 +454,7 @@ class Game:
         self.key_rebind_error = None   # Last collision, drawn by KeyBindingsPanel
 
         self.hit_outcome_manager = HitOutcomeManager(self.scoreKeeper, self.sound_manager, self.settings_manager)
-        self.ui_manager = UIManager(self.screen, (1280, 720), theme_path=get_path("assets/theme.json"))
-
-        # Set the key binding manager reference in UI manager
-        self.ui_manager.set_key_binding_manager(self.key_binding_manager)
+        self.ui_manager = UIManager(self.screen)
 
         # Three HUDs: Legacy (full bottom bar), Broadcast (4 corners), Minimal (corner widget).
         self.scorebug = Scorebug(self)
@@ -479,7 +476,6 @@ class Game:
 
         # Initialize state variables
         self.swing_started = 0
-        self.speed = 3
         self.menu_state = 0
 
         # State management (must come after menu_state is initialized)
@@ -1099,7 +1095,6 @@ class Game:
     def enter_settings_menu(self):
         """Enter the settings menu."""
         self.menu_state = 'settings'
-        self.ui_manager.set_button_visibility('settings', force_show=True)
         self.state_manager.change_state('menu')
 
     def exit_settings_menu(self):
@@ -1213,13 +1208,11 @@ class Game:
     def enter_key_bindings_menu(self):
         """Enter key bindings configuration menu."""
         self.menu_state = 'key_bindings'
-        self.ui_manager.set_button_visibility('key_bindings', force_show=True)
         self.key_rebind_error = None
 
     def exit_key_bindings_menu(self):
         """Exit key bindings menu back to settings."""
         self.menu_state = 'settings'
-        self.ui_manager.set_button_visibility('settings', force_show=True)
         self.key_rebind_action = None  # Cancel any active rebind
         self.key_rebind_error = None
 

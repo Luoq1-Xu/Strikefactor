@@ -108,7 +108,6 @@ class ModeSelectState(GameState):
     def enter(self):
         """Initialize mode select state."""
         self.game.ui_manager.hide_banner()
-        self.game.ui_manager.set_button_visibility('mode_select')
         # Start with the keyboard cursor on the first mode, so the screen
         # shows what ENTER will do before any key is pressed.
         self._buttons.set(self.buttons())
@@ -124,7 +123,6 @@ class ModeSelectState(GameState):
 
     def handle_event(self, event):
         """Handle mode select events."""
-        self.game.ui_manager.process_events(event)
         if event.type == pygame.QUIT:
             return False
         self._buttons.set(self.buttons())
@@ -207,15 +205,11 @@ class MenuState(GameState):
         self.game.pitch_trajectories = []
         self.game.last_pitch_information = []
 
-        # Set button visibility based on current menu state
         if self.game.menu_state == 'settings':
-            self.game.ui_manager.set_button_visibility('settings')
             self._settings_panel.reset_cursor()
         elif self.game.menu_state == 'key_bindings':
-            self.game.ui_manager.set_button_visibility('key_bindings')
             self._keybinds_panel.reset_cursor()
         else:
-            self.game.ui_manager.set_button_visibility('main_menu')
             # The carousel stays on the last pitcher faced: coming back from
             # an inning, the likeliest next choice is the same one.
             self.select.reset()
@@ -229,7 +223,6 @@ class MenuState(GameState):
 
     def handle_event(self, event):
         """Handle menu events."""
-        self.game.ui_manager.process_events(event)
         if event.type == pygame.QUIT:
             return False
         if self.game.menu_state == 'settings':
@@ -358,7 +351,6 @@ class GameplayState(GameState):
         
     def enter(self):
         """Initialize gameplay state."""
-        self.game.ui_manager.set_button_visibility('in_game')
         self._refresh_display()
         
     def exit(self):
@@ -377,7 +369,6 @@ class GameplayState(GameState):
 
         if self.pitch_simulation and not self.pitch_simulation.running:
             self.pitch_simulation = None
-            self.game.ui_manager.set_button_visibility('in_game')
                 
     def handle_event(self, event):
         """Handle gameplay events."""
@@ -388,7 +379,6 @@ class GameplayState(GameState):
             if event.key == pygame.K_q and not self.pitch_simulation:
                 self._initiate_pitch()
                 
-        self.game.ui_manager.process_events(event)
         return True
         
     def _initiate_pitch(self):
@@ -504,7 +494,7 @@ class SummaryState(GameState):
         if not self.stats_updated:
             self._update_pitcher_stats()
             self.stats_updated = True
-        self.game.ui_manager.set_button_visibility('summary')
+        self.game.ui_manager.hide_banner()
         self.game.scoreKeeper.reset()
         self._buttons.clear_focus()
 
@@ -559,7 +549,6 @@ class SummaryState(GameState):
 
     def handle_event(self, event):
         """Handle summary events."""
-        self.game.ui_manager.process_events(event)
         if event.type == pygame.QUIT:
             return False
         self._buttons.set(self.buttons())
@@ -622,7 +611,6 @@ class VisualizationState(GameState):
         
     def enter(self):
         """Initialize visualization state."""
-        self.game.ui_manager.set_button_visibility('visualise')
         self.current_frame = 0
         self.last_time = pygame.time.get_ticks()
         self.running = True
@@ -655,7 +643,6 @@ class VisualizationState(GameState):
         """Handle visualization events."""
         if event.type == pygame.QUIT:
             return False
-        self.game.ui_manager.process_events(event)
         return True
         
     def render(self, screen):
@@ -762,7 +749,6 @@ class InningEndState(GameState):
 
     def enter(self):
         """Initialize inning end state."""
-        self.game.ui_manager.set_button_visibility('inning_end')
         self._buttons.clear_focus()
 
         # Kick off the celebration sequence on the FIRST entry to inning_end
@@ -837,7 +823,6 @@ class InningEndState(GameState):
 
     def handle_event(self, event):
         """Handle inning end events."""
-        self.game.ui_manager.process_events(event)
         if event.type == pygame.QUIT:
             return False
         if event.type == pygame.KEYDOWN:
@@ -956,7 +941,6 @@ class SandboxMenuState(GameState):
     def enter(self):
         """Initialize sandbox menu state."""
         self.game.ui_manager.hide_banner()
-        self.game.ui_manager.set_button_visibility('sandbox_menu')
         self.select.reset()
 
     def exit(self):
@@ -968,7 +952,6 @@ class SandboxMenuState(GameState):
 
     def handle_event(self, event):
         """Handle sandbox menu events."""
-        self.game.ui_manager.process_events(event)
         if event.type == pygame.QUIT:
             return False
         action = self.select.handle_event(event)
@@ -1043,7 +1026,6 @@ class SandboxGameplayState(GameState):
 
     def enter(self):
         """Initialize sandbox gameplay state."""
-        self.game.ui_manager.set_button_visibility('sandbox_gameplay')
         self._refresh_display()
 
         # Enable all pitches by default if none active or pitcher changed
@@ -1089,7 +1071,10 @@ class SandboxGameplayState(GameState):
 
         if self.pitch_simulation and not self.pitch_simulation.running:
             self.pitch_simulation = None
-            self.game.ui_manager.set_button_visibility('sandbox_gameplay')
+            # Sandbox clears the result once the play is over (Arcade leaves
+            # it up until the next pitch). A call scheduled for the umpire's
+            # voice still arrives after this.
+            self.game.ui_manager.hide_banner()
 
     def handle_event(self, event):
         """Handle sandbox gameplay events."""
@@ -1112,7 +1097,6 @@ class SandboxGameplayState(GameState):
                 else:
                     self.toggle_pitch(name)
 
-        self.game.ui_manager.process_events(event)
         return True
 
     def _initiate_pitch(self):
@@ -1202,7 +1186,6 @@ class GameDayState(GameState):
         except Exception as e:
             self._has_resume = False
             print(f"[gameday] resume-button visibility check failed: {e}")
-        self.game.ui_manager.set_visibility_state('gameday_start')
 
     def exit(self):
         """Clean up gameday state."""
@@ -1214,7 +1197,6 @@ class GameDayState(GameState):
 
     def handle_event(self, event):
         """Handle events - carousel navigation, start, keyboard shortcuts."""
-        self.game.ui_manager.process_events(event)
 
         if event.type == pygame.QUIT:
             return False
@@ -1308,7 +1290,6 @@ class GameDayTransitionState(GameState):
         """Called when entering transition state."""
         # Hide any lingering banner
         self.game.ui_manager.hide_banner()
-        self.game.ui_manager.set_visibility_state('gameday_transition')
         self._buttons.clear_focus()
 
         # Determine what phase we're in
@@ -1409,7 +1390,6 @@ class GameDayTransitionState(GameState):
 
     def handle_event(self, event):
         """Handle events - button clicks for continuing."""
-        self.game.ui_manager.process_events(event)
 
         if event.type == pygame.QUIT:
             return False
@@ -2087,7 +2067,6 @@ class _GameDayListState(GameState):
     SUBTITLE = ""
     EMPTY_TEXT = "NOTHING HERE YET"
     ACTION_LABEL = "OPEN ›"
-    VISIBILITY_STATE = 'gameday_history'
 
     def __init__(self, game):
         super().__init__(game)
@@ -2153,7 +2132,6 @@ class _GameDayListState(GameState):
         self.items = self._load_items()
         self.page = 0
         self._buttons.clear_focus()
-        self.game.ui_manager.set_visibility_state(self.VISIBILITY_STATE)
 
     def exit(self):
         pass
@@ -2181,7 +2159,6 @@ class _GameDayListState(GameState):
 
     # --- events ---
     def handle_event(self, event):
-        self.game.ui_manager.process_events(event)
         if event.type == pygame.QUIT:
             return False
 
@@ -2260,7 +2237,6 @@ class GameDayResumeState(_GameDayListState):
     SUBTITLE = "PICK UP WHERE YOU LEFT OFF"
     EMPTY_TEXT = "NO SAVED GAMES"
     ACTION_LABEL = "RESUME ›"
-    VISIBILITY_STATE = 'gameday_resume'
 
     def _load_items(self):
         from strikefactor.data import gameday_sessions
@@ -2301,7 +2277,6 @@ class GameDayHistoryState(_GameDayListState):
     SUBTITLE = "YOUR COMPLETED GAMES"
     EMPTY_TEXT = "NO GAMES YET"
     ACTION_LABEL = "VIEW ›"
-    VISIBILITY_STATE = 'gameday_history'
 
     # Detail-view layout: the play-by-play panel fills the space between the
     # linescore and the BACK button (which lives at y=640).
@@ -2519,7 +2494,6 @@ class GameDayHistoryState(_GameDayListState):
 
         # Detail view: the play-by-play panel owns scroll/filter input; the
         # only other action is "back" (returns to the list).
-        self.game.ui_manager.process_events(event)
         if event.type == pygame.QUIT:
             return False
         if self._panel().handle_event(event):

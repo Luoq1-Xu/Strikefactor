@@ -357,7 +357,6 @@ class PitchSimulation:
 
     def run(self):
         self.game.ui_manager.hide_banner()
-        self.game.ui_manager.set_button_visibility('pitching')
 
         try:
             while self.running:
@@ -1281,7 +1280,6 @@ class PitchSimulation:
     def _finish_pitch(self):
         """Finish the pitch and clean up."""
         self.running = False
-        self.game.ui_manager.set_button_visibility('in_game')
         from strikefactor.ui.components import create_pci_cursor
         pygame.mouse.set_cursor(create_pci_cursor())
         self.cleanup()

@@ -23,15 +23,8 @@ from strikefactor.settings_manager import DifficultyLevel, SettingsManager
 from strikefactor.ui import gameday_theme as gdt
 from strikefactor.ui import settings_panel as sp
 from strikefactor.ui.settings_panel import KeyBindingsPanel, SettingsPanel
-from strikefactor.ui.ui_manager import UIManager
 
 SCREEN_RECT = pygame.Rect(0, 0, 1280, 720)
-
-
-@pytest.fixture(scope="module")
-def ui():
-    screen = pygame.display.get_surface()
-    return UIManager(screen, screen.get_size())
 
 
 @pytest.fixture
@@ -85,26 +78,25 @@ _RETIRED_BUTTONS = [
 
 
 @pytest.mark.parametrize("name", _RETIRED_BUTTONS)
-def test_the_hardcoded_settings_grid_is_gone(ui, name):
-    assert name not in ui.buttons
+def test_the_hardcoded_settings_grid_is_gone(name):
+    """A setting is a row and a binding is a row. Neither screen has a button
+    per value any more, in the footer or anywhere else."""
+    for panel_cls in (SettingsPanel, KeyBindingsPanel):
+        assert name not in {b.action for b in panel_cls().footer_buttons()}
+    assert name not in MenuState._FOOTER_ACTIONS
+    assert name not in MenuState._SETTINGS_ACTIONS
 
 
-def test_ui_manager_no_longer_pushes_settings_button_text(ui):
-    """The per-widget text updaters went with the widgets."""
+def test_nothing_pushes_text_into_settings_buttons_any_more():
+    """The per-widget text updaters went with the widgets: a row reads its
+    value when it is drawn."""
+    from strikefactor.main import Game
+
     for gone in ('update_settings_button_states', 'show_settings_info',
                  'update_key_binding_buttons', 'show_key_bindings_info'):
-        assert not hasattr(ui, gone)
-
-
-def test_the_settings_button_theme_class_is_gone():
-    """It styled only the retired grid. Left behind it would invite a new
-    button back onto the old, greyer visual track."""
-    import json
-
-    from strikefactor.config import get_path
-    with open(get_path('assets/theme.json')) as f:
-        theme = json.load(f)
-    assert '@settings_button' not in theme
+        assert not hasattr(Game, gone)
+        assert not hasattr(SettingsPanel, gone)
+        assert not hasattr(KeyBindingsPanel, gone)
 
 
 # ── Footer nav is derived, not literal ───────────────────────────────────
@@ -135,13 +127,6 @@ def test_footer_buttons_sit_below_the_rows_and_apart(panel_cls):
     assert all(r.top > sp._FOOTER_DIVIDER_Y for r in rects)
     assert not any(a.colliderect(b) for i, a in enumerate(rects)
                    for b in rects[i + 1:])
-
-
-@pytest.mark.parametrize("panel_cls", [SettingsPanel, KeyBindingsPanel])
-def test_the_footer_is_no_longer_a_widget(ui, panel_cls):
-    """The footer was the last pygame_gui on these screens."""
-    for button in panel_cls().footer_buttons():
-        assert button.action not in ui.buttons
 
 
 @pytest.mark.parametrize("panel_cls", [SettingsPanel, KeyBindingsPanel])

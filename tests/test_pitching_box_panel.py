@@ -214,23 +214,9 @@ def test_live_false_drops_the_on_the_mound_marker(fonts):
 
 # --- The overlay that hosts it -------------------------------------------
 
-class _StubUIManager:
-    """Just enough of UIManager for the overlay's modal handoff."""
-
-    def __init__(self):
-        self.visibility_state = None
-
-    def set_visibility_state(self, state):
-        self.visibility_state = state
-
-    def process_events(self, event):
-        pass
-
-
 class _StubGame:
     def __init__(self, manager):
         self.gameday_manager = manager
-        self.ui_manager = _StubUIManager()
 
 
 def test_the_two_line_per_side_pitching_strip_is_gone():
