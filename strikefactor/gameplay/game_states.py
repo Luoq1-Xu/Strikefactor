@@ -461,9 +461,8 @@ class GameplayState(GameState):
         # Show HOT STREAK indicator in gameday mode
         if (self.game.in_gameday_mode and self.game.gameday_manager
                 and self.game.gameday_manager.is_player_hot()):
-            self.game.ui_manager.draw_completed_message(
-                "HOT STREAK", (550, 10), use_big_font=False
-            )
+            gdt.blit_text(screen, "HOT STREAK", gdt.load_fonts()['title'],
+                          (550, 10), (255, 255, 255))
 
         # ABS challenge prompt while the window is open after a taken pitch
         if self.game._challenge_window_active() and not self.game.abs_overlay.is_active():
@@ -749,8 +748,13 @@ class InningEndState(GameState):
         (630, 672),   # home plate
     ]
 
+    _CONTINUE_RECT = (540, 630, 200, 50)
+
     def __init__(self, game):
         super().__init__(game)
+        # ENTER continues as well as the click. It reaches this state only
+        # when no hotkey is bound to it: bound keys are consumed upstream.
+        self._buttons = ButtonGroup(default='continue_to_summary')
         self._celebration_active = False
         self._celebration_start = 0
         self._banner_swapped = False
@@ -758,9 +762,22 @@ class InningEndState(GameState):
         # Pre-built full-screen flash surface (lazy on first walkoff).
         self._flash_surface = None
 
+    def buttons(self):
+        """CONTINUE, once any walk-off celebration has finished.
+
+        Left out during the celebration so the player can't skip past the
+        banner reveal with a stray click. It is not chrome: the H toggle
+        hides the HUD, never the one way off this screen.
+        """
+        if not self._continue_revealed:
+            return []
+        return [Button('continue_to_summary', "CONTINUE",
+                       pygame.Rect(self._CONTINUE_RECT), style='primary')]
+
     def enter(self):
         """Initialize inning end state."""
         self.game.ui_manager.set_button_visibility('inning_end')
+        self._buttons.clear_focus()
 
         # Kick off the celebration sequence on the FIRST entry to inning_end
         # for a walk-off. Returning here from pitchviz must not re-fire it.
@@ -792,13 +809,8 @@ class InningEndState(GameState):
         self._celebration_active = True
         self._celebration_start = pygame.time.get_ticks()
         self._banner_swapped = False
+        # `buttons()` lists CONTINUE only once this is set again.
         self._continue_revealed = False
-
-        # Hide CONTINUE during the celebration so the player can't skip past
-        # the banner reveal accidentally with a stray click.
-        cont_btn = self.game.ui_manager.buttons.get('continue_to_summary')
-        if cont_btn is not None:
-            cont_btn.hide()
 
         # Lazily build the flash overlay surface at screen size.
         if self._flash_surface is None:
@@ -808,11 +820,6 @@ class InningEndState(GameState):
             )
 
     def _reveal_continue_button(self):
-        if self._continue_revealed:
-            return
-        cont_btn = self.game.ui_manager.buttons.get('continue_to_summary')
-        if cont_btn is not None:
-            cont_btn.show()
         self._continue_revealed = True
 
     def _celebration_t(self) -> int:
@@ -858,6 +865,10 @@ class InningEndState(GameState):
                 self._celebration_start = (
                     pygame.time.get_ticks() - self._CELEBRATION_END - 1
                 )
+                return True
+        self._buttons.set(self.buttons())
+        if self._buttons.handle_event(event) == 'continue_to_summary':
+            self.game.continue_to_summary()
         return True
 
     def render(self, screen):
@@ -881,6 +892,11 @@ class InningEndState(GameState):
             # top so the flash crests during the very first beat.
             self._render_bases_pulse(screen, t)
             self._render_flash_overlay(screen, t)
+
+    def render_overlay(self, screen):
+        """CONTINUE goes above the HUD: it overlaps the legacy scorebug."""
+        self._buttons.set(self.buttons())
+        self._buttons.draw(screen)
 
     # ------------------------------------------------------------------
     # Celebration overlays
@@ -1023,15 +1039,64 @@ class SandboxMenuState(GameState):
 class SandboxGameplayState(GameState):
     """Sandbox gameplay state with user-controlled pitch selection."""
 
+    # ── Left sidebar ─────────────────────────────────────────────────────
+    # The one sidebar in the game: the pitcher switch and the pitch toggles,
+    # which are selections and have no key. Everything else that used to sit
+    # in this column (ZONE, BATTER, REVIEW, SOUND, MENU, EXIT) is a key
+    # binding, so Arcade and GameDay show no buttons at all during play.
+    SIDEBAR_X = 6
+    SIDEBAR_W = 120
+    SIDEBAR_TOP = 188
+    SIDEBAR_STEP = 28          # slot pitch
+    SIDEBAR_H = 26             # drawn height: 2px of air between slots,
+    SIDEBAR_COL_GAP = 4        # so two selected neighbours stay two blocks
+    PITCH_COLUMNS = 2
+
     def __init__(self, game):
         super().__init__(game)
         self.pitch_simulation = None
         self.active_pitches = set()  # Set of toggled-on pitch types
+        self._buttons = ButtonGroup()
+
+    def buttons(self):
+        """The sidebar as specs: one slot per pitcher, a gap, then the
+        current pitcher's arsenal in a grid that grows with it.
+
+        The pitcher on the mound and the pitches switched on are drawn
+        *selected*, which is the whole display of the sandbox's state.
+        """
+        manager = self.game.pitcher_manager
+        current = self.game.current_pitcher
+        out = []
+        for slot, name in enumerate(manager.pitchers):
+            out.append(Button(
+                ('pitcher', name), name.upper(),
+                pygame.Rect(self.SIDEBAR_X,
+                            self.SIDEBAR_TOP + self.SIDEBAR_STEP * slot,
+                            self.SIDEBAR_W, self.SIDEBAR_H),
+                selected=manager.pitchers[name] is current))
+        if current is None:
+            return out
+        first_row = len(manager.pitchers) + 1          # one empty slot between
+        col_w = ((self.SIDEBAR_W - self.SIDEBAR_COL_GAP * (self.PITCH_COLUMNS - 1))
+                 // self.PITCH_COLUMNS)
+        for index, pitch in enumerate(current.get_pitch_names()):
+            row, col = divmod(index, self.PITCH_COLUMNS)
+            out.append(Button(
+                ('pitch', pitch), pitch,
+                pygame.Rect(self.SIDEBAR_X + col * (col_w + self.SIDEBAR_COL_GAP),
+                            self.SIDEBAR_TOP + self.SIDEBAR_STEP * (first_row + row),
+                            col_w, self.SIDEBAR_H),
+                selected=pitch in self.active_pitches))
+        return out
+
+    def _sidebar_shown(self):
+        """H hides the sidebar with the HUD; a hidden button takes no click."""
+        return self.game.key_binding_manager.is_ui_visible()
 
     def enter(self):
         """Initialize sandbox gameplay state."""
         self.game.ui_manager.set_button_visibility('sandbox_gameplay')
-        self._update_pitch_buttons()
         self._refresh_display()
 
         # Enable all pitches by default if none active or pitcher changed
@@ -1039,7 +1104,6 @@ class SandboxGameplayState(GameState):
             pitch_names = self.game.current_pitcher.get_pitch_names()
             if not self.active_pitches or not self.active_pitches.issubset(set(pitch_names)):
                 self.active_pitches = set(pitch_names)
-                self._update_pitch_buttons()
                 self._refresh_display()
 
     def exit(self):
@@ -1050,12 +1114,6 @@ class SandboxGameplayState(GameState):
         """Refresh the game display - scorebug handles stats rendering."""
         self.game.ui_manager.hide_banner()
 
-    def _update_pitch_buttons(self):
-        """Update pitch type buttons for current pitcher."""
-        if self.game.current_pitcher:
-            pitch_names = self.game.current_pitcher.get_pitch_names()
-            self.game.ui_manager.update_sandbox_pitch_buttons(pitch_names, self.active_pitches)
-
     def switch_pitcher(self, pitcher_name: str):
         """Switch to a different pitcher."""
         self.game.pitcher_manager.set_current_pitcher(pitcher_name)
@@ -1064,7 +1122,6 @@ class SandboxGameplayState(GameState):
         pitch_names = self.game.current_pitcher.get_pitch_names()
         self.active_pitches = set(pitch_names) if pitch_names else set()
 
-        self._update_pitch_buttons()
         self._refresh_display()
 
     def toggle_pitch(self, pitch_name: str):
@@ -1076,7 +1133,6 @@ class SandboxGameplayState(GameState):
                     self.active_pitches.discard(pitch_name)
             else:
                 self.active_pitches.add(pitch_name)
-            self._update_pitch_buttons()
             self._refresh_display()
 
     def update(self, time_delta: float):
@@ -1087,7 +1143,6 @@ class SandboxGameplayState(GameState):
         if self.pitch_simulation and not self.pitch_simulation.running:
             self.pitch_simulation = None
             self.game.ui_manager.set_button_visibility('sandbox_gameplay')
-            self._update_pitch_buttons()
 
     def handle_event(self, event):
         """Handle sandbox gameplay events."""
@@ -1097,6 +1152,18 @@ class SandboxGameplayState(GameState):
         if event.type == pygame.KEYDOWN:
             if event.key == pygame.K_q and not self.pitch_simulation:
                 self._initiate_pitch()
+
+        # Mouse only: the keys here belong to the at-bat, so the sidebar
+        # takes no keyboard cursor.
+        if event.type == pygame.MOUSEBUTTONDOWN and self._sidebar_shown():
+            self._buttons.set(self.buttons())
+            action = self._buttons.handle_event(event)
+            if action is not None:
+                kind, name = action
+                if kind == 'pitcher':
+                    self.switch_pitcher(name)
+                else:
+                    self.toggle_pitch(name)
 
         self.game.ui_manager.process_events(event)
         return True
@@ -1145,6 +1212,12 @@ class SandboxGameplayState(GameState):
         # Reuse the gameplay state's prompt drawer for the ABS challenge hint.
         if self.game._challenge_window_active() and not self.game.abs_overlay.is_active():
             GameplayState._draw_abs_challenge_prompt(self, screen)
+
+    def render_overlay(self, screen):
+        """The sidebar goes above the HUD, as the widgets it replaces did."""
+        if self._sidebar_shown():
+            self._buttons.set(self.buttons())
+            self._buttons.draw(screen)
 
 
 class GameDayState(GameState):

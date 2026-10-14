@@ -40,6 +40,48 @@ def _transition(phase):
     return state
 
 
+class _Pitcher:
+    def __init__(self, pitches):
+        self._pitches = list(pitches)
+
+    def get_pitch_names(self):
+        return list(self._pitches)
+
+
+_ROSTER = ('sale', 'degrom', 'yamamoto', 'sasaki', 'mcclanahan')
+
+
+def _sandbox(pitches=('FF', 'SL', 'CH', 'SI'), ui_visible=True):
+    """A Sandbox state on a stub game whose five pitchers share an arsenal."""
+    game = _game()
+    pitchers = {name: _Pitcher(pitches) for name in _ROSTER}
+
+    def set_current_pitcher(name):
+        game.current_pitcher = pitchers[name]
+
+    game.pitcher_manager = SimpleNamespace(
+        pitchers=pitchers, set_current_pitcher=set_current_pitcher)
+    game.current_pitcher = pitchers['sale']
+    game.key_binding_manager = SimpleNamespace(is_ui_visible=lambda: ui_visible)
+    game.ui_manager.set_button_visibility = lambda name: None
+    state = gs.SandboxGameplayState(game)
+    state.active_pitches = set(pitches)
+    return state
+
+
+def _inning_end(revealed=True):
+    game = _game()
+    game.continued = 0
+
+    def continue_to_summary():
+        game.continued += 1
+
+    game.continue_to_summary = continue_to_summary
+    state = gs.InningEndState(game)
+    state._continue_revealed = revealed
+    return state
+
+
 def _list(cls, pages=3, page=1, selected=None):
     state = cls(_game())
     state.items = [object()] * (cls.PAGE_SIZE * pages)
@@ -61,7 +103,15 @@ SCREENS = {
     'gameday_history_list': lambda: _list(gs.GameDayHistoryState).buttons(),
     'gameday_history_detail':
         lambda: _list(gs.GameDayHistoryState, selected={'date': ''}).buttons(),
+    'inning_end': lambda: _inning_end().buttons(),
+    'sandbox_gameplay': lambda: _sandbox().buttons(),
+    'sandbox_gameplay_seven_pitches':
+        lambda: _sandbox(('FF', 'SI', 'FC', 'SL', 'CU', 'CH', 'FS')).buttons(),
 }
+
+# Screens whose buttons sit over the field rather than on a menu page. They
+# are laid out against the play, not the page margins, and leaving is a key.
+_IN_GAME = {'inning_end', 'sandbox_gameplay', 'sandbox_gameplay_seven_pitches'}
 
 
 @pytest.mark.parametrize('screen', SCREENS)
@@ -73,9 +123,14 @@ def test_no_two_buttons_overlap(screen):
 
 
 @pytest.mark.parametrize('screen', SCREENS)
-def test_every_button_is_on_screen_and_inside_the_margins(screen):
+def test_every_button_is_on_screen(screen):
     for button in SCREENS[screen]():
         assert SCREEN_RECT.contains(button.rect), button
+
+
+@pytest.mark.parametrize('screen', sorted(set(SCREENS) - _IN_GAME))
+def test_menu_buttons_stay_inside_the_page_margins(screen):
+    for button in SCREENS[screen]():
         assert button.rect.left >= gdt.MARGIN_X, button
         assert button.rect.right <= gdt.SCREEN_W - gdt.MARGIN_X, button
 
@@ -94,7 +149,7 @@ _BACK_ACTIONS = {'back', 'back_to_main', 'back_from_keybinds', 'gd_list_back',
                  'gameday_main_menu'}
 
 
-@pytest.mark.parametrize('screen', SCREENS)
+@pytest.mark.parametrize('screen', sorted(set(SCREENS) - _IN_GAME))
 def test_the_way_back_is_always_in_the_same_place(screen):
     backs = [b for b in SCREENS[screen]() if b.action in _BACK_ACTIONS]
     for button in backs:
@@ -256,3 +311,119 @@ def test_the_detail_view_has_one_button_and_it_returns_to_the_list():
         pygame.MOUSEBUTTONDOWN, button=1, pos=back.rect.center))
     assert state.selected is None
     assert len(state.buttons()) == 3, "back on the list, with its pager"
+
+
+# ── During play ──────────────────────────────────────────────────────────
+
+def _click(pos):
+    return pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=pos)
+
+
+@pytest.mark.parametrize('state_cls', [gs.GameplayState, gs.VisualizationState])
+def test_gameplay_shows_no_buttons(state_cls):
+    """An in-game action is a key binding, not a widget. If one of these
+    grows buttons, gameplay has a second way to do something a key does."""
+    assert not hasattr(state_cls, 'buttons')
+    assert state_cls.render_overlay is gs.GameState.render_overlay
+
+
+def test_inning_end_keeps_only_continue():
+    assert [b.action for b in _inning_end().buttons()] == ['continue_to_summary']
+
+
+def test_continue_is_withheld_during_the_walk_off_celebration():
+    """A stray click must not skip the banner reveal."""
+    state = _inning_end(revealed=False)
+    assert state.buttons() == []
+    state.handle_event(_click(pygame.Rect(gs.InningEndState._CONTINUE_RECT).center))
+    assert state.game.continued == 0
+
+
+@pytest.mark.parametrize('event', [
+    _click(pygame.Rect(gs.InningEndState._CONTINUE_RECT).center),
+    _key(pygame.K_RETURN),
+])
+def test_a_click_or_enter_continues(event):
+    state = _inning_end()
+    state.handle_event(event)
+    assert state.game.continued == 1
+
+
+def test_q_does_not_continue_or_pitch_at_inning_end():
+    state = _inning_end()
+    state.handle_event(_key(pygame.K_q))
+    assert state.game.continued == 0
+
+
+def test_sandbox_keeps_only_its_selectors():
+    """The pitcher switch and the pitch toggles are selections, not actions:
+    no key does what they do, so they are the one sidebar left."""
+    actions = [b.action for b in _sandbox().buttons()]
+    assert actions
+    assert {kind for kind, _name in actions} == {'pitcher', 'pitch'}
+
+
+def test_the_sidebar_lists_every_pitcher_and_the_whole_arsenal():
+    seven = ('FF', 'SI', 'FC', 'SL', 'CU', 'CH', 'FS')
+    actions = [b.action for b in _sandbox(seven).buttons()]
+    assert [n for kind, n in actions if kind == 'pitcher'] == list(_ROSTER)
+    assert [n for kind, n in actions if kind == 'pitch'] == list(seven), (
+        "the old sidebar had six pitch slots and dropped the seventh")
+
+
+def test_the_sidebar_shows_the_sandbox_state_as_selection():
+    state = _sandbox()
+    state.active_pitches = {'FF', 'CH'}
+    selected = {b.action for b in state.buttons() if b.selected}
+    assert selected == {('pitcher', 'sale'), ('pitch', 'FF'), ('pitch', 'CH')}
+
+
+def test_selected_neighbours_do_not_merge_into_one_block():
+    """Selected is a filled block. Slots that touched would read as one."""
+    rects = [b.rect for b in _sandbox().buttons()]
+    grown = [r.inflate(2, 2) for r in rects]
+    assert not any(a.colliderect(b) for i, a in enumerate(grown)
+                   for b in grown[i + 1:])
+
+
+def test_clicking_the_sidebar_switches_pitcher_and_toggles_pitches():
+    state = _sandbox()
+    rects = {b.action: b.rect for b in state.buttons()}
+
+    state.handle_event(_click(rects[('pitch', 'SL')].center))
+    assert state.active_pitches == {'FF', 'CH', 'SI'}
+    state.handle_event(_click(rects[('pitch', 'SL')].center))
+    assert state.active_pitches == {'FF', 'SL', 'CH', 'SI'}
+
+    state.handle_event(_click(rects[('pitcher', 'degrom')].center))
+    assert state.game.current_pitcher is state.game.pitcher_manager.pitchers['degrom']
+
+
+def test_the_last_active_pitch_cannot_be_switched_off():
+    state = _sandbox(('FF', 'SL'))
+    rects = {b.action: b.rect for b in state.buttons()}
+    state.handle_event(_click(rects[('pitch', 'FF')].center))
+    state.handle_event(_click(rects[('pitch', 'SL')].center))
+    assert state.active_pitches == {'SL'}
+
+
+def test_a_hidden_sidebar_is_not_drawn_and_takes_no_clicks():
+    """H hides the sidebar with the HUD. What cannot be seen must not be
+    clickable, or a swing-side click changes the pitcher."""
+    state = _sandbox(ui_visible=False)
+    rects = {b.action: b.rect for b in state.buttons()}
+    state.handle_event(_click(rects[('pitcher', 'degrom')].center))
+    assert state.game.current_pitcher is state.game.pitcher_manager.pitchers['sale']
+
+    surface = pygame.Surface((gdt.SCREEN_W, gdt.SCREEN_H))
+    state.render_overlay(surface)
+    assert not pygame.surfarray.array3d(surface).any()
+
+    _sandbox(ui_visible=True).render_overlay(surface)
+    assert pygame.surfarray.array3d(surface).any(), "the control case draws"
+
+
+def test_the_sidebar_and_continue_are_drawn_above_the_hud():
+    """They go in `render_overlay`, which the frame draws after the HUD."""
+    assert gs.SandboxGameplayState.render_overlay is not gs.GameState.render_overlay
+    assert gs.InningEndState.render_overlay is not gs.GameState.render_overlay

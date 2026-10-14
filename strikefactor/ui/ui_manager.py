@@ -9,19 +9,6 @@ from strikefactor.ui.banner import OutcomeBanner
 
 
 class UIManager:
-    # ── Left sidebar layout ──────────────────────────────────────────────
-    # Only Sandbox has a sidebar: the pitcher switch and the pitch toggles,
-    # which are selections and have no key. Everything else that used to sit
-    # in this column (ZONE, BATTER, REVIEW, SOUND, MENU, EXIT) is a key
-    # binding, so gameplay itself shows no buttons at all.
-    SIDEBAR_X = 6
-    SIDEBAR_W = 120
-    SIDEBAR_H = 28
-    SIDEBAR_TOP = 188
-    SIDEBAR_STEP = 28
-
-    # Sandbox column slots: 0-4 pitchers, 6-8 pitch toggles.
-
     def __init__(self, screen, screen_size, theme_path=None):
         self.screen = screen
         self.manager = self._create_ui_manager(screen_size, theme_path)
@@ -68,11 +55,6 @@ class UIManager:
     
     def _create_game_buttons(self, manager):
         """Creates and returns a dictionary of in-game UI buttons."""
-        sandbox_x = self.SIDEBAR_X
-        sandbox_w = self.SIDEBAR_W
-        sandbox_h = self.SIDEBAR_H
-        sandbox_top = self.SIDEBAR_TOP
-        sandbox_step = self.SIDEBAR_STEP
         buttons = {
             # Pitcher selection buttons for main  menu
             'sale': pygame_gui.elements.UIButton(
@@ -110,12 +92,6 @@ class UIManager:
             'back_to_main_menu': pygame_gui.elements.UIButton(
                 relative_rect=pygame.Rect((540, 600), (200, 50)),
                 text='MAIN MENU', manager=manager),
-                
-            # Button for inning end screen
-            'continue_to_summary': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((540, 630), (200, 50)),
-                text='CONTINUE', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button_primary')),
 
             # Settings entry point (lives on the mode-select screen)
             'settings': pygame_gui.elements.UIButton(
@@ -160,52 +136,8 @@ class UIManager:
                 object_id=ObjectID(class_id='@pitcher_button')),
 
             # Sandbox gameplay - Pitcher switch buttons (left sidebar, broadcast style)
-            'sandbox_pitcher_sale': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x, sandbox_top), (sandbox_w, sandbox_h)),
-                text='SALE', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'sandbox_pitcher_degrom': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 1), (sandbox_w, sandbox_h)),
-                text='DEGROM', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'sandbox_pitcher_sasaki': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 2), (sandbox_w, sandbox_h)),
-                text='SASAKI', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'sandbox_pitcher_yamamoto': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 3), (sandbox_w, sandbox_h)),
-                text='YAMAMOTO', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'sandbox_pitcher_mcclanahan': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 4), (sandbox_w, sandbox_h)),
-                text='MCCLANAHAN', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
 
             # Sandbox gameplay - Pitch toggle buttons (left sidebar, 2-column broadcast style)
-            'sandbox_pitch_1': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 6), (58, sandbox_h)),
-                text='', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'sandbox_pitch_2': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x + 62, sandbox_top + sandbox_step * 6), (58, sandbox_h)),
-                text='', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'sandbox_pitch_3': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 7), (58, sandbox_h)),
-                text='', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'sandbox_pitch_4': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x + 62, sandbox_top + sandbox_step * 7), (58, sandbox_h)),
-                text='', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'sandbox_pitch_5': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x, sandbox_top + sandbox_step * 8), (58, sandbox_h)),
-                text='', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
-            'sandbox_pitch_6': pygame_gui.elements.UIButton(
-                relative_rect=pygame.Rect((sandbox_x + 62, sandbox_top + sandbox_step * 8), (58, sandbox_h)),
-                text='', manager=manager,
-                object_id=ObjectID(class_id='@broadcast_button')),
         }
         return buttons
 
@@ -264,38 +196,6 @@ class UIManager:
         self.manager.draw_ui(self.screen)
         self.banner.draw()
 
-    def update_sandbox_pitch_buttons(self, pitch_names: list, active_pitches: set = None):
-        """Update sandbox pitch type buttons based on current pitcher's arsenal.
-
-        Args:
-            pitch_names: List of available pitch type names (e.g., ['FF', 'SL', 'CH'])
-            active_pitches: Set of currently active/toggled-on pitch types
-        """
-        if active_pitches is None:
-            active_pitches = set()
-
-        pitch_buttons = ['sandbox_pitch_1', 'sandbox_pitch_2', 'sandbox_pitch_3',
-                         'sandbox_pitch_4', 'sandbox_pitch_5', 'sandbox_pitch_6']
-
-        # Hide all pitch buttons first
-        for btn_key in pitch_buttons:
-            self.buttons[btn_key].hide()
-
-        # Show and configure buttons for available pitches
-        if len(pitch_names) > len(pitch_buttons):
-            print(f"Warning: pitcher has {len(pitch_names)} pitches but only "
-                  f"{len(pitch_buttons)} Sandbox buttons; "
-                  f"{pitch_names[len(pitch_buttons):]} will be unselectable.")
-        for i, pitch_name in enumerate(pitch_names):
-            if i < len(pitch_buttons):
-                btn = self.buttons[pitch_buttons[i]]
-                # Add indicator for active pitches
-                if pitch_name in active_pitches:
-                    btn.set_text(f"[{pitch_name}]")
-                else:
-                    btn.set_text(pitch_name)
-                btn.show()
-
     def hide_banner(self):
         self.banner.hide_banner()
 
@@ -347,9 +247,6 @@ class UIManager:
         elif state == 'summary':
             self.buttons['back_to_main_menu'].show()
             self.banner.hide_banner()
-        elif state == 'inning_end':
-            # Continue button always shown so the player can advance.
-            self.buttons['continue_to_summary'].show()
         elif state in ('settings', 'key_bindings'):
             # These screens own their buttons now; all that is left to do
             # here is what the branch always did besides showing them.
@@ -370,14 +267,6 @@ class UIManager:
             self.buttons['back_to_mode_select'].show()
             self.banner.hide_banner()
         elif state == 'sandbox_gameplay':
-            # Sandbox gameplay - broadcast-style left sidebar
-            # Pitcher switch buttons
-            self.buttons['sandbox_pitcher_sale'].show()
-            self.buttons['sandbox_pitcher_degrom'].show()
-            self.buttons['sandbox_pitcher_sasaki'].show()
-            self.buttons['sandbox_pitcher_yamamoto'].show()
-            self.buttons['sandbox_pitcher_mcclanahan'].show()
-            # Pitch buttons shown via update_sandbox_pitch_buttons()
             self.banner.hide_banner()
 
     def draw_typing_effect(self, message, counter, speed, position, use_big_font=False):

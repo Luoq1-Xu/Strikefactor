@@ -512,26 +512,10 @@ class Game:
         self.ui_manager.register_button_callback('sandbox_menu_yamamoto', lambda: self._enter_sandbox_gameplay('yamamoto'))
         self.ui_manager.register_button_callback('sandbox_menu_mcclanahan', lambda: self._enter_sandbox_gameplay('mcclanahan'))
 
-        # Sandbox gameplay callbacks - pitcher switching
-        self.ui_manager.register_button_callback('sandbox_pitcher_sale', lambda: self._sandbox_switch_pitcher('sale'))
-        self.ui_manager.register_button_callback('sandbox_pitcher_degrom', lambda: self._sandbox_switch_pitcher('degrom'))
-        self.ui_manager.register_button_callback('sandbox_pitcher_sasaki', lambda: self._sandbox_switch_pitcher('sasaki'))
-        self.ui_manager.register_button_callback('sandbox_pitcher_yamamoto', lambda: self._sandbox_switch_pitcher('yamamoto'))
-        self.ui_manager.register_button_callback('sandbox_pitcher_mcclanahan', lambda: self._sandbox_switch_pitcher('mcclanahan'))
-
-        # Sandbox mode callbacks - pitch type selection
-        self.ui_manager.register_button_callback('sandbox_pitch_1', lambda: self._sandbox_select_pitch(0))
-        self.ui_manager.register_button_callback('sandbox_pitch_2', lambda: self._sandbox_select_pitch(1))
-        self.ui_manager.register_button_callback('sandbox_pitch_3', lambda: self._sandbox_select_pitch(2))
-        self.ui_manager.register_button_callback('sandbox_pitch_4', lambda: self._sandbox_select_pitch(3))
-        self.ui_manager.register_button_callback('sandbox_pitch_5', lambda: self._sandbox_select_pitch(4))
-        self.ui_manager.register_button_callback('sandbox_pitch_6', lambda: self._sandbox_select_pitch(5))
-
         # Navigation callbacks. In-game actions (strike zone, batter, sound,
         # review, menu) have no buttons; _setup_key_binding_callbacks wires
         # them to keys.
         self.ui_manager.register_button_callback('back_to_main_menu', lambda: self.set_menu_state(0))
-        self.ui_manager.register_button_callback('continue_to_summary', lambda: self.continue_to_summary())
 
         # Settings + key-binding screens. Only the footer nav is a widget —
         # the difficulty chips and the setting/binding rows are drawn and
@@ -1040,20 +1024,6 @@ class Game:
         self.current_gamemode = 'sandbox_gameplay'
         self.state_manager.change_state('sandbox_gameplay')
 
-    def _sandbox_switch_pitcher(self, pitcher_name: str):
-        """Switch pitcher in sandbox mode."""
-        if self.state_manager.is_current_state('sandbox_gameplay'):
-            state = self.state_manager.get_current_state()
-            state.switch_pitcher(pitcher_name)
-
-    def _sandbox_select_pitch(self, pitch_index: int):
-        """Toggle pitch type in sandbox mode by button index."""
-        if self.state_manager.is_current_state('sandbox_gameplay'):
-            state = self.state_manager.get_current_state()
-            pitch_names = self.current_pitcher.get_pitch_names()
-            if pitch_index < len(pitch_names):
-                state.toggle_pitch(pitch_names[pitch_index])
-
     def _teardown_active_session(self):
         """Persist and clear everything tied to the session being left.
 
@@ -1299,44 +1269,17 @@ class Game:
         self.key_rebind_error = None
 
     def toggle_ui_visibility(self):
-        """Toggle UI visibility using key binding."""
-        current_visibility = self.key_binding_manager.is_ui_visible()
-        new_visibility = not current_visibility
-        self.key_binding_manager.set_ui_visibility(new_visibility)
+        """H: hide or show the HUD and Sandbox's sidebar.
 
-        # Toggle every HUD's visibility in sync with the global UI toggle.
+        The HUDs carry their own flag; the sidebar reads the key binding
+        manager's when it draws. Nothing else is chrome: menus and the
+        inning-end CONTINUE are not affected.
+        """
+        new_visibility = not self.key_binding_manager.is_ui_visible()
+        self.key_binding_manager.set_ui_visibility(new_visibility)
         self.scorebug.visible = new_visibility
         self.broadcast_hud.visible = new_visibility
         self.minimal_hud.visible = new_visibility
-
-        if new_visibility:
-            # Determine current state
-            current_state = 'main_menu'  # default
-            if hasattr(self, 'state_manager') and self.state_manager.current_state:
-                if self.state_manager.current_state.__class__.__name__ == 'GameplayState':
-                    current_state = 'in_game'
-                elif self.state_manager.current_state.__class__.__name__ == 'SandboxGameplayState':
-                    current_state = 'sandbox_gameplay'
-                elif self.state_manager.current_state.__class__.__name__ == 'MenuState':
-                    if hasattr(self, 'menu_state'):
-                        if self.menu_state == 'settings':
-                            current_state = 'settings'
-                        elif self.menu_state == 'key_bindings':
-                            current_state = 'key_bindings'
-                        else:
-                            current_state = 'main_menu'
-                elif self.state_manager.current_state.__class__.__name__ == 'SummaryState':
-                    current_state = 'summary'
-                elif self.state_manager.current_state.__class__.__name__ == 'VisualizationState':
-                    current_state = 'visualise'
-                elif self.state_manager.current_state.__class__.__name__ == 'InningEndState':
-                    current_state = 'inning_end'
-
-            # Show UI based on current state
-            self.ui_manager.set_ui_visibility(True, current_state)
-        else:
-            # Hide all UI
-            self.ui_manager.set_ui_visibility(False)
 
     def quick_pitch(self):
         """Quick pitch action via key binding (Arcade/GameDay + Sandbox)."""

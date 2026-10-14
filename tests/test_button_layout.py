@@ -63,15 +63,6 @@ def test_no_visible_buttons_overlap(ui, state):
     assert not clashes, f"overlapping buttons in '{state}': {clashes}"
 
 
-def test_sandbox_pitch_buttons_do_not_overlap_sidebar(ui):
-    """The pitch toggles are shown separately from set_button_visibility."""
-    ui.set_button_visibility('sandbox_gameplay', force_show=True)
-    ui.update_sandbox_pitch_buttons(
-        ['FASTBALL', 'SLIDER', 'CHANGEUP', 'CURVE', 'SPLITTER', 'CUTTER'])
-    clashes = _overlaps(_visible_rects(ui))
-    assert not clashes, f"overlapping buttons in sandbox gameplay: {clashes}"
-
-
 # ── Gameplay has no buttons ──────────────────────────────────────────────
 
 # The in-game sidebar. Each of these duplicated a key binding (Z, B, V, M,
@@ -100,19 +91,3 @@ def test_the_scouting_and_lap_panels_are_gone(ui):
     for gone in ('scouting_panel', 'lap_log_panel', 'toggle_scouting_panel',
                  'toggle_lap_log_panel'):
         assert not hasattr(ui, gone)
-
-
-def test_inning_end_keeps_only_continue(ui):
-    ui.set_button_visibility('inning_end', force_show=True)
-    assert set(_visible_rects(ui)) == {'continue_to_summary'}
-
-
-def test_sandbox_keeps_only_its_selectors(ui):
-    """The pitcher switch and the pitch toggles are selections, not actions:
-    no key does what they do, so they are the one sidebar left."""
-    ui.set_button_visibility('sandbox_gameplay', force_show=True)
-    ui.update_sandbox_pitch_buttons(['FF', 'SL', 'CH'])
-    visible = set(_visible_rects(ui))
-    assert visible
-    assert all(name.startswith(('sandbox_pitcher_', 'sandbox_pitch_'))
-               for name in visible)
