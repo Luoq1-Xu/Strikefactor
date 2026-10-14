@@ -258,7 +258,7 @@ def test_early_continue_input_records_and_finalizes_once(monkeypatch, event, mar
     game = anim.game
     game.screen = pygame.Surface((1280, 720))
     game.last_fielding_play = None
-    game.ui_manager = SimpleNamespace(update=lambda dt: None, draw=lambda: None)
+    game.banner = SimpleNamespace(update=lambda dt: None, draw=lambda: None)
     game.flip_display = lambda: None
     game.key_binding_manager = SimpleNamespace(get_key_for_action=lambda action: None)
     sim = object.__new__(PitchSimulation)

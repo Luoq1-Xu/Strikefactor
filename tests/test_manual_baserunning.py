@@ -337,7 +337,7 @@ def _simulation(anim, calls):
     game = anim.game
     game.screen = pygame.Surface((1280, 720))
     game._fielding_play_number = 0
-    game.ui_manager = SimpleNamespace(update=lambda dt: None, draw=lambda: None)
+    game.banner = SimpleNamespace(update=lambda dt: None, draw=lambda: None)
     game.flip_display = lambda: None
     game.key_binding_manager = KeyBindingManager(None)
     sim = object.__new__(PitchSimulation)
@@ -436,7 +436,7 @@ def test_manual_finalization_preserves_hit_credit_outs_and_control_metadata(infi
     game = SimpleNamespace(currentouts=0, hits=0, last_pitch_information=[], ball=(640, 400),
         in_gameday_mode=False, scoreKeeper=keeper, hit_outcome_manager=manager,
         field_renderer=SimpleNamespace(record_at_bat=lambda: None, record_hit=lambda *a, **k: None),
-        ui_manager=SimpleNamespace(show_banner=lambda text: None))
+        banner=SimpleNamespace(show_banner=lambda text: None))
     sim = object.__new__(PitchSimulation)
     sim.game, sim.hit_animation, sim.new_entry = game, anim, {}
     sim._finalize_batted_ball()

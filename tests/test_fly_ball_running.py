@@ -169,7 +169,7 @@ def test_home_run_banner_at_the_fence_keeps_scoring_and_publication_once(monkeyp
     calls = []
     game = SimpleNamespace(batter=SimpleNamespace(get_handedness=lambda: "R"),
         screen=pygame.Surface((1280, 720)), _fielding_play_number=0, last_fielding_play=None,
-        ui_manager=SimpleNamespace(update=lambda dt: None, draw=lambda: None), flip_display=lambda: None,
+        banner=SimpleNamespace(update=lambda dt: None, draw=lambda: None), flip_display=lambda: None,
         key_binding_manager=SimpleNamespace(get_key_for_action=lambda key: pygame.K_f
             if key == KeyAction.FIELDING_REPLAY else None),
         request_fielding_replay=lambda **kw: calls.append("review"))

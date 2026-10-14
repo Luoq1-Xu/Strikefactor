@@ -69,7 +69,7 @@ def run_modal(game, overlay, *, simulation=None, background=False):
         for attr in ('last_time', '_celebration_start'):
             if getattr(state, attr, None) is not None:
                 setattr(state, attr, getattr(state, attr) + paused_ms)
-        pending = getattr(getattr(game, 'ui_manager', None), '_pending_banner', None)
+        pending = getattr(getattr(game, 'banner', None), '_pending_banner', None)
         if pending is not None:
             pending['show_time'] += paused_ms
         game.clock.tick()

@@ -31,6 +31,7 @@ from strikefactor.pitchers.Yamamoto import Yamamoto
 from strikefactor.settings_manager import SettingsManager
 from strikefactor.ui import pointer
 from strikefactor.ui.abs_challenge_overlay import ABSChallengeOverlay
+from strikefactor.ui.banner import OutcomeBanner
 from strikefactor.ui.broadcast_hud import BroadcastHUD
 
 # Import game components
@@ -40,7 +41,6 @@ from strikefactor.ui.review_modal import can_review, run_modal
 from strikefactor.ui.review_overlay import ReviewOverlay, view_for_key
 from strikefactor.ui.scorebug import Scorebug
 from strikefactor.ui.swing_replay_overlay import SwingReplayOverlay
-from strikefactor.ui.ui_manager import UIManager
 from strikefactor.utils.pitch_physics import DEFAULT_CAMERA
 
 
@@ -454,7 +454,7 @@ class Game:
         self.key_rebind_error = None   # Last collision, drawn by KeyBindingsPanel
 
         self.hit_outcome_manager = HitOutcomeManager(self.scoreKeeper, self.sound_manager, self.settings_manager)
-        self.ui_manager = UIManager(self.screen)
+        self.banner = OutcomeBanner(self.screen)
 
         # Three HUDs: Legacy (full bottom bar), Broadcast (4 corners), Minimal (corner widget).
         self.scorebug = Scorebug(self)
@@ -1100,7 +1100,7 @@ class Game:
     def exit_settings_menu(self):
         """Exit settings menu and return to the mode-select screen."""
         self.menu_state = 'mode_select'
-        self.ui_manager.hide_banner()
+        self.banner.hide_banner()
         self.state_manager.change_state('mode_select')
 
     def set_difficulty(self, difficulty_level):
@@ -1387,9 +1387,8 @@ class Game:
             self.field_renderer.hit_records = self.field_renderer.hit_records[:fr['hit_records_len']]
 
         # Cancel scheduled side effects from the original (now-undone) call.
-        if hasattr(self.ui_manager, '_pending_banner'):
-            self.ui_manager._pending_banner = None
-        self.ui_manager.hide_banner()
+        self.banner._pending_banner = None
+        self.banner.hide_banner()
         if hasattr(self.sound_manager, 'pending_sounds'):
             self.sound_manager.pending_sounds = []
 
@@ -1413,7 +1412,7 @@ class Game:
             self.scoreKeeper.update_walk_event(outs=self.currentouts)
             runs_scored = self.scoreKeeper.get_score() - score_before
             self._display_pitch_results("WALK", pitchtype, speed_mph)
-            self.ui_manager.schedule_banner("WALK", delay=450)
+            self.banner.schedule_banner("WALK", delay=450)
             if self.in_gameday_mode and self.gameday_manager is not None:
                 self.gameday_manager.record_player_at_bat(
                     'WALK', runs_scored=runs_scored, pitches_thrown=self.pitchnumber,
@@ -1447,7 +1446,7 @@ class Game:
             self.currentouts += 1
             self.field_renderer.record_at_bat()
             self._display_pitch_results(label, pitchtype, speed_mph)
-            self.ui_manager.schedule_banner("STRIKEOUT", delay=450)
+            self.banner.schedule_banner("STRIKEOUT", delay=450)
             if self.in_gameday_mode and self.gameday_manager is not None:
                 self.gameday_manager.record_player_at_bat(
                     'STRIKEOUT', runs_scored=0, pitches_thrown=self.pitchnumber
@@ -1464,7 +1463,7 @@ class Game:
                 and self.gameday_manager.check_walkoff()):
             # check_walkoff() already commits the walk-off half-inning's runs to
             # player_inning_scores; don't append them a second time.
-            self.ui_manager.show_banner("WALK-OFF WIN!", typing_speed=0.05)
+            self.banner.show_banner("WALK-OFF WIN!", typing_speed=0.05)
             self.inning_ended = True
             self.menu_state = 'inning_end'
             self.state_manager.change_state('inning_end')
@@ -1605,7 +1604,7 @@ class Game:
             self._draw_active_hud(screen)
             self.abs_overlay.update(int(time_delta * 1000))
             self.abs_overlay.render(screen)
-            self.ui_manager.draw()
+            self.banner.draw()
             self.flip_display()
 
             for event in pygame.event.get():
@@ -1850,7 +1849,7 @@ class Game:
             
             # Update current state
             self.state_manager.update(time_delta)
-            self.ui_manager.update(time_delta)
+            self.banner.update(time_delta)
             
             self._render_frame()
 
@@ -1871,7 +1870,7 @@ class Game:
         # Draw whichever HUD the user has selected.
         self._draw_active_hud(self.screen)
         self.state_manager.render_overlay(self.screen)
-        self.ui_manager.draw()
+        self.banner.draw()
 
     def cleanup(self):
         """Clean up resources."""

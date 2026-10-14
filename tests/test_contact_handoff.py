@@ -55,7 +55,7 @@ def _sim(hand, contact, on_time):
             get_difficulty_multipliers=lambda: {"out_probability_modifier": 1.0}),
         field_renderer=SimpleNamespace(record_at_bat=lambda: None,
                                        record_hit=lambda *a, **k: None),
-        ui_manager=SimpleNamespace(show_banner=shown.append),
+        banner=SimpleNamespace(show_banner=shown.append),
         _display_pitch_results=lambda *a: shown.append(a[0]),
         ball=[630.0, 480.0], fourseamballsize=9, last_pitch_information=[],
         strikes=0, pitchnumber=0, currentstrikes=0, currentballs=0,

@@ -506,7 +506,7 @@ def _finalize(classified, sk, outs=0, **anim):
         field_renderer=SimpleNamespace(record_hit=count("hits"),
                                        record_at_bat=count("at_bats"),
                                        record_sacrifice_fly=count("sacrifice_flies")),
-        ui_manager=SimpleNamespace(show_banner=lambda text: None),
+        banner=SimpleNamespace(show_banner=lambda text: None),
         counts=counts,
     )
     sim = object.__new__(PitchSimulation)

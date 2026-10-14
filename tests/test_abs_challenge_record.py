@@ -297,7 +297,7 @@ def test_an_overturn_keeps_what_the_finished_pitch_recorded_about_itself():
         gameday_manager=None,
         field_renderer=SimpleNamespace(total_pitches=41, total_at_bats=9,
                                        total_walks=1, hit_records=[]),
-        ui_manager=SimpleNamespace(hide_banner=lambda: None),
+        banner=SimpleNamespace(hide_banner=lambda: None),
         sound_manager=SimpleNamespace(pending_sounds=["ball"]),
     )
     snap = {"game_stats": copy.deepcopy(at_call), "scoreKeeper": ScoreKeeper(),
@@ -352,7 +352,7 @@ def test_finalizing_a_ball_that_got_through_carries_its_base_race():
                                            apply_running_result=lambda *a, **k: Play()),
         field_renderer=SimpleNamespace(record_hit=lambda *a, **k: None,
                                        record_at_bat=lambda: None),
-        ui_manager=SimpleNamespace(show_banner=lambda text: None),
+        banner=SimpleNamespace(show_banner=lambda text: None),
     )
     sim = object.__new__(PitchSimulation)
     sim.game, sim.hit_animation, sim.new_entry = game, anim, {}

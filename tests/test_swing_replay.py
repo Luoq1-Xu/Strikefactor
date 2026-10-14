@@ -1291,7 +1291,7 @@ class _StubOverlay:
         self._left = 0
 
 
-class _StubUIManager:
+class _StubBanner:
     def __init__(self):
         self.draws = 0
 
@@ -1309,7 +1309,7 @@ class _StubReplayGame:
         self.screen = pygame.Surface(SCREEN)
         self.state_manager = type("_SM", (), {"current_state": None})()
         self.swing_replay_overlay = _StubOverlay()
-        self.ui_manager = _StubUIManager()
+        self.banner = _StubBanner()
         self.huds = 0
         self.flips = 0
 
@@ -1320,17 +1320,16 @@ class _StubReplayGame:
         self.flips += 1
 
 
-def test_the_replay_loop_draws_no_gui_over_the_panel():
-    """pygame_gui draws over everything, so the sidebar buttons used to sit on
-    top of the replay panel at full brightness — the field and the HUD are
-    dimmed by the overlay's scrim, but anything drawn after it is not. The
-    loop simply does not draw the gui while the overlay is up; the buttons'
-    own shown/hidden state is untouched, so the main loop restores them."""
+def test_the_replay_loop_draws_nothing_over_the_panel():
+    """The field and the HUD are dimmed by the overlay's scrim, but anything
+    drawn after it is not, so the loop draws nothing after it: no banner and
+    no state overlay (Sandbox's sidebar, inning end's CONTINUE). Those belong
+    to the main loop's frame, which draws them again when the replay closes."""
     g = _StubReplayGame()
     g._run_swing_replay_loop()
     assert g.swing_replay_overlay.rendered == 3
     assert g.huds == 3, "the HUD is still drawn — it is behind the scrim"
-    assert g.ui_manager.draws == 0
+    assert g.banner.draws == 0
 
 
 class _AnimStubGame:

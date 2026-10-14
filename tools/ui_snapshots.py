@@ -41,7 +41,7 @@ def _settle(game, seconds):
     end = time.monotonic() + seconds
     while True:
         game.state_manager.update(1 / 60)
-        game.ui_manager.update(1 / 60)
+        game.banner.update(1 / 60)
         if time.monotonic() >= end:
             return
         time.sleep(0.002)
@@ -61,18 +61,18 @@ def _end_half_inning(game):
 
 def _banner(text, letters):
     def setup(game):
-        game.ui_manager.hide_banner()
-        game.ui_manager.show_banner(text)
+        game.banner.hide_banner()
+        game.banner.show_banner(text)
         # One letter per update at most, however long the update: the banner
         # types through a stall rather than jumping to the end of the word.
         for _ in range(min(letters, len(text))):
-            game.ui_manager.update(0.11)
+            game.banner.update(0.11)
     return setup
 
 
 def _hud(mode):
     def setup(game):
-        game.ui_manager.hide_banner()
+        game.banner.hide_banner()
         while game.settings_manager.get_hud_mode() != mode:
             game.toggle_hud_mode()
     return setup

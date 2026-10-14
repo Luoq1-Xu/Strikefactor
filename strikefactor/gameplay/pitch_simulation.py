@@ -356,7 +356,7 @@ class PitchSimulation:
         self.engine_fps = self.game.settings_manager.get_engine_fps()
 
     def run(self):
-        self.game.ui_manager.hide_banner()
+        self.game.banner.hide_banner()
 
         try:
             while self.running:
@@ -380,8 +380,8 @@ class PitchSimulation:
             self._handle_hit_animation_phase(current_time, time_delta)
             return
 
-        self.game.ui_manager.draw()
-        self.game.ui_manager.update(time_delta)
+        self.game.banner.draw()
+        self.game.banner.update(time_delta)
 
         self.game.current_pitcher.draw_pitcher(self.starttime, current_time)
 
@@ -1027,7 +1027,7 @@ class PitchSimulation:
             display += f" · TO {where} ON THROW"
         if running_outs:
             display += " · OUT ADVANCING"
-        self.game.ui_manager.show_banner(display)
+        self.game.banner.show_banner(display)
 
     def _check_walkoff(self):
         """Check for walk-off win and flag a deferred game-end transition.
@@ -1161,7 +1161,7 @@ class PitchSimulation:
             # ABS turned off there's no window, so keep the original sync.
             abs_enabled = self.game.settings_manager.get_setting("abs_enabled")
             walk_delay = CHALLENGE_WINDOW_MS + 50 if abs_enabled else 450
-            self.game.ui_manager.schedule_banner("WALK", delay=walk_delay)
+            self.game.banner.schedule_banner("WALK", delay=walk_delay)
 
             # Record in gameday mode
             if self.game.in_gameday_mode:
@@ -1218,7 +1218,7 @@ class PitchSimulation:
             abs_enabled = self.game.settings_manager.get_setting("abs_enabled")
             defer = is_taken and abs_enabled
             banner_delay = CHALLENGE_WINDOW_MS + 50 if defer else 450
-            self.game.ui_manager.schedule_banner("STRIKEOUT", delay=banner_delay)
+            self.game.banner.schedule_banner("STRIKEOUT", delay=banner_delay)
 
             # Record in gameday mode
             if self.game.in_gameday_mode:
@@ -1305,7 +1305,7 @@ class PitchSimulation:
             on_complete = self._finalize_batted_ball
         else:
             def on_complete():
-                self.game.ui_manager.show_banner(
+                self.game.banner.show_banner(
                     self._format_display_outcome(banner_text)
                 )
 
@@ -1402,7 +1402,7 @@ class PitchSimulation:
 
         def on_complete():
             self.game._display_pitch_results("FOUL", self.pitchtype, self.speed_mph)
-            self.game.ui_manager.show_banner("FOUL BALL")
+            self.game.banner.show_banner("FOUL BALL")
 
         # Replicate the trail entry the non-animated foul path writes via
         # _update_pitch_trajectory (pitch_results_done + is_strike -> red
@@ -1487,8 +1487,8 @@ class PitchSimulation:
 
         self._complete_hit_animation()
 
-        self.game.ui_manager.update(time_delta)
-        self.game.ui_manager.draw()
+        self.game.banner.update(time_delta)
+        self.game.banner.draw()
         self.game.flip_display()
 
         for event in deferred:

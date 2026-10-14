@@ -23,7 +23,7 @@ SCREEN_RECT = pygame.Rect(0, 0, gdt.SCREEN_W, gdt.SCREEN_H)
 def _game():
     return SimpleNamespace(
         pitcher_manager=None,
-        ui_manager=SimpleNamespace(hide_banner=lambda: None))
+        banner=SimpleNamespace(hide_banner=lambda: None))
 
 
 def _gameday_setup(resume):
@@ -170,7 +170,7 @@ class _RecordingGame:
     def __init__(self):
         self.calls = []
         self.pitcher_manager = None
-        self.ui_manager = _game().ui_manager
+        self.banner = _game().banner
 
     def __getattr__(self, name):
         def method(*args):

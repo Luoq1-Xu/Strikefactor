@@ -183,7 +183,7 @@ def test_single_on_throw_finalizes_as_a_single_while_persisting_second_base():
         in_gameday_mode=False, scoreKeeper=sk, hit_outcome_manager=manager,
         field_renderer=SimpleNamespace(record_at_bat=lambda: None,
                                        record_hit=lambda *a, **kw: hits.append(kw["hit_type"])),
-        ui_manager=SimpleNamespace(show_banner=banners.append))
+        banner=SimpleNamespace(show_banner=banners.append))
     sim = object.__new__(PitchSimulation)
     sim.game, sim.hit_animation, sim.new_entry = game, anim, {}
     sim._finalize_batted_ball()

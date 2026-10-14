@@ -381,7 +381,7 @@ def test_deferred_finalization_keeps_hit_out_stats_and_persisted_result_together
         in_gameday_mode=True, scoreKeeper=sk, hit_outcome_manager=manager, gameday_manager=gm,
         field_renderer=SimpleNamespace(record_hit=lambda *a, **k: calls.append(k["hit_type"]),
                                        record_at_bat=lambda: calls.append("AB")),
-        ui_manager=SimpleNamespace(show_banner=lambda text: calls.append(text)))
+        banner=SimpleNamespace(show_banner=lambda text: calls.append(text)))
     sim = object.__new__(PitchSimulation)
     sim.game, sim.hit_animation, sim.new_entry = game, anim, {}
     sim._check_walkoff = lambda: None

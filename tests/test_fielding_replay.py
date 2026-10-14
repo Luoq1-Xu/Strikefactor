@@ -154,7 +154,7 @@ def _continue_screen(monkeypatch, event):
     game.screen = pygame.Surface((1280, 720))
     game._fielding_play_number = 0
     game.last_fielding_play = None
-    game.ui_manager = SimpleNamespace(update=lambda dt: None, draw=lambda: None)
+    game.banner = SimpleNamespace(update=lambda dt: None, draw=lambda: None)
     game.flip_display = lambda: None
     game.request_fielding_replay = lambda **kw: calls.append("replay")
     game._window_to_internal = lambda x, y: (x, y)
@@ -260,7 +260,7 @@ def test_the_cursor_is_hidden_over_the_play_and_back_when_the_pitch_ends(monkeyp
     game.screen = pygame.Surface((1280, 720))
     game._fielding_play_number = 0
     game.last_fielding_play = None
-    game.ui_manager = SimpleNamespace(update=lambda dt: None, draw=lambda: None,
+    game.banner = SimpleNamespace(update=lambda dt: None, draw=lambda: None,
                                       hide_banner=lambda: None,
                                       set_button_visibility=lambda state: None)
     game.flip_display = lambda: None

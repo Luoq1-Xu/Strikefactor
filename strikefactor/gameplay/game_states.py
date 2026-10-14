@@ -107,7 +107,7 @@ class ModeSelectState(GameState):
 
     def enter(self):
         """Initialize mode select state."""
-        self.game.ui_manager.hide_banner()
+        self.game.banner.hide_banner()
         # Start with the keyboard cursor on the first mode, so the screen
         # shows what ENTER will do before any key is pressed.
         self._buttons.set(self.buttons())
@@ -200,7 +200,7 @@ class MenuState(GameState):
 
     def enter(self):
         """Initialize menu state."""
-        self.game.ui_manager.hide_banner()
+        self.game.banner.hide_banner()
         self.game.scoreKeeper.reset()
         self.game.pitch_trajectories = []
         self.game.last_pitch_information = []
@@ -359,7 +359,7 @@ class GameplayState(GameState):
         
     def _refresh_display(self):
         """Refresh the game display - scorebug handles stats rendering."""
-        self.game.ui_manager.hide_banner()
+        self.game.banner.hide_banner()
         self.game.current_gamemode = self.game.menu_state
 
     def update(self, time_delta: float):
@@ -494,7 +494,7 @@ class SummaryState(GameState):
         if not self.stats_updated:
             self._update_pitcher_stats()
             self.stats_updated = True
-        self.game.ui_manager.hide_banner()
+        self.game.banner.hide_banner()
         self.game.scoreKeeper.reset()
         self._buttons.clear_focus()
 
@@ -810,8 +810,8 @@ class InningEndState(GameState):
 
         # Phase 2 — swap the leading hit/walk banner for "WALK-OFF WIN!"
         if not self._banner_swapped and t >= self._CELEBRATION_BANNER_SWAP_END:
-            self.game.ui_manager.hide_banner()
-            self.game.ui_manager.show_banner(
+            self.game.banner.hide_banner()
+            self.game.banner.show_banner(
                 "WALK-OFF WIN!", typing_speed=0.05
             )
             self._banner_swapped = True
@@ -940,7 +940,7 @@ class SandboxMenuState(GameState):
 
     def enter(self):
         """Initialize sandbox menu state."""
-        self.game.ui_manager.hide_banner()
+        self.game.banner.hide_banner()
         self.select.reset()
 
     def exit(self):
@@ -1041,7 +1041,7 @@ class SandboxGameplayState(GameState):
 
     def _refresh_display(self):
         """Refresh the game display - scorebug handles stats rendering."""
-        self.game.ui_manager.hide_banner()
+        self.game.banner.hide_banner()
 
     def switch_pitcher(self, pitcher_name: str):
         """Switch to a different pitcher."""
@@ -1074,7 +1074,7 @@ class SandboxGameplayState(GameState):
             # Sandbox clears the result once the play is over (Arcade leaves
             # it up until the next pitch). A call scheduled for the umpire's
             # voice still arrives after this.
-            self.game.ui_manager.hide_banner()
+            self.game.banner.hide_banner()
 
     def handle_event(self, event):
         """Handle sandbox gameplay events."""
@@ -1289,7 +1289,7 @@ class GameDayTransitionState(GameState):
     def enter(self):
         """Called when entering transition state."""
         # Hide any lingering banner
-        self.game.ui_manager.hide_banner()
+        self.game.banner.hide_banner()
         self._buttons.clear_focus()
 
         # Determine what phase we're in
