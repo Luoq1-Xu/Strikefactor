@@ -14,9 +14,10 @@ from strikefactor.gameplay.fielding_record import FieldingRecorder
 from strikefactor.helpers import Runner, ScoreKeeper
 
 
-def _contact(shape, *, outs=2, hand="R", outcome="IN_PLAY", bases=(1, 2, 3)):
+def _contact(shape, *, outs=2, hand="R", outcome="IN_PLAY", bases=(1, 2, 3), game_mode="arcade"):
     random.seed(21)
-    game = SimpleNamespace(batter=SimpleNamespace(get_handedness=lambda: hand), currentouts=outs)
+    game = SimpleNamespace(batter=SimpleNamespace(get_handedness=lambda: hand),
+                           currentouts=outs, game_mode=game_mode)
     ev, angle = {"GROUNDER": (90, 5), "LINER": (90, 15),
                  "FLY": (90, 32), "POP_UP": (85, 60)}[shape]
     anim = ha.HitAnimation(game, outcome, lambda: None, quality=0.85,
@@ -38,14 +39,15 @@ def _finish(anim, step_ms, recorder=None):
 
 
 @pytest.mark.parametrize("shape", ["GROUNDER", "LINER", "FLY", "POP_UP"])
-@pytest.mark.parametrize("outs", [0, 1, 2])
-def test_existing_runners_break_on_every_fair_contact_with_two_outs(monkeypatch, shape, outs):
+@pytest.mark.parametrize("outs", [0, 1, 2, 3, 10])
+@pytest.mark.parametrize("game_mode", ["arcade", "gameday", "sandbox"])
+def test_existing_runners_break_on_every_fair_contact_with_two_outs(monkeypatch, shape, outs, game_mode):
     monkeypatch.setattr(defense, "roll_misplay", lambda *a, **kw: None)
-    anim = _contact(shape, outs=outs)
+    anim = _contact(shape, outs=outs, game_mode=game_mode)
     anim.update(500)
     for runner in anim.presentation_frame().runners:
         starting_pos = ha._to_screen(*BASE_FT[int(runner.runner_id)])
-        if outs == 2 or shape == "GROUNDER":
+        if (game_mode != "sandbox" and outs >= 2) or shape == "GROUNDER":
             assert runner.state == "running"
             assert math.dist(runner.pos, starting_pos) > 1
         else:

@@ -12,6 +12,7 @@ consumes raw events.
 
 import pygame
 
+from strikefactor import outcomes
 from strikefactor.ui import gameday_theme as gdt
 from strikefactor.ui import pointer
 
@@ -83,6 +84,8 @@ class PlayByPlayPanel:
 
         for entry in play_log or []:
             result = str(entry.get('result') or 'UNKNOWN').replace('_', ' ').upper()
+            result = outcomes.play_display_name(result, entry.get('double_play', False),
+                                                entry.get('fielding_sequence', ()))
             is_top = bool(entry.get('is_top'))
             inning = entry.get('inning', 0)
             runs = int(entry.get('runs_scored', 0) or 0)

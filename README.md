@@ -64,6 +64,7 @@ Full 9-inning baseball simulation featuring:
 
 ### Sandbox Mode
 Practice mode for honing your skills against specific pitches:
+- Endless play with unlimited outs; runners use normal advances and tag-ups throughout
 - Manually select which pitch type to face via on-screen buttons
 - Press **Q** to trigger each pitch on demand
 - Live triple slash line (BA/OBP/SLG) displayed in the scoreboard
@@ -261,6 +262,14 @@ Possible results based on timing, swing type, and contact location:
 - **Single**, **Double**, **Triple**, **Home Run**
 - **Foul Ball**
 - **Flyout**, **Groundout**, **Lineout**
+- **Fielder's Choice** when the defense plays on a preceding runner
+- **Double Play**, including 6–4–3, 4–6–3, and 5–4–3 ground-ball turns
+
+With a runner on first, the defense compares taking the out at first with
+forcing the runner at second and relaying to first. Coverage, transfers,
+throw speed, bobbles, and actual runner arrivals determine each out. Beating
+the relay produces a fielder's choice with no hit credited. Auto and Manual
+use the same defense and force rules; Fielding Review records both putouts.
 
 Power swings increase extra-base hit potential but require more precise timing. Contact swings are more forgiving but produce weaker outcomes.
 

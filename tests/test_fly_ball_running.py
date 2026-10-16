@@ -15,9 +15,11 @@ from strikefactor.helpers import Runner, ScoreKeeper
 from strikefactor.key_binding_manager import KeyAction
 
 
-def _catch(point, *, bases=(1, 2, 3), shape="FLY", holder="CF", outs=0, ready_cutoff=False):
+def _catch(point, *, bases=(1, 2, 3), shape="FLY", holder="CF", outs=0, ready_cutoff=False,
+           game_mode="arcade"):
     random.seed(21)
-    game = SimpleNamespace(batter=SimpleNamespace(get_handedness=lambda: "R"), currentouts=outs)
+    game = SimpleNamespace(batter=SimpleNamespace(get_handedness=lambda: "R"),
+                           currentouts=outs, game_mode=game_mode)
     anim = ha.HitAnimation(game, "IN_PLAY", lambda: None, quality=0.85,
         batted_ball_type=shape, ev_mph=90, launch_deg=60 if shape == "POP_UP" else 32,
         initial_bases=bases)
@@ -104,15 +106,19 @@ def test_deep_fly_allows_one_tag_up_from_second_without_rounding_home(step_ms):
     assert sk.isRunnerOnBase(3)
 
 
-def test_deep_fly_still_scores_a_legitimate_sacrifice_from_third():
-    anim = _catch((0, 370), bases=(3,), ready_cutoff=True)
+@pytest.mark.parametrize("game_mode,outs", [("arcade", 0), ("sandbox", 0), ("sandbox", 2),
+                                           ("sandbox", 3), ("sandbox", 10)])
+def test_deep_fly_still_scores_a_legitimate_sacrifice_from_third(game_mode, outs):
+    anim = _catch((0, 370), bases=(3,), ready_cutoff=True, game_mode=game_mode, outs=outs)
     record = _finish(anim)
     result = record.running_result
-    sk = ScoreKeeper()
+    sk = ScoreKeeper(unlimited_outs=game_mode == "sandbox")
     sk.runners = [Runner(3)]
-    play = sk.update_running_play(result)
+    play = sk.update_running_play(result, outs=outs)
     assert (play.runs, play.rbi, play.sacrifice_fly) == (1, 1, True)
     runner = next(m for m in result.movements if m.runner_id == "3")
+    assert runner.touches[0][1] > 4.0
+    assert anim._inning_end_s is None
     assert runner.scored_s < anim._return_legs[-1].arrival_s
 
 

@@ -5,7 +5,7 @@ may change. Every receiver/cutoff is an actual actor with one assignment.
 """
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 
 from strikefactor.gameplay import extra_bases, infield_timing
 from strikefactor.gameplay.base_geometry import BASE_FT
@@ -28,6 +28,17 @@ class Defender:
     available_s: float
 
 
+def project_defenders(defenders, approaches, time_s):
+    """Read planned coverage at a future reception without moving any actor."""
+    projected = dict(defenders)
+    for role, path in approaches.items():
+        speed = (0.0 if time_s >= path.arrival_s else
+                 min(path.speed_fts, path.initial_fts + path.acceleration*max(0.0, time_s-path.start_s)))
+        projected[role] = replace(defenders[role], position=path.position_at(time_s),
+                                  initial_fraction=speed/path.speed_fts)
+    return projected
+
+
 @dataclass(frozen=True)
 class ReturnCandidate:
     runner_id: str
@@ -36,6 +47,7 @@ class ReturnCandidate:
     legs: tuple
     approaches: dict
     concession: float = 0.0
+    kind: str = "tag"
 
     @property
     def arrival_s(self):
@@ -43,15 +55,17 @@ class ReturnCandidate:
 
     def value(self, outs):
         # This probability estimates a decision, never adjudicates a tag.
+        sweep = TAG_SWEEP_S if self.kind == "tag" else 0.0
         probability = infield_timing.p_out_from_margin(
-            self.runner_s - self.arrival_s - TAG_SWEEP_S, extra_bases.SIGMA_TAG_S)
+            self.runner_s - self.arrival_s - sweep, extra_bases.SIGMA_TAG_S)
         return probability * (1.0 + min(2, outs) * 0.5 + (self.base == 4)) - self.concession
 
 
 def choose_return(candidates, outs, current=None):
     """Prefer a contestable out, charging for bases conceded behind it."""
     plausible = [c for c in candidates
-                 if c.arrival_s + TAG_SWEEP_S <= c.runner_s + infield_timing.BANG_BANG_S]
+                 if c.arrival_s + (TAG_SWEEP_S if c.kind == "tag" else 0.0)
+                 <= c.runner_s + infield_timing.BANG_BANG_S]
     if not plausible:
         return None
     best = max(plausible, key=lambda c: (c.value(outs), c.base, c.runner_id))
@@ -62,7 +76,7 @@ def choose_return(candidates, outs, current=None):
 
 
 def schedule_return(base, point, pickup_s, defenders, defense, *, holder,
-                    transfer_s=None, allow_relay=True):
+                    transfer_s=None, allow_relay=True, carry_delay_s=None):
     """Preview with the same actors, cover waits and exchanges as execution."""
     receiver_pool = {1: ("1B", "P", "2B"), 2: ("SS", "2B"),
                      3: ("3B", "SS"), 4: ("C", "P")}[base]
@@ -94,6 +108,13 @@ def schedule_return(base, point, pickup_s, defenders, defense, *, holder,
     flight = math.dist(point, BASE_FT[base]) / arm
     release = max(release, cover.arrival_s - flight)
     legs.append(ThrowLeg(point, BASE_FT[base], release, release + flight, holder, receiver))
+    if carry_delay_s is not None and holder in receiver_pool:
+        f = defenders[holder]
+        carry = BaseApproach(f.position, BASE_FT[base], pickup_s + carry_delay_s,
+                            f.speed_fts, f.acceleration_s, 0.0)
+        if carry.arrival_s <= legs[-1].arrival_s:
+            return (ThrowLeg(f.position, BASE_FT[base], carry.start_s,
+                             carry.arrival_s, holder, holder),), {holder: carry}
     return tuple(legs), approaches
 
 

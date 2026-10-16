@@ -11,7 +11,7 @@ import pytest
 from strikefactor.gameplay import hit_animation as ha
 from strikefactor.gameplay import infield_timing as it
 from strikefactor.gameplay.fielding_record import FieldingRecorder
-from strikefactor.gameplay.runner_motion import BaseApproach, BatterRun
+from strikefactor.gameplay.runner_motion import BaseApproach, BatterRun, CircuitRun
 
 
 @pytest.mark.parametrize("arrival_s", [3.55, 4.2, 4.3, 5.0])
@@ -81,11 +81,13 @@ def test_bobble_is_an_error_only_when_the_clean_schedule_beats_the_runner():
     assert it.timed_verdict(replace(timing, runner_s=2.0)) == "HIT"
 
 
-def _play_at_first(monkeypatch, margin_s, *, carry=False, cover_delay=False, scale=1.25, misplay_s=0.0):
+def _play_at_first(monkeypatch, margin_s, *, carry=False, cover_delay=False, scale=1.25, misplay_s=0.0,
+                   mode="auto", outs=0, bases=()):
     random.seed(14)
-    game = SimpleNamespace(batter=SimpleNamespace(get_handedness=lambda: "R"))
+    game = SimpleNamespace(batter=SimpleNamespace(get_handedness=lambda: "R"), currentouts=outs)
     anim = ha.HitAnimation(game, "IN_PLAY", lambda: None, quality=0.8,
-                           batted_ball_type="GROUNDER", spray_deg=18.0, ev_mph=95.0)
+                           batted_ball_type="GROUNDER", spray_deg=18.0, ev_mph=95.0,
+                           baserunning_mode=mode, initial_bases=bases)
     anim.time_scale = scale
     anim.start_time = 0
     anim._elapsed = anim._secured_at_ms = anim._anim_ms(2.0)
@@ -120,9 +122,60 @@ def _play_at_first(monkeypatch, margin_s, *, carry=False, cover_delay=False, sca
                                     0, 27.0, 0.5).duration_s)
         defense_s = max(2.8 + misplay_s + flight_s, cover_at)
     anim.runner = BatterRun(defense_s + margin_s)
+    anim._circuits["B"] = CircuitRun(anim.runner, 27)
     anim._begin_infield_play(role)
     assert anim.play_timing.defense_s == pytest.approx(defense_s)
     return anim
+
+
+@pytest.mark.parametrize("margin_s", [-0.8, -0.005, 0.0, 0.005, 0.8])
+@pytest.mark.parametrize("mode", ["auto", "manual"])
+@pytest.mark.parametrize("outs", [0, 2])
+@pytest.mark.parametrize("step_ms", [16, 250])
+def test_ground_ball_batter_runs_through_first_even_after_an_out_or_the_third_out(
+        monkeypatch, margin_s, mode, outs, step_ms):
+    anim = _play_at_first(monkeypatch, margin_s, mode=mode, outs=outs, bases=(2,))
+    recorder = FieldingRecorder(anim, "ground-ball run-through")
+    finish_s = anim.runner.arrival_s + ha.GO_CATCH_HOLD_S
+    t = anim._elapsed
+    while not anim.finished:
+        t += step_ms
+        anim.update(t)
+        recorder.capture(anim)
+        if t < anim._anim_ms(finish_s):
+            assert not anim.can_continue_early
+    record = recorder.record
+    assert record.duration_ms >= anim._anim_ms(finish_s)
+    first_ms = anim._anim_ms(anim.runner.arrival_s)
+    assert record.sample(first_ms).runner.pos == pytest.approx(ha.BASES["1B"])
+    frame = record.frames[-1]
+    assert math.dist((0, 0), ha._to_field_ft(frame.runner.pos)) > 90.0
+    assert frame.runner.reached_first
+    batter = record.running_result.batter
+    if margin_s > 0:
+        assert frame.runner.state == "out"
+        assert batter.out_s == anim.play_timing.defense_s
+        assert batter.final_base is None and not batter.touches
+        if outs == 2:
+            assert anim._inning_end_s == batter.out_s
+    else:
+        assert batter.out_s is None and batter.final_base == 1
+        assert batter.touches == ((1, anim.runner.arrival_s),)
+
+
+def test_sending_after_a_ground_ball_run_through_preserves_actual_position_and_first_touch():
+    route = CircuitRun(BatterRun(4.3), 27, run_through_first=True)
+    before = [(t, route.position_at(t)) for t in (4.2, 4.3, 4.4, 4.5)]
+    decision_s = 4.6
+    point = route.position_at(decision_s)
+    assert math.dist((0, 0), point) > 90.0
+    preview = route.preview_next(decision_s)
+    assert route.commit_next(decision_s)
+    assert route.position_at(decision_s) == point
+    assert all(route.position_at(t) == p for t, p in before)
+    assert route.arrival_s == preview.arrival_s
+    assert route.touches(decision_s) == ((1, 4.3),)
+    assert route.position_at(route.arrival_s) == it.BASE_FT[2]
 
 
 @pytest.mark.parametrize("margin_s", [-0.005, 0.005])
@@ -210,7 +263,7 @@ def test_visible_bobble_is_scored_against_the_same_clean_runner(monkeypatch, car
 
 
 @pytest.mark.parametrize("carry", [False, True])
-def test_clear_out_can_end_at_actual_possession_without_inventing_runner_arrival(monkeypatch, carry):
+def test_clear_out_retains_the_batters_run_through_before_finishing(monkeypatch, carry):
     anim = _play_at_first(monkeypatch, 0.8, carry=carry)
     recorder = FieldingRecorder(anim, "clear out")
     made_ms = anim._anim_ms(anim.play_timing.defense_s)
@@ -220,17 +273,24 @@ def test_clear_out_can_end_at_actual_possession_without_inventing_runner_arrival
     anim.update(made_ms)
     recorder.capture(anim)
     before = anim.presentation_frame()
-    rng = random.getstate()
-    assert anim.can_continue_early
+    assert not anim.can_continue_early
     assert not before.runner.reached_first
-    assert anim.skip_remaining()
+    assert not anim.skip_remaining()
+    assert not anim.finished
+    first_ms = anim._anim_ms(anim.runner.arrival_s)
+    anim.update(first_ms)
     recorder.capture(anim)
-    assert random.getstate() == rng
-    assert anim.presentation_frame() == before
-    assert recorder.record.duration_ms == made_ms
+    assert anim.presentation_frame().runner.pos == pytest.approx(ha.BASES["1B"])
+    assert not anim.skip_remaining()
+    finish_ms = anim._anim_ms(anim.runner.arrival_s + ha.GO_CATCH_HOLD_S)
+    anim.update(finish_ms)
+    recorder.capture(anim)
+    assert anim.finished
+    assert recorder.record.duration_ms == finish_ms
     assert recorder.record.outcome == "GROUNDOUT"
     assert recorder.record.events[-1].label == "END"
-    assert not any(e.label == "RUNNER AT FIRST" for e in recorder.record.events)
+    assert next(e.time_ms for e in recorder.record.events if e.label == "RUNNER AT FIRST") == first_ms
+    assert math.dist((0, 0), ha._to_field_ft(recorder.record.frames[-1].runner.pos)) > 90.0
     assert not anim.skip_remaining()
 
 
@@ -247,9 +307,9 @@ def test_safe_and_close_plays_require_the_full_race(monkeypatch, margin_s):
 
 @pytest.mark.parametrize("event", [pygame.event.Event(pygame.KEYDOWN, key=pygame.K_SPACE),
                                    pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1, pos=(640, 640))])
-@pytest.mark.parametrize("margin_s,after_out,can_skip", [(0.8, False, False),
-                                                      (0.8, True, True), (0.1, True, False)])
-def test_early_continue_input_records_and_finalizes_once(monkeypatch, event, margin_s, after_out, can_skip):
+@pytest.mark.parametrize("margin_s,phase,can_finish", [(0.8, "before_out", False),
+    (0.8, "out", False), (0.1, "out", False), (0.8, "through", True)])
+def test_continue_input_waits_for_run_through_and_finalizes_once(monkeypatch, event, margin_s, phase, can_finish):
     from strikefactor.gameplay.pitch_simulation import PitchSimulation
 
     anim = _play_at_first(monkeypatch, margin_s)
@@ -268,12 +328,14 @@ def test_early_continue_input_records_and_finalizes_once(monkeypatch, event, mar
     sim._finish_pitch = lambda: calls.append("finish")
     monkeypatch.setattr(pygame.event, "get", lambda: [event, event])
     made_ms = anim._anim_ms(anim.play_timing.defense_s)
-    sim._handle_hit_animation_phase(made_ms + (0 if after_out else -1), 0.016)
-    if can_skip:
+    current_ms = {"before_out": made_ms-1, "out": made_ms,
+                  "through": anim._anim_ms(anim.runner.arrival_s + ha.GO_CATCH_HOLD_S)}[phase]
+    sim._handle_hit_animation_phase(current_ms, 0.016)
+    if can_finish:
         assert calls == ["finalize", "publish", "finish"]
         record = game.last_fielding_play
         assert record is sim._fielding_recorder.record
-        assert not record.frames[-1].runner.reached_first
+        assert record.frames[-1].runner.reached_first
         assert record.outcome == "GROUNDOUT"
         assert anim.banner_fired
         sim._complete_hit_animation()

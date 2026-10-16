@@ -8,6 +8,17 @@ Persist `baserunning_mode` as `auto` or `manual`, defaulting to Auto. Snapshot i
 
 In Manual, the batter runs to first. Existing runners take their normal required or safely justified first advance. They stop after that advance, including with two outs, until the player sends them farther. A held runner can also be sent on their first optional advance when the ordinary policy would hold. Legal tag-ups, forces, occupied bases, and the inning ending still govern every movement. Fouls have no manual controls. Home runs use the normal airborne-ball controls and running until the ball clears the fence; confirmation closes controls, cancels pending commands, and sends every runner home from their current position.
 
+On ground balls, a batter finishing the first-base leg always runs through
+the bag, whether safe or out and regardless of the margin. Continue and play
+completion wait for that sprint, including after an inning-ending out. An
+out still retires the batter at its original timestamp; the continued run
+awards no legal contacts or advances after the out. Live and recorded frames
+show the same motion. A later Send starts from the runner's actual position
+and momentum beyond first, and the settled decision window starts after the
+run-through. An intentional advance toward second keeps its running route.
+
+Sandbox has unlimited outs: its cumulative out total never enables two-out contact running or ends a running play. Runners wait on airborne balls, tag up on catches, and can continue after any batter or running out. This applies to Auto and Manual; outs still count in session statistics.
+
 The most advanced live runner is highlighted, preserving baseball order through their starting base and stable play ID. A home-bound runner can still be controlled with Retreat when it is legal. When the runner scores or is retired, controls move to the next live runner. Pending commands belong to their original runner and are cancelled rather than transferred.
 
 ## Send and Retreat
@@ -59,7 +70,24 @@ Retreat does not guarantee safety. An early retreat can beat a return throw; a l
 
 Hit credit, final occupancy, and running outs remain distinct. A single followed by a tag at second or on a retreat to first remains a single plus a running out. Successful advances conceded by another throw retain their existing scoring treatment. Third-out timing and earned-run reconstruction use actual movements and retirement times.
 
-Database schema 14 has the nullable `baserunning_mode` column. Running-play JSON schema 3 adds a command ledger with action, runner, destination, input time, execution time, status, and cancellation reason. Historical rows remain unknown; no old record is rewritten. Presentation frames include current destination and both command hints, while the renderer continues to accept the earlier five-field Send overlay.
+Ground balls with a runner on first can produce a force at second and a relay
+to first. `force_play.py` shares live force obligations between Auto, Manual,
+and defensive races. A retired following runner removes the force on runners
+ahead; touching the required bag discharges it. Forced runners cannot retreat
+to escape a feed. On an uncaught liner or a dropped fly, the occupied chain
+must advance after landing or the drop, even when the throw will win. A
+provisional hold, risk estimate, or Manual's optional-base limit cannot veto
+that required movement. Auto and Manual share the same return-base legality.
+The free middle infielder prepares second during fielding.
+`infield_play.py` compares the direct first-base play against a turn using the
+same sampled pickup transfer and the forecast positions of covering defenders.
+Each reception resolves its own out before a subsequent throw is chosen.
+Beating the relay is a fielder's choice; no hit or error is inferred from the
+batter reaching first. A ground double play earns no RBI, and an inning-ending
+force cancels all runs on the play. Sandbox counts both outs without ending
+the running play. A choice preserves the replaced runner's pitcher responsibility.
+
+Database schema 14 has the nullable `baserunning_mode` column. Running-play JSON schema 4 retains the command ledger from schema 3 and adds explicit retirements (runner, time, base, force/tag/catch/batter-before-first kind, defender) and the fielding sequence. Double-play labels derive from the actual putouts; they do not replace the batter's canonical outcome. Historical rows remain unknown; no old record is rewritten. First-base and tag margins retain their existing meanings and remain null when that race was not played. Presentation frames include current destination and both command hints, while the renderer continues to accept the earlier five-field Send overlay.
 
 ## Acceptance scenarios
 

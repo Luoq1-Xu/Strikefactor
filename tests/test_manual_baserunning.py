@@ -23,9 +23,11 @@ from strikefactor.ui.fielding_renderer import draw_frame
 from strikefactor.ui.settings_panel import KeyBindingsPanel, SettingsPanel
 
 
-def _animation(mode="manual", *, bases=(), shape="LINER", outs=0, seed=76, hand="R", level="league"):
+def _animation(mode="manual", *, bases=(), shape="LINER", outs=0, seed=76, hand="R", level="league",
+               game_mode="arcade"):
     random.seed(seed)
-    game = SimpleNamespace(batter=SimpleNamespace(get_handedness=lambda: hand), currentouts=outs)
+    game = SimpleNamespace(batter=SimpleNamespace(get_handedness=lambda: hand),
+                           currentouts=outs, game_mode=game_mode)
     return ha.HitAnimation(game, "IN_PLAY", lambda: None, quality=0.8,
         batted_ball_type=shape, ev_mph=95,
         launch_deg={"GROUNDER": 5, "LINER": 14, "FLY": 32, "POP_UP": 60}[shape],
@@ -260,9 +262,10 @@ def test_cutoff_can_redirect_to_an_existing_runner_instead_of_only_the_batter(st
 
 
 @pytest.mark.parametrize("step", [16, 250])
-def test_lead_send_continues_after_the_batter_is_retired_at_first(step):
+@pytest.mark.parametrize("game_mode,outs", [("arcade", 0), ("sandbox", 2), ("sandbox", 10)])
+def test_lead_send_continues_after_the_batter_is_retired_at_first(step, game_mode, outs):
     from dataclasses import replace
-    anim = _animation(bases=(2,), shape="GROUNDER")
+    anim = _animation(bases=(2,), shape="GROUNDER", game_mode=game_mode, outs=outs)
     _early_send(anim)
     anim._elapsed = anim._secured_at_ms = 1000
     anim._secured = True
@@ -281,11 +284,13 @@ def test_lead_send_continues_after_the_batter_is_retired_at_first(step):
     sent = next(e for e in record.events if e.label == "MANUAL ADVANCE HOME")
     assert sent.runner_id == "2"
     assert sent.time_ms >= 3000
+    assert anim._inning_end_s is None
 
 
 @pytest.mark.parametrize("step", [16, 250])
-def test_defense_tags_one_runner_then_throws_at_another_with_two_running_outs(step):
-    anim = _animation(bases=(3,), outs=1)
+@pytest.mark.parametrize("game_mode,outs", [("arcade", 1), ("sandbox", 2), ("sandbox", 10)])
+def test_defense_tags_one_runner_then_throws_at_another_with_two_running_outs(step, game_mode, outs):
+    anim = _animation(bases=(3,), outs=outs, game_mode=game_mode)
     anim._circuits["3"].commit_next(1.4)
     anim.runner = BatterRun(4.3)
     anim._circuits["B"] = CircuitRun(anim.runner, 27)
@@ -311,9 +316,11 @@ def test_defense_tags_one_runner_then_throws_at_another_with_two_running_outs(st
         assert frame.base_call[:2] == ("OUT", event.base)
         receiver = next(f for f in frame.fielders if f.role == event.role)
         assert receiver.glove == pytest.approx((runner.pos[0], runner.pos[1]-9))
-    keeper = ScoreKeeper()
+    keeper = ScoreKeeper(unlimited_outs=game_mode == "sandbox")
     keeper.runners = [Runner(3)]
-    assert keeper.update_running_play(result, outs=1).running_outs == 2
+    assert keeper.update_running_play(result, outs=outs).running_outs == 2
+    if game_mode == "sandbox":
+        assert anim._inning_end_s is None
 
 
 
@@ -444,7 +451,7 @@ def test_manual_finalization_preserves_hit_credit_outs_and_control_metadata(infi
     assert game.hits == int(not infield_out)
     assert sim.baserunning_mode == "manual"
     saved = json.loads(sim.running_play_json)
-    assert saved["schema_version"] == 3
+    assert saved["schema_version"] == 4
     assert saved["outcome"] == ("GROUNDOUT" if infield_out else "SINGLE")
     assert saved["control"]["requested_s"] == 0.4
     assert saved["control"]["state"] == "expired"

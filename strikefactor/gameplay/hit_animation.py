@@ -38,7 +38,9 @@ from strikefactor.gameplay import (
     ball_flight,
     batted_ball_path,
     extra_bases,
+    force_play,
     ground_roll,
+    infield_play,
     infield_timing,
     park,
     return_play,
@@ -56,8 +58,10 @@ from strikefactor.gameplay.running_play import (
     TAG_UP_REACTION_S,
     BaseRace,
     RunnerMovement,
+    RunnerRetirement,
     RunningEvent,
     RunningResult,
+    ThrowLeg,
     schedule_tag_s,
 )
 
@@ -1803,11 +1807,20 @@ class HitAnimation:
         self._return_checked_s = 0.0
         self._return_react_s = None
         self._first_base_retired = False
+        self._force_turn = False
+        self._force_cover_role = None
+        self._retirements = {}
+        self._direct_first_timing = None
         self._early_return_goal = None
         self._early_return_roles = set()
         self.running_result = None
         self._inning_end_s = None
         self._outs_before = getattr(game, "currentouts", 0)
+        # Sandbox's outs are cumulative stats, never an inning situation.
+        # Snapshot the session mode so opening another view cannot change
+        # contact decisions, tag-ups or the finish of this running play.
+        self._unlimited_outs = getattr(game, "game_mode", None) == "sandbox"
+        self._two_outs = not self._unlimited_outs and self._outs_before >= 2
         # Who is currently assigned to cover first base. Maintained every
         # frame on grounders (see _route_first_base_cover) rather than
         # decided once at intercept time — the fielder chasing the ball
@@ -2051,19 +2064,20 @@ class HitAnimation:
                                           self._runner_sprint_fts(),
                                           self._runner_difficulty_offset_s))
         if self.runner is not None:
-            self._circuits["B"] = runner_motion.CircuitRun(self.runner, self._runner_sprint_fts())
+            self._circuits["B"] = runner_motion.CircuitRun(self.runner, self._runner_sprint_fts(),
+                                                          run_through_first=self.shape == "GROUNDER")
         # Occupied bases remain visible on fouls too. Only live fair balls
         # send these runners; a foul leaves them holding their starting bags.
         if initial_bases is None:
             keeper = getattr(game, "scoreKeeper", None)
             initial_bases = tuple(r.base for r in getattr(keeper, "runners", ()) if 1 <= r.base <= 3)
         fair_ball = outcome in ("IN_PLAY", outcomes.HOME_RUN)
-        if fair_ball and self._outs_before >= 2 and self.shape != "GROUNDER":
+        if fair_ball and self._two_outs and self.shape != "GROUNDER":
             self._live_running = True  # capture exact contacts before a possible third-out catch
         for base in initial_bases:
             self._circuits[str(base)] = runner_motion.CircuitRun(
                 None, infield_timing.SPRINT_SPEED_LEAGUE_FTS, start_base=base)
-            if fair_ball and (self.shape == "GROUNDER" or self._outs_before >= 2):
+            if fair_ball and (self.shape == "GROUNDER" or self._two_outs):
                 # With two outs, a catch ends the inning: run on contact
                 # instead of waiting to tag. Ground balls also send runners.
                 # Their physical contacts are later scored from the same
@@ -4263,6 +4277,8 @@ class HitAnimation:
         catcher = self.fielders[catcher_role]
         self.extra_base_margin_s = None  # a forecast is not a played extra-base race
         now_s = self._elapsed / (1000.0 * self.time_scale)
+        self._circuits["B"].run_through_first = self.shape == "GROUNDER"
+        self._advance_forced_runners(now_s)
         self._fielded_at_ms = self._elapsed
         self._go_first_base_pos = FIRST_BASE_BAG_POS
         cover_role, _ = self._route_first_base_cover(catcher_role)
@@ -4275,6 +4291,7 @@ class HitAnimation:
                                          initial_fraction=0.0)
         unassisted = cover_path is None or carry_path.arrival_s <= cover_path.arrival_s
         timing = self._resolve_ground_ball(catcher, unassisted, cover_role)
+        pickup_timing = timing
         self._post_fielding = True
         self._go_throw_origin = tuple(catcher.pos)
         if unassisted:
@@ -4305,6 +4322,8 @@ class HitAnimation:
             self._go_throw_ms = self._anim_ms(timing.throw_flight_s)
             self._go_throw_start_ms = self._anim_ms(timing.ball_to_glove_s + timing.release_s)
             self._go_throw_arrive_ms = self._anim_ms(timing.defense_s)
+        if self.shape == "GROUNDER" and self._try_force_turn(catcher_role, pickup_timing, timing):
+            return timing
         self.play_timing = timing
         verdict = infield_timing.timed_verdict(timing)
         self._first_base_retired = verdict == "OUT"
@@ -4322,7 +4341,7 @@ class HitAnimation:
             retired = timing.defense_s if verdict == "OUT" else None
             touches = () if retired is not None else ((1, timing.runner_s),)
             movements = [RunnerMovement("B", 0, None if retired is not None else 1, touches, retired)]
-            through = timing.defense_s if retired is not None and self._outs_before >= 2 else math.inf
+            through = timing.defense_s if retired is not None and self._two_outs else math.inf
             if through != math.inf:
                 self._inning_end_s = through
             for rid, route in self._circuits.items():
@@ -4337,6 +4356,74 @@ class HitAnimation:
                 self._go_done_ms = max(self._go_done_ms, self._anim_ms(
                     max(r.arrival_s for r in self._circuits.values()) + GO_CATCH_HOLD_S))
         return timing
+
+    def _force_base(self, rid, now_s):
+        caught = self._secured_in_flight and self.shape != "GROUNDER" and not self.is_error
+        return None if caught else force_play.forced_base(rid, self._circuits, now_s)
+
+    def _advance_forced_runners(self, now_s):
+        """An uncaught fair ball makes the occupied chain advance, even into an out.
+
+        Risk estimates, manual extra-base limits and a provisional hold are
+        for optional running. They cannot leave the batter's required bag
+        occupied. Work from the lead runner back, preserving all played motion.
+        """
+        if (self.outcome != "IN_PLAY" or self._inning_end_s is not None or len(self._circuits) < 2
+                or (self.shape != "GROUNDER" and self._ball_pos is None and not self._secured)):
+            return
+        for rid, route in sorted(self._circuits.items(), key=lambda pair: pair[1].start_base, reverse=True):
+            if rid == "B":
+                continue
+            required = self._force_base(rid, now_s)
+            if required is None or route.target_base >= required:
+                continue
+            decision = (rid, route.target_base)
+            if route.returning:
+                route.resume_to(required, now_s)
+            else:
+                route.commit_next(now_s)
+            self._run_decisions.discard(decision)
+            self._run_recheck_s.pop(decision, None)
+            self._live_running = True
+            self._running_events.append(RunningEvent(now_s, "FORCED ADVANCE", rid, required))
+
+    def _try_force_turn(self, holder, pickup, first_timing):
+        """Compare the same pickup/transfer at first and second, once."""
+        now_s = self._elapsed / (1000*self.time_scale)
+        if "1" not in self._circuits or self._force_base("1", now_s) != 2:
+            return False
+        point = _to_field_ft(self.fielders[holder].pos)
+        legs, approaches = self._return_schedule(2, point, now_s, holder=holder,
+            transfer_s=pickup.release_s, allow_relay=False, carry_delay_s=self._misplay_s)
+        second = return_play.ReturnCandidate("1", 2, self._circuits["1"].arrival_s,
+                                            legs, approaches, kind="force")
+        first_leg = ThrowLeg(point, BASE_FT[1], now_s, first_timing.defense_s,
+                             holder, self._cover_role or holder)
+        first = return_play.ReturnCandidate("B", 1, self.runner_first_s,
+                                            (first_leg,), self._base_approaches, kind="batter_before_first")
+        # Preview the relay from the coverage that will actually have run
+        # during the feed, rather than starting the first baseman twice.
+        approaches = {**{r: p for r, p in self._base_approaches.items() if r != holder}, **approaches}
+        defenders = return_play.project_defenders(self._return_defenders(), approaches, second.arrival_s)
+        relay, _ = return_play.schedule_return(1, BASE_FT[2], second.arrival_s, defenders,
+            self.defense, holder=legs[-1].receiver,
+            transfer_s=infield_play.PIVOT_EXCHANGE_S*self.defense.release_scale, allow_relay=False)
+        choice = infield_play.choose_infield(first, second, relay[-1].arrival_s,
+            self.runner_first_s, outs=0 if self._unlimited_outs else self._outs_before)
+        if choice is first:
+            return False
+        self._force_turn = self._live_running = True
+        self._direct_first_timing = first_timing
+        self._hit_defense_s = {base: self._return_schedule(base, point, now_s)[0][-1].arrival_s
+                               for base in (2, 3, 4)}
+        # The unchosen first-base preview is not a played throw or a call.
+        self._go_throw_start_ms = self._go_throw_arrive_ms = None
+        self._go_first_base_pos = None
+        self._cover_role = None
+        # Preserve the first baseman's independent coverage during the feed.
+        self._replace_return_plan((), legs, approaches, "1", 2, now_s, "FORCE PLAY")
+        self._update_return_play(now_s)
+        return True
 
     def _resolve_extra_bases(self):
         """How far a ball that got through the defense is worth.
@@ -4420,6 +4507,9 @@ class HitAnimation:
             ball_s = self._return_legs[-1].arrival_s
         elif self.play_timing is not None:
             ball_s = self.play_timing.defense_s
+        run_through_s = self._first_base_run_through_end_s()
+        if run_through_s is not None:
+            ball_s = max(ball_s, run_through_s)
         if now_s < ball_s:
             return None
         return max(ball_s, *(r.stopped_at_s if r.stopped_at_s is not None else r.arrival_s
@@ -4447,7 +4537,7 @@ class HitAnimation:
         rid, route = max(candidates, key=lambda pair: pair[1].start_base)
         if rid == "B":
             opening = route.first.start_delay_s
-        elif self.shape == "GROUNDER" or self._outs_before >= 2:
+        elif self.shape == "GROUNDER" or self._two_outs:
             opening = 0.20
         elif self._secured_in_flight and not self.is_error:
             opening = self._secured_at_ms / (1000*self.time_scale) + TAG_UP_REACTION_S
@@ -4474,17 +4564,17 @@ class HitAnimation:
         return base if base <= 4 and not self._base_blocked(control.runner_id, base) else None
 
     def _retreat_destination(self, now_s):
-        rid = self.baserunning.runner_id
+        return self._legal_return_base(self.baserunning.runner_id, now_s)
+
+    def _legal_return_base(self, rid, now_s):
+        """Shared return legality for player commands and automatic escapes."""
         route = self._circuits.get(rid)
         if route is None or route.returning or now_s >= route.arrival_s:
             return None
         base = route.base_at(now_s)
         if base < 1:
             return None  # the batter must run out the force at first
-        caught = self._secured_in_flight and self.shape != "GROUNDER" and not self.is_error
-        batter_alive = not self._runner_retired("B", self._circuits["B"], now_s)
-        forced = (not caught and batter_alive and base == route.start_base
-                  and all(str(b) in self._circuits for b in range(1, base)))
+        forced = self._force_base(rid, now_s) is not None
         occupied = any(other_id != rid and other.target_base == base and other.stopped_at_s is None
                        for other_id, other in self._circuits.items())
         return base if not forced and not occupied else None
@@ -4552,25 +4642,29 @@ class HitAnimation:
         if (not self._circuits or self.outcome not in ("IN_PLAY", outcomes.HOME_RUN)
                 or self._hr_confirmed_s is not None or self._inning_end_s is not None):
             return
+        self._advance_forced_runners(now_s)
         if self._post_fielding and not self._return_legs and not preparing_return:
             return  # the force play at first owns its existing finish
         # With fewer than two outs, existing runners wait on airborne balls.
         # With two, keep running/rounding until the ball lands or is caught;
         # there is no tag-up to preserve when a catch ends the inning.
         grounded = self.shape == "GROUNDER" or self._ball_pos is not None or self._secured
-        two_out_flight = self._outs_before >= 2 and not grounded
+        two_out_flight = self._two_outs and not grounded
         caught = self._secured_in_flight and self.shape != "GROUNDER"
         eligible = [(rid, r) for rid, r in self._circuits.items()
                     if (rid == "B" or grounded or two_out_flight) and r.target_base < 4
                     and now_s >= r.arrival_s - 0.45 and r.stopped_at_s is None
                     and not r.returning
+                    and not (rid == "B" and self._force_turn and r.target_base == 1
+                             and now_s < max(self.runner_first_s,
+                                 self.play_timing.defense_s if self.play_timing is not None else self.runner_first_s))
                     and (self.baserunning.mode != "manual"
                          or r.target_base < min(4, r.start_base + 1)
                          or self.baserunning.can_override(rid))
                     # A clean catch is one tag-up opportunity, not a loose
                     # ball. Do not round into another free advance while a
                     # return to the original destination is still in flight.
-                    and (not caught or (self._outs_before < 2 and
+                    and (not caught or (not self._two_outs and
                          (r.target_base == r.start_base or self.baserunning.can_override(rid))))
                     and ((rid, r.target_base) not in self._run_decisions
                          or self.baserunning.can_override(rid))
@@ -4663,14 +4757,17 @@ class HitAnimation:
                     # coach's safety margin or tag execution folded in.
                     self.extra_base_margin_s = runner_s - defense_s
 
-    def _return_schedule(self, base, point, pickup_s, *, holder=None, transfer_s=None, allow_relay=True):
-        """Preview from real actor positions; never move actors or consume RNG."""
-        defenders = {role: return_play.Defender(role, _to_field_ft(f.pos),
+    def _return_defenders(self):
+        return {role: return_play.Defender(role, _to_field_ft(f.pos),
             f.base_max_speed, f.accel_time_s, f.current_speed_frac, f.break_delay_s)
             for role, f in self.fielders.items()}
-        return return_play.schedule_return(base, point, pickup_s, defenders, self.defense,
+
+    def _return_schedule(self, base, point, pickup_s, *, holder=None, transfer_s=None,
+                         allow_relay=True, carry_delay_s=None):
+        """Preview from real actor positions; never move actors or consume RNG."""
+        return return_play.schedule_return(base, point, pickup_s, self._return_defenders(), self.defense,
             holder=self._primary_role if holder is None else holder,
-            transfer_s=transfer_s, allow_relay=allow_relay)
+            transfer_s=transfer_s, allow_relay=allow_relay, carry_delay_s=carry_delay_s)
 
     def _begin_return_play(self):
         """The retrieved ball is live: route a receiver and an optional relay."""
@@ -4728,15 +4825,18 @@ class HitAnimation:
         runner_s = route.arrival_s if route.target_base == base else route.projected_next(now_s)
         # A visible glove sweep starts after reception. Contact is against
         # the runner's physical approach, never an independent tag coin flip.
+        kind = ("batter_before_first" if rid == "B" and base == 1 and self._force_base(rid, now_s) == 1 else
+                "force" if self._force_base(rid, now_s) == base else "tag")
         tag_s = None
         if route.stopped_at_s is None and route.target_base == base and arrival < runner_s:
-            tag_s = schedule_tag_s(route, base, arrival)
-        self._return_race = BaseRace(base, runner_s, arrival, tag_s)
+            tag_s = schedule_tag_s(route, base, arrival) if kind == "tag" else arrival
+        self._return_race = BaseRace(base, runner_s, arrival, tag_s, kind)
         for leg in legs:
             self._running_events.extend((RunningEvent(leg.release_s, "THROW RELEASE", role=leg.thrower),
                                          RunningEvent(leg.arrival_s, "THROW ARRIVAL", role=leg.receiver)))
         if tag_s is not None:
-            self._running_events.append(RunningEvent(tag_s, "TAG OUT", rid, base, receiver))
+            self._running_events.append(RunningEvent(tag_s, "TAG OUT" if kind == "tag" else "FORCE OUT",
+                                                    rid, base, receiver))
         self._return_done_s = max(arrival, max(r.arrival_s for r in self._circuits.values())) + GO_CATCH_HOLD_S
         self._go_done_ms = self._anim_ms(self._return_done_s)
         # The physical margin of an attempted race has its existing meaning.
@@ -4749,18 +4849,17 @@ class HitAnimation:
         if race is None:
             return
         if (race.tag_s is not None and self._circuits[self._return_runner].stopped_at_s is None
+                and race.kind == "tag" and self._force_base(self._return_runner, now_s) is None
                 and self.baserunning.mode != "manual"
                 and self._return_legs[0].release_s <= now_s < race.defense_s):
             route = self._circuits[self._return_runner]
-            last = route.base_at(now_s)
-            if last >= 1 and math.dist(route.position_at(now_s), BASE_FT[race.base]) > 12:
+            last = self._legal_return_base(self._return_runner, now_s)
+            if last is not None and math.dist(route.position_at(now_s), BASE_FT[race.base]) > 12:
                 # Retreat only after the throw is genuinely committed and
                 # with time to beat a physical return throw to the old base.
                 back = runner_motion.RunLeg(route.position_at(now_s), last, now_s, route.top_fts)
                 defense_back = race.defense_s + extra_bases.IF_RELEASE_S + math.dist(BASE_FT[last], BASE_FT[race.base])/self.defense.throw_fts
-                occupied = any(rid != self._return_runner and r.target_base == last
-                               and r.stopped_at_s is None for rid, r in self._circuits.items())
-                if not occupied and back.arrival_s + extra_bases.AGGRESSION_MARGIN_S < defense_back:
+                if back.arrival_s + extra_bases.AGGRESSION_MARGIN_S < defense_back:
                     route.return_to(last, now_s)
                     self._running_events = [e for e in self._running_events
                                             if not (e.label == "TAG OUT" and e.time_s > now_s)]
@@ -4772,20 +4871,26 @@ class HitAnimation:
             if route.returning or route.base_at(race.tag_s) < race.base:
                 self._tagged_runner = self._return_runner
                 route.stopped_at_s = race.tag_s
-                self._running_tags[self._return_runner] = (race.base, race.tag_s)
+                if race.kind == "tag":
+                    self._running_tags[self._return_runner] = (race.base, race.tag_s)
+                self._retirements[self._return_runner] = RunnerRetirement(
+                    self._return_runner, race.tag_s, race.base, race.kind, self._return_legs[-1].receiver)
+                if race.kind == "batter_before_first":
+                    self._first_base_retired = True
+                    self._runner_stop_s = race.tag_s
                 self._last_base_call = ("OUT", race.base, race.tag_margin_s, race.tag_s)
                 # Retain the completed glove-contact pose before transferring
                 # possession for a follow-up. This is an exact event boundary.
-                self._return_react_s = max(self._return_react_s or 0.0, race.tag_s + TAG_SWEEP_S)
+                self._return_react_s = max(self._return_react_s or 0.0,
+                    race.tag_s + (TAG_SWEEP_S if race.kind == "tag" else 0.0))
             else:
                 self._running_events = [e for e in self._running_events
-                                        if not (e.label == "TAG OUT" and e.time_s >= now_s)]
+                                        if not (e.label in ("TAG OUT", "FORCE OUT") and e.time_s >= now_s)]
                 self._return_race = BaseRace(race.base, route.arrival_at(race.base), race.defense_s)
         outs = sorted(r.stopped_at_s for r in self._circuits.values() if r.stopped_at_s is not None)
-        # Sandbox keeps a cumulative out count past three. Only end the
-        # inning when this play supplies a third out that was still needed.
+        # Only modes with innings can stop a play at a third out.
         outs_needed = 3 - self._outs_before
-        if 0 < outs_needed <= len(outs):
+        if not self._unlimited_outs and 0 < outs_needed <= len(outs):
             self._inning_end_s = outs[outs_needed - 1]
         self._redirect_cutoff(now_s)
         self._advance_runners(now_s)
@@ -4828,12 +4933,36 @@ class HitAnimation:
             outcome = self._caught_outcome()
         elif force_out:
             outcome = outcomes.GROUNDOUT
+        elif any(r.runner_id != "B" and r.kind == "force" for r in self._retirements.values()):
+            outcome, credited = outcomes.FIELDERS_CHOICE, 0
+        elif self._force_turn:
+            # Choosing a preceding runner cannot manufacture a hit when the
+            # ordinary play at first would retire the batter (9.05(b)).
+            if self._direct_first_timing.defense_s < self.runner_first_s:
+                outcome, credited = outcomes.FIELDERS_CHOICE, 0
+            elif (now_s >= max(self.runner_first_s, self._return_legs[-1].arrival_s)
+                  and infield_timing.timed_verdict(self._direct_first_timing) == "ERROR"):
+                if not self.is_error:
+                    self._charge_error(self._misplay_role or self._primary_role, outcomes.GROUNDOUT)
+                outcome, credited = outcomes.REACHED_ON_ERROR, max(1, credited)
+        retirements = tuple(sorted([self._retirements.get(m.runner_id) or RunnerRetirement(
+            m.runner_id, m.out_s, 1 if m.runner_id == "B" else self._circuits[m.runner_id].target_base,
+            "catch" if caught and m.runner_id == "B" else "batter_before_first"
+            if m.runner_id == "B" and force_out else "tag")
+            for m in movements if m.out_s is not None], key=lambda r: r.time_s))
+        sequence = []
+        if retirements:
+            for leg in self._return_legs:
+                if leg.arrival_s <= retirements[-1].time_s:
+                    for role in (leg.thrower, leg.receiver):
+                        if not sequence or sequence[-1] != role:
+                            sequence.append(role)
         self.classified_outcome = outcome
         self.error_bases = credited if self.is_error else self.error_bases
         self.running_result = RunningResult(outcome, 0 if self.is_error else credited,
             tuple(movements), tuple(e for e in self._running_events
                 if e.time_s <= min(now_s, self._inning_end_s if self._inning_end_s is not None else math.inf)), self.error_out,
-            credited if self.is_error else 0)
+            credited if self.is_error else 0, retirements, tuple(sequence))
         self._return_done_s = max(self._return_legs[-1].arrival_s,
             max((r.stopped_at_s if r.stopped_at_s is not None else r.arrival_s)
                 for r in self._circuits.values())) + GO_CATCH_HOLD_S
@@ -4847,7 +4976,8 @@ class HitAnimation:
         for rid, route in self._circuits.items():
             base = route.target_base
             if (route.stopped_at_s is not None or base < 1
-                    or (not route.returning and (base < 2 or base <= route.start_base))
+                    or (not route.returning and ((base < 2 and not (self._force_turn and rid == "B"))
+                                                or base <= route.start_base))
                     or route.arrival_s <= now_s):
                 continue
             legs, approaches = self._return_schedule(base, point, now_s, holder=holder,
@@ -4865,17 +4995,20 @@ class HitAnimation:
                     + math.dist(BASE_FT[base], BASE_FT[nxt]) / self.defense.throw_fts)
                 if arrival + extra_bases.AGGRESSION_MARGIN_S < onward:
                     cost += 0.20 if nxt < 4 else 0.70
+            kind = ("batter_before_first" if rid == "B" and base == 1 and self._force_base(rid, now_s) == 1 else
+                    "force" if self._force_base(rid, now_s) == base else "tag")
             candidates.append(return_play.ReturnCandidate(rid, base, route.arrival_s,
-                                                         legs, approaches, cost))
+                                                         legs, approaches, cost, kind))
         outs = self._outs_before + sum(r.stopped_at_s is not None for r in self._circuits.values())
-        return return_play.choose_return(candidates, outs, current)
+        return return_play.choose_return(candidates, 0 if self._unlimited_outs else outs, current)
 
     def _prepare_return_coverage(self, now_s):
         """Free defenders cover visible threats while retrieval stays assigned."""
         if self._secured or self.outcome != "IN_PLAY" or self._inning_end_s is not None:
             return
         if self.shape == "GROUNDER" and self._fielded_ft() <= INFIELD_PLAY_MAX_FT:
-            return  # preserve the unresolved force and infield intercept pool
+            self._prepare_force_coverage()
+            return
         threats = [(rid, r) for rid, r in self._circuits.items()
                    if r.stopped_at_s is None and not r.returning and r.target_base > max(1, r.start_base)
                    and r.arrival_s > now_s and r.pieces
@@ -4911,16 +5044,33 @@ class HitAnimation:
             self._early_return_roles.add(backup.role)
         self._early_return_goal = goal
 
+    def _prepare_force_coverage(self):
+        """The free middle infielder prepares second before the pickup."""
+        if "1" not in self._circuits:
+            return
+        role = "SS" if self._primary_role == "2B" else "2B"
+        if role == self._cover_role:
+            role = "SS"
+        previous = self._force_cover_role
+        if previous is not None and previous != role and previous not in (self._primary_role, self._cover_role):
+            self.fielders[previous].target = self.fielders[previous].home_pos
+            self._lean_excluded.discard(previous)
+        self._force_cover_role = role
+        f = self.fielders[role]
+        f.target, f.max_speed = _to_screen(*BASE_FT[2]), f.base_max_speed
+        self._lean_excluded.add(role)
+
     def _replace_return_plan(self, prefix, legs, approaches, rid, base, now_s, label):
         """Retain released history and replace only the unthrown future."""
         keep = {(leg.release_s, "THROW RELEASE", leg.thrower) for leg in prefix}
         keep.update((leg.arrival_s, "THROW ARRIVAL", leg.receiver) for leg in prefix)
         self._running_events = [e for e in self._running_events
-            if e.time_s <= now_s or e.label not in ("THROW RELEASE", "THROW ARRIVAL", "TAG OUT")
+            if e.time_s <= now_s or e.label not in ("THROW RELEASE", "THROW ARRIVAL", "TAG OUT", "FORCE OUT")
             or (e.time_s, e.label, e.role) in keep]
         self._return_legs = tuple(prefix) + tuple(legs)
         # A cancelled receiver must not keep running to an abandoned bag.
         retained = {leg.receiver for leg in prefix if now_s < leg.arrival_s}
+        retained.add(legs[0].thrower)  # keep the pivot planted on the completed force bag
         for role in set(self._base_approaches) - set(approaches) - retained:
             self.fielders[role].target = tuple(self.fielders[role].pos)
             self._base_approaches.pop(role)
@@ -4934,15 +5084,30 @@ class HitAnimation:
         moving = route.target_base == base and route.arrival_s > now_s and route.stopped_at_s is None
         runner_s = route.arrival_s if moving else route.projected_next(now_s)
         arrival = legs[-1].arrival_s
-        tag_s = schedule_tag_s(route, base, arrival) if moving and arrival < runner_s else None
-        self._return_race = BaseRace(base, runner_s, arrival, tag_s)
+        kind = ("batter_before_first" if rid == "B" and base == 1 and self._force_base(rid, now_s) == 1 else
+                "force" if self._force_base(rid, now_s) == base else "tag")
+        tag_s = ((schedule_tag_s(route, base, arrival) if kind == "tag" else arrival)
+                 if moving and arrival < runner_s else None)
+        self._return_race = BaseRace(base, runner_s, arrival, tag_s, kind)
+        if self._force_turn and kind == "batter_before_first":
+            timing = self._direct_first_timing
+            self.play_timing = replace(timing, ball_to_glove_s=now_s,
+                release_s=legs[0].release_s-now_s,
+                throw_flight_s=legs[-1].arrival_s-legs[-1].release_s,
+                defense_s=arrival, runner_s=runner_s, margin_s=runner_s-arrival,
+                p_out=infield_timing.p_out_from_margin(runner_s-arrival),
+                misplay_s=0.0, clean_defense_s=arrival)
+            self._first_base_retired = tag_s is not None
+            self._first_base_call_s = min(arrival, runner_s)
         self._running_events.append(RunningEvent(now_s, label, rid, base, legs[0].thrower))
         for leg in legs:
-            self._running_events.extend((RunningEvent(leg.release_s, "THROW RELEASE", role=leg.thrower),
-                                         RunningEvent(leg.arrival_s, "THROW ARRIVAL", role=leg.receiver)))
+            carry = leg.thrower == leg.receiver
+            self._running_events.extend((RunningEvent(leg.release_s, "CARRY START" if carry else "THROW RELEASE", role=leg.thrower),
+                                         RunningEvent(leg.arrival_s, "BASE POSSESSION" if carry else "THROW ARRIVAL", role=leg.receiver)))
         if tag_s is not None:
-            self._running_events.append(RunningEvent(tag_s, "TAG OUT", rid, base, legs[-1].receiver))
-        if rid == "B" and base <= 3:
+            self._running_events.append(RunningEvent(tag_s, "TAG OUT" if kind == "tag" else "FORCE OUT",
+                                                    rid, base, legs[-1].receiver))
+        if rid == "B" and 2 <= base <= 3:
             self.extra_base_margin_s = runner_s - arrival
         self._return_checked_s, self._return_react_s = now_s, None
 
@@ -4977,20 +5142,20 @@ class HitAnimation:
             return
         # Movement cues, never the hidden armed instruction, trigger reaction.
         changes = [e.time_s for e in self._running_events
-                   if e.label in ("ADVANCE", "ADVANCE ON THROW", "MANUAL ADVANCE", "MANUAL RETURN")
+                   if e.label in ("ADVANCE", "ADVANCE ON THROW", "FORCED ADVANCE", "MANUAL ADVANCE", "MANUAL RETURN")
                    and self._return_checked_s < e.time_s <= now_s]
         if changes and self._return_react_s is None:
             self._return_react_s = min(changes) + self.defense.reaction_min_s
         last = self._return_legs[-1]
         race = self._return_race
-        if race.tag_s is not None and race.defense_s <= now_s <= race.tag_s:
+        if race.kind == "tag" and race.tag_s is not None and race.defense_s <= now_s <= race.tag_s:
             return  # finish the glove sweep before transferring the ball
         if any(leg.release_s <= now_s < leg.arrival_s for leg in self._return_legs):
             return  # a ball in flight cannot turn toward a different runner
         received = now_s >= last.arrival_s
         if received and self._return_react_s is not None and now_s < self._return_react_s:
             return
-        if received and race.tag_s is None:
+        if received and race.tag_s is None and race.kind == "tag":
             # A new send toward the bag already holding the ball needs a
             # glove sweep, not a fictitious throw from that bag to itself.
             route = self._circuits[self._return_runner]
@@ -5009,6 +5174,8 @@ class HitAnimation:
         holder = last.receiver if received else last.thrower
         point = _to_field_ft(self.fielders[holder].pos)
         transfer = None if received else max(0.0, last.release_s-now_s) + return_play.TURN_SETUP_S
+        if received and self._force_turn and self._return_base == 2:
+            transfer = infield_play.PIVOT_EXCHANGE_S*self.defense.release_scale
         choice = self._choose_return(point, now_s, holder=holder, transfer_s=transfer,
             allow_relay=not prefix, current=(self._return_runner, self._return_base))
         self._return_checked_s, self._return_react_s = now_s, None
@@ -5021,6 +5188,11 @@ class HitAnimation:
     def _render_return_play(self, now_s):
         legs = self._return_legs
         for i, leg in enumerate(legs):
+            if leg.thrower == leg.receiver and now_s <= leg.arrival_s:
+                holder = self.fielders[leg.thrower]
+                self._ball_shadow = tuple(holder.pos)
+                self._ball = (holder.pos[0], holder.pos[1]-9.0)
+                return
             if now_s < leg.release_s:
                 holder = self.fielders[leg.thrower]
                 self._ball_shadow = tuple(holder.pos)
@@ -5037,7 +5209,7 @@ class HitAnimation:
         receiver = self.fielders[legs[-1].receiver]
         point = tuple(receiver.pos)
         race = self._return_race
-        if race.tag_s is not None and now_s >= race.defense_s:
+        if race.kind == "tag" and race.tag_s is not None and now_s >= race.defense_s:
             contact = _to_screen(*self._circuits[self._return_runner].position_at(race.tag_s))
             sweep_s = max(race.defense_s, race.tag_s - TAG_SWEEP_S)
             u = min(1.0, max(0.0, (now_s-sweep_s) / max(1e-9, race.tag_s-sweep_s)))
@@ -5323,7 +5495,7 @@ class HitAnimation:
             self._runner_stop_s = self._elapsed / (1000.0 * self.time_scale)
             self._circuits["B"].stopped_at_s = self._runner_stop_s
             self._go_done_ms = self._elapsed + FLYOUT_CATCH_HOLD
-            if self._outs_before >= 2:
+            if self._two_outs:
                 # Stop at the catch, without inventing a return throw or a
                 # later tag. Keep earlier physical touches in the replay;
                 # the scorer annuls all runs on this batter-out third out.
@@ -5430,6 +5602,9 @@ class HitAnimation:
             boundaries = []
             if self._hr_fence_ms is not None and self._hr_confirmed_s is None:
                 boundaries.append(self._hr_fence_ms)
+            run_through_s = self._first_base_run_through_end_s()
+            if run_through_s is not None and self._post_fielding:
+                boundaries.extend((self._anim_ms(self.runner.arrival_s), self._anim_ms(run_through_s)))
             if self.play_timing is not None and self.runner is not None and self._runner_stop_s is None:
                 boundaries.append(self._anim_ms(self.runner.arrival_s))
             if self.play_timing is not None:
@@ -5517,6 +5692,9 @@ class HitAnimation:
                 else:
                     self.finished = True
         now_s = self._elapsed / (1000*self.time_scale)
+        run_through_s = self._first_base_run_through_end_s()
+        if run_through_s is not None and self._elapsed < self._anim_ms(run_through_s):
+            self.finished = False
         if self._send_unresolved(now_s):
             self.finished = False
 
@@ -5538,7 +5716,7 @@ class HitAnimation:
                 if self.baserunning.state == "armed":
                     self._running_events.append(RunningEvent(now_s, "SEND EXPIRED", "B"))
                 self.baserunning.expire("runner retired")
-            if (self._outs_before >= 2 or self.baserunning.runner_id == "B"
+            if (self._two_outs or self.baserunning.runner_id == "B"
                     or self.baserunning.state not in ("armed", "returning") or now_s < self.play_timing.defense_s):
                 return
         ready_s = (self.play_timing.defense_s if self._first_base_retired
@@ -5874,15 +6052,24 @@ class HitAnimation:
         """A home run is resolved at the fence, before the optional base tour."""
         return self.finished or self._hr_confirmed_s is not None
 
+    def _first_base_run_through_end_s(self):
+        route = self._circuits.get("B")
+        if (self.shape == "GROUNDER" and self.runner is not None and route is not None
+                and route.target_base == 1 and not route.returning):
+            return self.runner.arrival_s + GO_CATCH_HOLD_S
+        return None
+
     @property
     def can_continue_early(self):
-        """A clear first-base out is already made, though the runner is short.
+        """A resolved play may continue once its required motion is visible.
 
-        The shared close-play threshold keeps both arrivals visible on a
-        bang-bang play. Knowing the scheduled verdict is not enough: actual
-        possession at the bag must have occurred before input can advance.
+        Every ground-ball first-base sprint runs through the bag. The shared
+        close-play threshold also retains both arrivals on other races.
         """
         if self.finished:
+            return False
+        run_through_s = self._first_base_run_through_end_s()
+        if run_through_s is not None and self._elapsed < self._anim_ms(run_through_s):
             return False
         if self._send_unresolved(self._elapsed / (1000*self.time_scale)):
             return False
@@ -5924,7 +6111,7 @@ class HitAnimation:
                 return RunnerFrame((HOME[0] + side * 18, HOME[1] + 4), False)
             return None
         runner_s = elapsed_ms / (1000.0 * self.time_scale)
-        if self._live_running or (self.outcome == "IN_PLAY" and
+        if self._first_base_run_through_end_s() is not None or self._live_running or (self.outcome == "IN_PLAY" and
                                   (not self._post_fielding or self.baserunning.mode == "manual")):
             return self._circuit_frame("B", runner_s)
         if self._runner_stop_s is not None:
@@ -5940,6 +6127,14 @@ class HitAnimation:
     def _circuit_frame(self, rid, now_s):
         from strikefactor.gameplay.fielding_record import RunnerFrame
         route = self._circuits[rid]
+        run_through = rid == "B" and self._first_base_run_through_end_s() is not None
+        motion_s = now_s
+        if run_through and abs(motion_s-self.runner.arrival_s) < 1e-12:
+            motion_s = self.runner.arrival_s
+        out_s = route.stopped_at_s
+        if run_through and self._first_base_retired and self.play_timing is not None:
+            out_s = self.play_timing.defense_s
+            now_s = min(now_s, out_s)
         if self._inning_end_s is not None:
             now_s = min(now_s, self._inning_end_s)
         if self._runner_stop_s is not None and rid == "B":
@@ -5950,11 +6145,16 @@ class HitAnimation:
             if abs(now_s-t) < 1e-12:
                 now_s = t
         base = route.base_at(now_s)
-        state = ("out" if route.stopped_at_s is not None and now_s >= route.stopped_at_s
+        state = ("out" if out_s is not None and now_s >= out_s
                  else "scored" if base == 4 else "holding" if now_s >= route.arrival_s
                  else "returning" if route.returning
                  else "sliding" if now_s >= route.arrival_s - 0.25 and route.target_base > 1 else "running")
-        return RunnerFrame(_to_screen(*route.position_at(now_s)), base >= 1, rid, base, route.target_base, state)
+        # Retiring the batter ends legal movement at the original out time.
+        # His ground-ball sprint still carries through first in the picture,
+        # including after a third out; it awards no additional base contacts.
+        point = self.runner.position_at(motion_s) if run_through else route.position_at(now_s)
+        reached_first = motion_s >= self.runner.arrival_s if run_through else base >= 1
+        return RunnerFrame(_to_screen(*point), reached_first, rid, base, route.target_base, state)
 
     def presentation_frame(self):
         """Copy only visible state; no game references or mutable fielder data."""
@@ -5962,6 +6162,17 @@ class HitAnimation:
 
         fielders = []
         error = None
+        now_s = self._elapsed / (1000*self.time_scale)
+        holder_role = None
+        for leg in self._return_legs:
+            if now_s < leg.release_s or leg.thrower == leg.receiver:
+                holder_role = leg.thrower
+                if now_s <= leg.arrival_s:
+                    break
+            if now_s < leg.arrival_s:
+                holder_role = None
+                break
+            holder_role = leg.receiver
         for f in self.fielders.values():
             x, y = f.pos
             if f.role not in self._base_approaches and math.dist(f.target, f.pos) < 2.0:
@@ -5969,8 +6180,7 @@ class HitAnimation:
             dx, dy = self._ball[0] - x, self._ball[1] - y
             length = math.hypot(dx, dy) or 1.0
             fielders.append(FielderFrame(f.role, (x, y), (x + 6 * dx / length, y + 6 * dy / length)))
-            if (self._return_legs and f.role == self._return_legs[-1].receiver
-                    and self._elapsed >= self._anim_ms(self._return_legs[-1].arrival_s)):
+            if f.role == holder_role:
                 fielders[-1] = FielderFrame(f.role, (x, y), self._ball)
             if f.role == self._error_role and self._error_mark_alpha() > 0:
                 since = self._elapsed - self._error_marked_at_ms
@@ -5982,7 +6192,8 @@ class HitAnimation:
                         self._hr_distance_alpha())
         runner = self.runner_frame(self._elapsed)
         call = None
-        if self.play_timing is not None and self._elapsed >= self._anim_ms(self._first_base_call_s):
+        if (self.play_timing is not None and not self._force_turn
+                and self._elapsed >= self._anim_ms(self._first_base_call_s)):
             call = ("OUT" if self._first_base_retired else "SAFE", self.play_timing.margin_s)
         others = tuple(self._circuit_frame(rid, self._elapsed / (1000*self.time_scale))
                        for rid in self._circuits if rid != "B")

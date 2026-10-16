@@ -23,6 +23,8 @@ and an earned run can never outnumber the runs.
 Outs are passed in, not counted: `Game.currentouts` and
 `GameDayManager.current_outs` already count them, a strikeout never comes
 through here, and a scenario can open the half-inning with two down.
+With `unlimited_outs`, Sandbox's cumulative outs never end the real or
+reconstructed inning; the same advances and error history still apply.
 """
 
 import copy
@@ -40,6 +42,8 @@ class Play(NamedTuple):
     sacrifice_fly: bool = False   # Rule 9.08(d): no at-bat is charged
     running_outs: int = 0         # a hit and a later running out can coexist
     batter_on_throw_base: int | None = None
+    double_play: bool = False
+    fielding_sequence: tuple = ()
 
 
 def _out_advance(outcome, base):
@@ -103,7 +107,10 @@ class Runner:
 # Scorekeeper class
 class ScoreKeeper:
 
-    def __init__(self):
+    def __init__(self, *, unlimited_outs=False):
+        # Session rules survive score resets and review snapshots. Sandbox
+        # tracks outs for stats, but none can end its real or errorless inning.
+        self.unlimited_outs = unlimited_outs
         self.reset()
 
     def reset(self):
@@ -194,7 +201,7 @@ class ScoreKeeper:
         for runner in home:
             if runner in self._home_early:
                 self._home_early.remove(runner)
-            if self._clean_outs(runner.pitcher, outs_after) < 3:
+            if self.unlimited_outs or self._clean_outs(runner.pitcher, outs_after) < 3:
                 self.earned += 1
                 self._charges.setdefault(runner.pitcher, [0, 0])[1] += 1
         return len(scored)
@@ -225,8 +232,8 @@ class ScoreKeeper:
         # Third outs. The reconstruction's can come sooner than the real one,
         # and it is taken off the current pitcher's count, the last to reach
         # three; `_settle` holds every other pitcher to his own.
-        third_out = is_out and outs >= 2
-        clean_third_out = self._clean_outs(self.pitcher, outs) >= 2
+        third_out = not self.unlimited_outs and is_out and outs >= 2
+        clean_third_out = not self.unlimited_outs and self._clean_outs(self.pitcher, outs) >= 2
         rbi = None
 
         if outcome in outcomes.HIT_OUTCOMES:
@@ -253,7 +260,7 @@ class ScoreKeeper:
             # Rule 9.04(a)(3): the batter drives in only the run that would
             # have scored on the out, and only with fewer than two down —
             # with two down the out ends the inning instead.
-            rbi = 0 if outs >= 2 else sum(
+            rbi = 0 if not self.unlimited_outs and outs >= 2 else sum(
                 1 for r in on_base
                 if r.base + _out_advance(clean_outcome, r.base) > 3)
             self.runners.append(
@@ -298,17 +305,23 @@ class ScoreKeeper:
         before = {str(r.base): r for r in self.runners}
         reconstructed = self._reconstructed()[:]
         retired = sorted(m.out_s for m in result.movements if m.out_s is not None)
-        # A cumulative Sandbox count can already exceed three; those old
-        # outs cannot make one of this play's retirements a third out.
         outs_needed = 3 - outs
-        third_s = retired[outs_needed - 1] if 0 < outs_needed <= len(retired) else None
+        third_s = (retired[outs_needed - 1]
+                   if not self.unlimited_outs and 0 < outs_needed <= len(retired) else None)
         batter_out_third = (third_s is not None and result.outcome in outcomes.BATTED_OUT_OUTCOMES
                             and result.batter.out_s == third_s)
+        force_third = any(r.time_s == third_s and r.kind in ("force", "batter_before_first")
+                          for r in result.retirements)
         error = result.outcome == outcomes.REACHED_ON_ERROR
-        clean_third = self._clean_outs(self.pitcher, outs) >= 2
+        clean_third = not self.unlimited_outs and self._clean_outs(self.pitcher, outs) >= 2
         rbi_allowed = {r for r in self.runners if r.base + _out_advance(result.error_out, r.base) > 3}
         if error:
             self.missed_outs += 1
+        # A choice replaces the forced runner for pitcher responsibility
+        # (9.16(g)), including a runner absent from the errorless inning.
+        replacement = next((before[r.runner_id] for r in result.retirements
+            if result.outcome == outcomes.FIELDERS_CHOICE and r.kind == "force"
+            and r.runner_id in before), None)
         # Earlier scored runners waiting in the reconstruction still respond
         # to this hit, or to the clean out an error concealed.
         for r in reconstructed:
@@ -318,7 +331,10 @@ class ScoreKeeper:
         scoring = []
         for move in result.movements:
             if move.runner_id == "B":
-                runner = Runner(max(1, result.hit_bases), self.pitcher, reached_on_error=error)
+                runner = Runner(max(1, result.hit_bases),
+                    replacement.pitcher if replacement is not None else self.pitcher, reached_on_error=error)
+                if replacement is not None and replacement.clean_base is None:
+                    runner.clean_base = None
                 self.runners.append(runner)
             else:
                 runner = before[move.runner_id]
@@ -341,7 +357,7 @@ class ScoreKeeper:
             runner.base = move.final_base
             runner.onBase = move.final_base in (1, 2, 3)
             crossed = move.scored_s
-            if crossed is not None and not batter_out_third and (third_s is None or crossed < third_s):
+            if crossed is not None and not (batter_out_third or force_third) and (third_s is None or crossed < third_s):
                 scoring.append((crossed, runner))
             elif crossed is not None:
                 # An annulled run cannot remain in a surviving on-base slot.
@@ -351,11 +367,13 @@ class ScoreKeeper:
         for time_s, runner in sorted(scoring, key=lambda item: item[0]):
             runner.scored = True
             scored += self._settle(outs + sum(t <= time_s for t in retired))
-            rbi += int(not error or (outs < 2 and runner in rbi_allowed))
+            rbi += int(not result.ground_double_play and
+                       (not error or ((self.unlimited_outs or outs < 2) and runner in rbi_allowed)))
         self._settle(outs + len(retired))
         sacrifice = ((result.outcome == outcomes.FLYOUT and scored > 0)
                      or (error and result.error_out == outcomes.FLYOUT and rbi > 0))
-        self.last_play = Play(scored, rbi, sacrifice, result.running_outs, result.batter_on_throw_base)
+        self.last_play = Play(scored, rbi, sacrifice, result.running_outs, result.batter_on_throw_base,
+                              result.double_play, result.fielding_sequence)
         self._rebuild_base_state()
         return self.last_play
 

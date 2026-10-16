@@ -193,6 +193,7 @@ class CircuitRun:
     target_base: int = 1
     stopped_at_s: float | None = None
     returning: bool = False
+    run_through_first: bool = False  # keep the first-leg deceleration beyond the bag when holding
 
     def __post_init__(self):
         if self.start_base:
@@ -222,14 +223,14 @@ class CircuitRun:
         if self.stopped_at_s is not None:
             time_s = min(time_s, self.stopped_at_s)
         if self.first is not None and time_s <= self.first_cutoff_s:
-            return self.first.position_at(min(time_s, self.first.arrival_s))
+            return self.first.position_at(time_s if self.run_through_first else min(time_s, self.first.arrival_s))
         for piece in self.pieces:
             if time_s <= min(piece.cutoff_s, piece.arrival_s):
                 return piece.position_at(time_s)
         return BASE_FT[self.target_base]
 
     def velocity_at(self, time_s):
-        if time_s >= self.arrival_s:
+        if time_s >= self.arrival_s and not (self.run_through_first and self.first is not None and not self.pieces):
             return (0.0, 0.0)
         a, b = self.position_at(time_s), self.position_at(time_s + 0.001)
         return tuple((y-x)/0.001 for x, y in zip(a, b))
@@ -239,6 +240,7 @@ class CircuitRun:
         if self.target_base >= 4 or self.stopped_at_s is not None or self.returning:
             return False
         current, nxt = self.target_base, self.target_base + 1
+        origin = BASE_FT[current]
         if time_s < self.arrival_s:
             point = self.position_at(time_s)
             velocity = self.velocity_at(time_s)
@@ -252,10 +254,15 @@ class CircuitRun:
             self.pieces.append(tail)
             start, initial, direction = tail.arrival_s, tail.end_fts, tail.end_direction
         else:
-            if self.first is not None and not self.pieces:
-                self.first_cutoff_s = self.first.arrival_s
             start, initial, direction = time_s, 0.0, None
-        self.pieces.append(RunLeg(BASE_FT[current], nxt, start, self.top_fts, initial,
+            if self.first is not None and not self.pieces:
+                if self.run_through_first:
+                    origin = self.position_at(time_s)
+                    velocity = self.velocity_at(time_s)
+                    initial = min(self.top_fts, math.hypot(*velocity))
+                    direction = _unit(velocity) if initial > 0 else None
+                self.first_cutoff_s = time_s if self.run_through_first else self.first.arrival_s
+        self.pieces.append(RunLeg(origin, nxt, start, self.top_fts, initial,
                                   start_direction=direction))
         self.target_base = nxt
         return True

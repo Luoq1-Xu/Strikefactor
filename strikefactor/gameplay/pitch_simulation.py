@@ -938,25 +938,28 @@ class PitchSimulation:
             import json
             from dataclasses import asdict
             payload = asdict(running_result)
-            payload["schema_version"] = 3
+            payload["schema_version"] = 4
             payload["control"] = asdict(control) if control is not None else None
             self.running_play_json = json.dumps(payload, separators=(",", ":"))
         running_outs = running_result.running_outs if running_result is not None else 0
         self.baserunning_outs = running_outs if running_result is not None else None
         self.batter_final_base = running_result.batter.final_base if running_result is not None else None
         race = getattr(self.hit_animation, "_return_race", None)
-        self.tag_margin_s = race.tag_margin_s if race is not None else None
+        self.tag_margin_s = race.tag_margin_s if race is not None and race.kind == "tag" else None
         outs_before = self.game.currentouts
         is_out = classified in outcomes.BATTED_OUT_OUTCOMES
-        is_error = classified in outcomes.REACH_OUTCOMES
+        is_error = classified in outcomes.ERROR_OUTCOMES
+        is_hit = classified in outcomes.HIT_OUTCOMES
         if is_out:
             self.is_hit = False
             self.game.currentouts += 1
         elif is_error:
             self.is_hit = False
-        else:
+        elif is_hit:
             self.is_hit = True
             self.game.hits += 1
+        else:
+            self.is_hit = False
 
         self.game.currentouts += running_outs
 
@@ -971,7 +974,7 @@ class PitchSimulation:
         # to be the same colour.
         new_trail_color = (outcomes.OUT_COLOR if is_out
                            else outcomes.ERROR_COLOR if is_error
-                           else outcomes.HIT_COLOR)
+                           else outcomes.HIT_COLOR if is_hit else outcomes.OUT_COLOR)
         if self.game.last_pitch_information:
             last_entry = self.game.last_pitch_information[-1]
             if len(last_entry) >= 5 and last_entry[4] == "hit":
@@ -999,7 +1002,7 @@ class PitchSimulation:
         # to the batting-zone heatmap.
         # `record_hit` increments `total_hits` unconditionally, so an error
         # must not reach it — the batting heatmap is a record of hits earned.
-        if not is_out and not is_error:
+        if is_hit:
             self.game.field_renderer.record_hit(
                 self.game.ball[0], self.game.ball[1], hit_type=classified
             )
@@ -1020,12 +1023,12 @@ class PitchSimulation:
         self.new_entry['isHit'] = classified
         self.outcome = classified
 
-        display = self._format_display_outcome(classified)
+        display = running_result.display_name if running_result is not None else self._format_display_outcome(classified)
         if running_result is not None and running_result.batter_on_throw_base is not None:
             base = running_result.batter_on_throw_base
             where = "HOME" if base == 4 else f"{base}B"
             display += f" · TO {where} ON THROW"
-        if running_outs:
+        if running_outs and classified != outcomes.FIELDERS_CHOICE and not running_result.double_play:
             display += " · OUT ADVANCING"
         self.game.banner.show_banner(display)
 

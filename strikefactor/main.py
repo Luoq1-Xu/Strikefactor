@@ -266,6 +266,7 @@ class GameStats:
             # reached. Scoring it like a single would teach the pitch-selection
             # AI to avoid inducing ground balls.
             outcomes.REACHED_ON_ERROR: 1.0,
+            outcomes.FIELDERS_CHOICE: 1.0,
         }
         
     def reset_game_stats(self):
@@ -717,6 +718,7 @@ class Game:
         saved back to are then the same one by construction.
         """
         self.game_mode = mode
+        self.scoreKeeper.unlimited_outs = mode == "sandbox"
         self._load_batter_profile_for_current_bucket()
 
     def _db_start_game(self, game_mode, pitcher_name=None):

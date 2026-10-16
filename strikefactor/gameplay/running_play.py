@@ -58,6 +58,15 @@ class RunnerMovement:
 
 
 @dataclass(frozen=True)
+class RunnerRetirement:
+    runner_id: str
+    time_s: float
+    base: int
+    kind: str  # force, batter_before_first, tag, catch
+    role: str | None = None
+
+
+@dataclass(frozen=True)
 class RunningResult:
     outcome: str
     hit_bases: int
@@ -65,10 +74,25 @@ class RunningResult:
     events: tuple = ()
     error_out: str | None = None
     error_bases: int = 0
+    retirements: tuple = ()
+    fielding_sequence: tuple = ()
 
     @property
     def outs_added(self):
-        return sum(m.out_s is not None for m in self.movements)
+        return len(self.retirements) if self.retirements else sum(m.out_s is not None for m in self.movements)
+
+    @property
+    def double_play(self):
+        return self.outs_added == 2
+
+    @property
+    def ground_double_play(self):
+        return (self.double_play and self.outcome == outcomes.GROUNDOUT
+                and any(r.kind in ("force", "batter_before_first") for r in self.retirements))
+
+    @property
+    def display_name(self):
+        return outcomes.play_display_name(self.outcome, self.double_play, self.fielding_sequence)
 
     @property
     def running_outs(self):
@@ -106,6 +130,7 @@ class BaseRace:
     runner_s: float
     defense_s: float
     tag_s: float | None = None
+    kind: str = "tag"
 
     @property
     def margin_s(self):

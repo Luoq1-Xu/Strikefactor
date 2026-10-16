@@ -359,8 +359,9 @@ An airborne-only change must leave every ground-ball number identical.
 **Not modelled:** throwing errors that advance a runner an extra base (they need
 a live-ball state *after* the throw animation, which `HitAnimation` does not
 have; throw accuracy is already inside `SIGMA_S` by `infield_timing`'s own
-docstring), outfield ground bobbles, and double plays — which were already out
-of scope for `infield_timing`.
+docstring) and outfield ground bobbles. Ground-ball double plays use live
+force races and follow-up throws; see
+[manual-baserunning-design.md](manual-baserunning-design.md).
 
 **Positioning is untouched.** `FIELDER_HOMES` is static and, per CLAUDE.md, was
 implicitly calibrated against the uniform spray that `spray.py` replaced. It is

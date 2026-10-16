@@ -66,9 +66,10 @@ def test_restart_and_retreat_keep_already_observed_base_contacts():
     assert not route.commit_next(route.arrival_s + 1)
 
 
-def _return_play(base=2, margin=-0.10, relay=False, outs=0):
+def _return_play(base=2, margin=-0.10, relay=False, outs=0, game_mode="arcade"):
     random.seed(76)
-    game = SimpleNamespace(batter=SimpleNamespace(get_handedness=lambda: "R"), currentouts=outs)
+    game = SimpleNamespace(batter=SimpleNamespace(get_handedness=lambda: "R"),
+                           currentouts=outs, game_mode=game_mode)
     anim = ha.HitAnimation(game, "IN_PLAY", lambda: None, quality=0.8,
                            batted_ball_type="LINER", ev_mph=95, launch_deg=14)
     route = CircuitRun(BatterRun(4.3), 27)
@@ -203,14 +204,14 @@ def test_a_held_leading_runner_blocks_the_batter_from_the_same_base():
     anim._return_legs = ()
     anim._return_race = None
     anim._post_fielding = False
-    anim._run_decisions = {("1", 1)}
+    anim._run_decisions = {("2", 2)}
     anim._circuits = {"B": CircuitRun(BatterRun(4.3), 27),
-                      "1": CircuitRun(None, 27, start_base=1)}
+                      "2": CircuitRun(None, 27, start_base=2)}
     anim.fielders["LF"].pos[:] = ha._to_screen(200, 300)
     anim._ball_shadow = tuple(anim.fielders["LF"].pos)
     anim._advance_runners(3.9)
     assert anim._circuits["B"].target_base == 1
-    assert anim._circuits["1"].target_base == 1
+    assert anim._circuits["2"].target_base == 2
 
 
 def test_a_changed_loose_ball_can_turn_a_hold_into_a_coherent_standing_start(monkeypatch):
@@ -251,11 +252,11 @@ def test_clear_tag_third_out_can_end_without_inventing_later_contacts():
     assert not any(e.time_s > anim._inning_end_s for e in record.running_result.events)
 
 
-@pytest.mark.parametrize("outs", [3, 4, 10])
+@pytest.mark.parametrize("outs", [0, 1, 2, 3, 4, 10])
 @pytest.mark.parametrize("margin", [-0.1, 0.5])
 @pytest.mark.parametrize("step_ms", [16, 250])
 def test_return_play_finishes_with_cumulative_sandbox_outs(outs, margin, step_ms):
-    anim = _return_play(3, margin, outs=outs)
+    anim = _return_play(3, margin, outs=outs, game_mode="sandbox")
     t = anim._elapsed
     for _ in range(2000):
         t += step_ms
@@ -269,7 +270,7 @@ def test_return_play_finishes_with_cumulative_sandbox_outs(outs, margin, step_ms
     assert result.outcome == (outcomes.DOUBLE if tagged else outcomes.TRIPLE)
     assert result.running_outs == int(tagged)
     assert result.batter.final_base == (None if tagged else 3)
-    sk = ScoreKeeper()
+    sk = ScoreKeeper(unlimited_outs=True)
     play = sk.update_running_play(result, outs=outs)
     assert play.running_outs == int(tagged)
     assert sk.isRunnerOnBase(3) == (not tagged)
@@ -338,10 +339,10 @@ def test_runs_obey_the_actual_third_out_time_and_batter_out_rule(crossed, batter
     assert sk.take_charges() == ([("previous", 1, 1)] if counts else [])
 
 
-@pytest.mark.parametrize("outs", [3, 4, 10])
+@pytest.mark.parametrize("outs", [0, 1, 2, 3, 4, 10])
 @pytest.mark.parametrize("out_s", [None, 10.0])
 def test_cumulative_sandbox_outs_do_not_cancel_later_runs(outs, out_s):
-    sk = ScoreKeeper()
+    sk = ScoreKeeper(unlimited_outs=True)
     sk.runners = [Runner(3)]
     result = RunningResult(outcomes.SINGLE, 1, (
         RunnerMovement("B", 0, 1 if out_s is None else None, ((1, 4.3),), out_s),
