@@ -40,7 +40,6 @@ from strikefactor.ui.minimal_hud import MinimalHUD
 from strikefactor.ui.review_modal import can_review, run_modal
 from strikefactor.ui.review_overlay import ReviewOverlay, view_for_key
 from strikefactor.ui.scorebug import Scorebug
-from strikefactor.ui.swing_replay_overlay import SwingReplayOverlay
 from strikefactor.utils.pitch_physics import DEFAULT_CAMERA
 
 
@@ -426,12 +425,10 @@ class Game:
 
         # Review history owns pitch identity. `last_swing` / `last_fielding_play`
         # remain compatibility aliases; V/R/F enter Review, while T is the
-        # standalone pitch-flight view (`toggle_track`). There is one renderer
-        # per view: `swing_replay_overlay` is the object `review_views.SwingView`
-        # drives, not a second way to look at a swing.
+        # standalone pitch-flight view (`toggle_track`). Review owns each
+        # view's renderer through its adapters in `ui/review_views.py`.
         # A take does not displace the latest eligible swing/fielding entry.
         self.last_swing = None
-        self.swing_replay_overlay = SwingReplayOverlay(self)
         self.last_fielding_play = None
         self._fielding_play_number = 0
         self.review_store = ReviewStore()
@@ -982,6 +979,10 @@ class Game:
 
         # Begin a new sandbox session in the pitch DB.
         self._db_start_game("sandbox", pitcher_name=pitcher_name)
+
+        # A new session starts with FIXED AIM off. Not in the state's enter(),
+        # which also runs on the way back from the T view.
+        self.state_manager.states['sandbox_gameplay'].reset_aim()
 
         self.menu_state = 'sandbox_gameplay'
         self.current_gamemode = 'sandbox_gameplay'
@@ -1651,10 +1652,6 @@ class Game:
 
     def request_swing_replay(self):
         self.request_review(view='swing')
-
-    def _run_swing_replay_loop(self):
-        """Legacy embedder compatibility; normal entry uses request_review."""
-        run_modal(self, self.swing_replay_overlay, background=True)
 
     def request_fielding_replay(self, *, simulation=None):
         self.request_review(view='fielding', simulation=simulation)

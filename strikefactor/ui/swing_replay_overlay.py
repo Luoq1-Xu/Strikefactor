@@ -5,13 +5,10 @@ facts that decided it — when the bat arrived, where it was, and where the ball
 was at that instant — were each computed for one frame and discarded. This
 draws them.
 
-Structure follows `ABSChallengeOverlay`: an instance built once on `Game`, a
-keyword-only `trigger()`, a phase machine on cumulative millisecond
-boundaries, and `is_active()` driving a nested render loop in `main.py` that
-supplies the pause. It deliberately does *not* follow that overlay's
-typography — the ABS card is the one screen in the UI that uses
-`SysFont("arial")` and its own pink palette, which makes it the exception
-rather than the pattern. Everything here is `gameday_theme`.
+`review_views.SwingView` owns this renderer. `trigger()` prepares the
+record's geometry and `render_review()` samples it at the workspace's pitch
+time. The workspace owns playback, camera controls and modal input; this
+renderer draws only the swing and its diagnostics using `gameday_theme`.
 
 **Two views, one source.** SIDE looks down the world x axis, so the horizontal
 screen axis is `y` (feet from the plate) and the timing error appears as
@@ -123,13 +120,12 @@ import pygame
 from strikefactor.gameplay import bat_contact, bat_path, spray
 from strikefactor.ui import gameday_theme as gdt
 
-# --- Phases, cumulative ms ---------------------------------------------------
-# The intro is a fixed piece of chrome; the two that follow are computed per
-# swing by `_compute_phases`, because the slice of pitch being shown is not the
-# same length every time.
-_PHASE_INTRO_END = 420      # panel fades up, pitch card slides in
-_FREEZE_HOLD_MS = 500       # held at the end, ghost bat fading in
-_DISMISS_FADE_MS = 260
+# --- Internal presentation clock, cumulative ms ------------------------------
+# `render_review` maps the workspace's pitch time onto this scale. The start
+# offset and completed hold let the drawing helpers distinguish the replay
+# from its endpoint reference frame; they no longer drive a modal animation.
+_PHASE_INTRO_END = 420
+_FREEZE_HOLD_MS = 500
 
 # **One slow-motion rate for every swing**, stated as wall-clock milliseconds
 # per second of pitch. The replay used to be a fixed 2180 ms of wall clock
@@ -141,8 +137,6 @@ _DISMISS_FADE_MS = 260
 # 12x slow motion, and reproduces the old duration for an ordinary swing --
 # 0.18 s of pitch, since the window is `_PRE_SWING_S` plus the swing.
 _REPLAY_MS_PER_PITCH_S = 12000
-
-_DIM_ALPHA = 225
 
 # How much of the pitch to replay before the bat starts moving. The whole
 # flight is ~0.4 s and the bat is only present for the last 0.15, so starting at
@@ -159,7 +153,6 @@ _REPLAY_TAIL_S = 0.0
 
 _VIEW_SIDE = 0
 _VIEW_OVERHEAD = 1
-_VIEW_LABELS = ["SIDE", "OVERHEAD"]
 
 # --- Field of view, in feet --------------------------------------------------
 # These are the ranges each view *must* hold; `_fit_isotropic` then widens
@@ -234,9 +227,6 @@ _BAT_BASE_FRACTIONS = frozenset(
     + [frac for frac, _ in _BAT_PROFILE_IN])
 _BAT_SORTED_FRACTIONS = tuple(sorted(_BAT_BASE_FRACTIONS))
 
-def _ease_out(t):
-    return 1.0 - (1.0 - t) ** 3
-
 
 def _fit_isotropic(h_range, v_range, width_px, height_px):
     """One scale for both axes: the ranges a view must hold, widened to fill it.
@@ -300,22 +290,17 @@ def _draw_dashed_line(surface, color, a, b, dash=6, gap=5):
 
 
 class SwingReplayOverlay:
-    """Phased slow-motion replay of a `SwingRecord`."""
+    """Swing geometry and diagnostics sampled by the review workspace."""
 
     PANEL_W = 1120
     PANEL_H = 640
     VIEW_H = 340
 
     def __init__(self, game):
-        self.game = game
         self.screen_w = game.internal_width
         self.screen_h = game.internal_height
 
-        self._active = False
-        self._completed = False
         self._elapsed_ms = 0
-        self._dismiss_started = False
-        self._dismiss_elapsed = 0
 
         self._record = None
         self._swing = None
@@ -326,8 +311,6 @@ class SwingReplayOverlay:
         # Defaulted so the clock methods are total even with no record open.
         self._replay_end_ms = _PHASE_INTRO_END
         self._view = _VIEW_SIDE
-        self._paused = False
-        self._chip_hits = []
 
         self._fonts = None
 
@@ -338,18 +321,15 @@ class SwingReplayOverlay:
             self._fonts = gdt.load_fonts()
         return self._fonts
 
-    def is_active(self):
-        return self._active
-
     def trigger(self, *, record):
         """Open the replay on `record`. Builds both bats once, up front.
 
         The timing windows are measured here too, for the same reason the
         depth range is: `timing_windows_ms` re-sweeps the swing about 37 times
         and costs ~54 ms once. Left to compute lazily it would fire on the
-        first frame `_draw_stats` runs, which is 420 ms into the replay — a
-        visible stutter partway through the swing. Paid on the keypress that
-        opens the overlay, it lands on a frame that was changing anyway.
+        first frame `_draw_stats` runs, causing a visible stutter. Paid
+        when the workspace opens the swing, it lands on a frame that was
+        changing anyway.
         """
         self._review_rect = None
         self._record = record
@@ -364,70 +344,6 @@ class SwingReplayOverlay:
         # visible stutter partway through an already-running replay.
         record.warm_timing_windows()
         self._elapsed_ms = 0
-        self._dismiss_started = False
-        self._dismiss_elapsed = 0
-        self._completed = False
-        self._paused = False
-        self._active = True
-
-    def dismiss(self):
-        if self._active and not self._dismiss_started:
-            self._dismiss_started = True
-
-    def update(self, dt_ms):
-        if not self._active:
-            return
-        if self._dismiss_started:
-            self._dismiss_elapsed += int(dt_ms)
-            if self._dismiss_elapsed >= _DISMISS_FADE_MS and not self._completed:
-                self._completed = True
-                self._active = False
-            return
-        if self._paused:
-            return
-        self._elapsed_ms = min(self._freeze_end_ms, self._elapsed_ms + int(dt_ms))
-
-    def handle_event(self, event):
-        """Scrub, toggle view, close. Returns True if the event was consumed."""
-        if not self._active or self._dismiss_started:
-            return False
-
-        if event.type == pygame.KEYDOWN:
-            if event.key in (pygame.K_ESCAPE, pygame.K_RETURN, pygame.K_KP_ENTER):
-                self.dismiss()
-                return True
-            if event.key == pygame.K_SPACE:
-                # Replaying from the end rather than resuming a finished clip,
-                # which is the only sensible reading of "play" once the
-                # animation has already landed on the freeze.
-                if self._elapsed_ms >= self._freeze_end_ms:
-                    self._elapsed_ms = _PHASE_INTRO_END
-                    self._paused = False
-                else:
-                    self._paused = not self._paused
-                return True
-            if event.key == pygame.K_TAB:
-                self._view = 1 - self._view
-                return True
-            if event.key in (pygame.K_LEFT, pygame.K_RIGHT):
-                self._step(-1 if event.key == pygame.K_LEFT else 1)
-                return True
-        elif event.type == pygame.MOUSEBUTTONDOWN:
-            for rect, index in self._chip_hits:
-                if rect.collidepoint(event.pos):
-                    self._view = index
-                    return True
-            self.dismiss()
-            return True
-        return False
-
-    def _step(self, direction):
-        """Scrub one frame of the replay. Pauses, since scrubbing implies it."""
-        self._paused = True
-        span = self._replay_end_ms - _PHASE_INTRO_END
-        self._elapsed_ms = max(_PHASE_INTRO_END,
-                               min(self._freeze_end_ms,
-                                   self._elapsed_ms + direction * span // 40))
 
     # -- the replay clock -------------------------------------------------
 
@@ -683,40 +599,6 @@ class SwingReplayOverlay:
         return result
 
     # -- render -----------------------------------------------------------
-
-    def render(self, surface):
-        if not self._active or self._record is None:
-            return
-
-        alpha = 1.0
-        if self._dismiss_started:
-            alpha = 1.0 - _ease_out(min(1.0, self._dismiss_elapsed / _DISMISS_FADE_MS))
-
-        intro = min(1.0, self._elapsed_ms / _PHASE_INTRO_END)
-        dim = pygame.Surface((self.screen_w, self.screen_h), pygame.SRCALPHA)
-        dim.fill((0, 0, 0, int(_DIM_ALPHA * _ease_out(intro) * alpha)))
-        surface.blit(dim, (0, 0))
-
-        if alpha <= 0.01:
-            return
-
-        panel = self._panel_rect()
-        pygame.draw.rect(surface, gdt.BG, panel)
-        pygame.draw.rect(surface, gdt.DIVIDER, panel, 1)
-
-        fonts = self._f()
-        gdt.blit_text(surface, "=== SWING REPLAY ===", fonts['micro'],
-                      (panel.x + 24, panel.y + 20), gdt.FG)
-        self._chip_hits = gdt.draw_chips(
-            surface, fonts['micro'], _VIEW_LABELS, self._view,
-            panel.right - 24, panel.y + 16)
-        pygame.draw.line(surface, gdt.DIVIDER,
-                         (panel.x + 24, panel.y + 46),
-                         (panel.right - 24, panel.y + 46), 1)
-
-        self._draw_view(surface)
-        self._draw_stats(surface)
-        self._draw_hint(surface)
 
     def review_duration_ms(self):
         """Length of the replayed slice, in milliseconds of pitch time.
@@ -1276,18 +1158,3 @@ class SwingReplayOverlay:
         if rec.made_contact == "fouled":
             return "FOUL"
         return (rec.outcome or "IN PLAY").upper()
-
-    def _draw_hint(self, surface):
-        """Controls, on their own line below the stats grid.
-
-        The grid is two rows of four and grows downward from the view, so the
-        hint has to sit under the *taller* of the two possible layouts rather
-        than at a fixed offset from the panel — it was landing on top of the
-        EXIT VELO row.
-        """
-        panel = self._panel_rect()
-        gdt.blit_text(
-            surface,
-            "SPACE  REPLAY      < >  SCRUB      TAB  VIEW      ESC  CLOSE",
-            self._f()['micro'],
-            (panel.centerx, panel.bottom - 24), gdt.DIM, align='center')

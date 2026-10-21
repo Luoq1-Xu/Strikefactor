@@ -16,6 +16,7 @@ from strikefactor.gameplay import game_states as gs
 from strikefactor.ui import gameday_theme as gdt
 from strikefactor.ui.pitcher_select import CARD_RECT, PitcherSelect
 from strikefactor.ui.settings_panel import KeyBindingsPanel, SettingsPanel
+from strikefactor.utils.pitch_physics import DEFAULT_CAMERA
 
 SCREEN_RECT = pygame.Rect(0, 0, gdt.SCREEN_W, gdt.SCREEN_H)
 
@@ -530,11 +531,11 @@ def test_q_does_not_continue_or_pitch_at_inning_end():
 
 
 def test_sandbox_keeps_only_its_selectors():
-    """The pitcher switch and the pitch toggles are selections, not actions:
-    no key does what they do, so they are the one sidebar left."""
+    """The pitcher switch, the pitch toggles and FIXED AIM are selections,
+    not actions: no key does what they do, so they are the one sidebar left."""
     actions = [b.action for b in _sandbox().buttons()]
     assert actions
-    assert {kind for kind, _name in actions} == {'pitcher', 'pitch'}
+    assert {kind for kind, _name in actions} == {'pitcher', 'pitch', 'aim'}
 
 
 def test_the_sidebar_lists_every_pitcher_and_the_whole_arsenal():
@@ -579,6 +580,124 @@ def test_the_last_active_pitch_cannot_be_switched_off():
     state.handle_event(_click(rects[('pitch', 'FF')].center))
     state.handle_event(_click(rects[('pitch', 'SL')].center))
     assert state.active_pitches == {'SL'}
+
+
+# ── FIXED AIM ────────────────────────────────────────────────────────────
+
+_AIM = ('aim', 'fixed')
+
+
+def _motion(pos, held=True):
+    return pygame.event.Event(pygame.MOUSEMOTION, pos=pos, rel=(0, 0),
+                              buttons=(1 if held else 0, 0, 0))
+
+
+def _release(pos):
+    return pygame.event.Event(pygame.MOUSEBUTTONUP, button=1, pos=pos)
+
+
+def _aim_on(state):
+    rects = {b.action: b.rect for b in state.buttons()}
+    state.handle_event(_click(rects[_AIM].center))
+    assert state.aim_on
+    return state
+
+
+# Inside the aim area but clear of the zone's centre, so a move is visible.
+_ZONE_SPOT = (600, 450)
+
+
+@pytest.mark.parametrize('pitches', [('FF', 'SL', 'CH', 'SI'),
+                                     ('FF', 'SI', 'FC', 'SL', 'CU', 'CH', 'FS')])
+def test_fixed_aim_sits_one_slot_below_the_whole_arsenal(pitches):
+    buttons = _sandbox(pitches).buttons()
+    aim = next(b.rect for b in buttons if b.action == _AIM)
+    lowest_pitch = max(b.rect.bottom for b in buttons if b.action[0] == 'pitch')
+    assert aim.top - lowest_pitch >= gs.SandboxGameplayState.SIDEBAR_STEP
+
+
+def test_clicking_fixed_aim_toggles_it_and_shows_it_selected():
+    state = _sandbox()
+    assert not state.aim_on
+    assert _AIM not in {b.action for b in state.buttons() if b.selected}
+    _aim_on(state)
+    assert _AIM in {b.action for b in state.buttons() if b.selected}
+    state.handle_event(_click({b.action: b.rect for b in state.buttons()}[_AIM].center))
+    assert not state.aim_on
+
+
+def test_with_the_aim_on_a_click_by_the_zone_places_it():
+    state = _aim_on(_sandbox())
+    state.handle_event(_click(_ZONE_SPOT))
+    assert state.aim_ft == DEFAULT_CAMERA.screen_to_world_at_plate(*_ZONE_SPOT)
+    assert state._aim_px() == pytest.approx(_ZONE_SPOT, abs=1e-9)
+
+
+def test_a_zone_click_moves_nothing_with_the_aim_off():
+    state = _sandbox()
+    state.handle_event(_click(_ZONE_SPOT))
+    assert state.aim_ft == state.AIM_DEFAULT_FT
+
+
+def test_a_hidden_sidebar_takes_no_aiming_clicks_and_draws_no_crosshair():
+    state = _sandbox(ui_visible=False)
+    state.aim_on = True
+    state.handle_event(_click(_ZONE_SPOT))
+    assert state.aim_ft == state.AIM_DEFAULT_FT
+    assert state._visible_aim_px() is None
+
+
+def test_a_click_outside_the_aim_area_is_ignored():
+    state = _aim_on(_sandbox())
+    for far in [(300, 450), (960, 450), (630, 120), (630, 700)]:
+        assert not state._in_aim_area(far), far
+        state.handle_event(_click(far))
+    assert state.aim_ft == state.AIM_DEFAULT_FT
+
+
+def test_dragging_the_aim_past_the_edge_holds_it_on_the_edge():
+    """Screen-right is the first-base side, world -x, and screen-up is up."""
+    state = _aim_on(_sandbox())
+    state.handle_event(_click(_ZONE_SPOT))
+    state.handle_event(_motion((1250, 10)))
+    assert state.aim_ft == (-state.AIM_X_LIMIT_FT, state.AIM_Z_RANGE_FT[1])
+    state.handle_event(_motion((10, 710)))
+    assert state.aim_ft == (state.AIM_X_LIMIT_FT, state.AIM_Z_RANGE_FT[0])
+
+    # Let go: moving the pointer no longer moves the aim.
+    state.handle_event(_release((10, 710)))
+    state.handle_event(_motion(_ZONE_SPOT, held=False))
+    assert state.aim_ft == (state.AIM_X_LIMIT_FT, state.AIM_Z_RANGE_FT[0])
+
+
+def test_a_drag_that_never_started_in_the_area_moves_nothing():
+    state = _aim_on(_sandbox())
+    state.handle_event(_click((300, 450)))
+    state.handle_event(_motion(_ZONE_SPOT))
+    assert state.aim_ft == state.AIM_DEFAULT_FT
+
+
+def test_the_aim_stays_put_through_a_pitcher_switch():
+    state = _aim_on(_sandbox())
+    state.handle_event(_click(_ZONE_SPOT))
+    placed = state.aim_ft
+    rects = {b.action: b.rect for b in state.buttons()}
+    state.handle_event(_click(rects[('pitcher', 'degrom')].center))
+    assert state.aim_on and state.aim_ft == placed
+
+
+def test_leaving_sandbox_takes_the_crosshair_off_the_shared_field():
+    state = _aim_on(_sandbox())
+    state.game.field_renderer = SimpleNamespace(aim_marker=state._aim_px())
+    state.exit()
+    assert state.game.field_renderer.aim_marker is None
+
+
+def test_a_new_session_starts_with_the_aim_off_and_centred():
+    state = _aim_on(_sandbox())
+    state.handle_event(_click(_ZONE_SPOT))
+    state.reset_aim()
+    assert not state.aim_on and state.aim_ft == state.AIM_DEFAULT_FT
 
 
 def test_a_hidden_sidebar_is_not_drawn_and_takes_no_clicks():

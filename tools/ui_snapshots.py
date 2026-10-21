@@ -107,6 +107,14 @@ def _gameday_history_detail(game):
     state._on_activate(state.items[0])
 
 
+def _sandbox_fixed_aim(game):
+    """FIXED AIM on, the crosshair low and away from a right-handed batter."""
+    _hud('legacy')(game)
+    state = _state(game)
+    state.toggle_aim()
+    state.aim_ft = (-0.6, 1.7)
+
+
 def _sandbox_hidden(game):
     game.toggle_ui_visibility()
 
@@ -141,6 +149,7 @@ SCENES = [
     ('sandbox_gameplay_legacy', lambda g: g._enter_sandbox_gameplay('sale'), 0),
     ('sandbox_gameplay_broadcast', _hud('broadcast'), 0),
     ('sandbox_gameplay_minimal', _hud('minimal'), 0),
+    ('sandbox_fixed_aim', _sandbox_fixed_aim, 0),
     ('sandbox_ui_hidden', lambda g: (_hud('legacy')(g), _sandbox_hidden(g)), 0),
     ('gameday_setup', _sandbox_shown_again, 0),
     ('gameday_opponent_half',

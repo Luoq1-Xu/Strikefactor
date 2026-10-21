@@ -24,7 +24,7 @@ from datetime import datetime, timedelta
 
 from strikefactor import outcomes, paths
 
-SCHEMA_VERSION = 14  # Bumped when migrations are added; see PitchDB._migrate.
+SCHEMA_VERSION = 15  # Bumped when migrations are added; see PitchDB._migrate.
 
 # v5 renamed the pop-up outcome from "POP_UP" to "POP UP", so it reads like
 # every other recorded outcome ("HOME RUN", "LINEOUT"). Data written before v5
@@ -79,6 +79,10 @@ class PitchDB:
         command_sigma_in REAL,
         location_archetype TEXT,
         platoon TEXT,
+        -- v15: who chose the spot, 'pitcher' or 'player' (Sandbox's FIXED
+        -- AIM). A player-aimed pitch has intent_* = target_* = the spot and
+        -- NULL intent_kind, miss_kind, command_sigma_in and archetype.
+        aimed_by TEXT,
 
         -- AB / count context
         strikes_before INTEGER,
@@ -385,6 +389,13 @@ class PitchDB:
     # Control mode is unknown on historical rows, never backfilled as Auto.
     V14_PITCHES_COLUMNS = [("baserunning_mode", "TEXT")]
 
+    # v15: 'pitcher' when the location model chose the spot, 'player' when
+    # Sandbox's FIXED AIM did. A player-aimed row rolled no intent and had no
+    # command applied, so intent_kind, miss_kind, command_sigma_in and
+    # location_archetype are NULL on it. NULL on rows from before v15, and on
+    # pitches with no recorded intent; never back-filled.
+    V15_PITCHES_COLUMNS = [("aimed_by", "TEXT")]
+
     # Backup policy
     BACKUP_DIR_NAME = "backups"
     BACKUP_MIN_INTERVAL = timedelta(hours=1)  # don't backup more than once per hour
@@ -420,7 +431,8 @@ class PitchDB:
                              + self.V7_PITCHES_COLUMNS + self.V8_PITCHES_COLUMNS
                              + self.V9_PITCHES_COLUMNS + self.V10_PITCHES_COLUMNS
                              + self.V11_PITCHES_COLUMNS + self.V12_PITCHES_COLUMNS
-                             + self.V13_PITCHES_COLUMNS + self.V14_PITCHES_COLUMNS):
+                             + self.V13_PITCHES_COLUMNS + self.V14_PITCHES_COLUMNS
+                             + self.V15_PITCHES_COLUMNS):
                 if col not in existing_pitches:
                     self.conn.execute(f"ALTER TABLE pitches ADD COLUMN {col} {decl}")
 
@@ -716,6 +728,7 @@ class PitchDataExtractor:
             "command_sigma_in": intent.command_sigma_in if intent else None,
             "location_archetype": (intent.archetype or None) if intent else None,
             "platoon": intent.platoon if intent else None,
+            "aimed_by": intent.aimed_by if intent else None,
             "strikes_before": ctx.get("Strikes", 0),
             "balls_before": ctx.get("Balls", 0),
             "outs_before": ctx.get("Outs", 0),

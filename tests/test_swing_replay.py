@@ -17,10 +17,12 @@ import pytest
 from strikefactor.gameplay import bat_contact, bat_path, spray
 from strikefactor.gameplay.swing_record import SwingRecord
 from strikefactor.ui import swing_replay_overlay as sro
+from strikefactor.ui.review_playback import Playback
 from strikefactor.ui.swing_replay_overlay import SwingReplayOverlay
 from strikefactor.utils.pitch_physics import DEFAULT_CAMERA, PitchTrajectory
 
 SCREEN = (1280, 720)
+REVIEW_RECT = pygame.Rect(24, 102, 1232, 490)
 
 
 def make_trajectory(speed_mph=93.0, target_z=2.5):
@@ -760,7 +762,7 @@ def test_a_perfectly_timed_swing_has_no_daylight_from_its_ghost():
     assert math.dist(real, ghost) == pytest.approx(0.0, abs=1e-3)
 
 
-# ---- The overlay ------------------------------------------------------------
+# ---- The review renderer ------------------------------------------------------------
 
 @pytest.fixture
 def overlay():
@@ -772,11 +774,12 @@ def overlay():
 def _run(overlay, record, ms=4000, step=16):
     surface = pygame.Surface(SCREEN)
     overlay.trigger(record=record)
+    playback = Playback(overlay.review_duration_ms(), speed=1 / 12)
     elapsed = 0
     while elapsed < ms:
-        overlay.update(step)
+        playback.update(step)
         surface.fill((0, 0, 0))
-        overlay.render(surface)
+        overlay.render_review(surface, REVIEW_RECT, playback.time_ms)
         elapsed += step
     return surface
 
@@ -793,12 +796,7 @@ def test_every_swing_outcome_renders(overlay, made_contact, outcome):
 @pytest.mark.parametrize("hand", ["R", "L"])
 def test_both_views_render_across_the_timing_range(overlay, ms, hand):
     for view in (0, 1):
-        overlay.trigger(record=make_record(ms, hand=hand))
-        overlay._view = view
-        surface = pygame.Surface(SCREEN)
-        for _ in range(60):
-            overlay.update(16)
-            overlay.render(surface)
+        _run_view(overlay, make_record(ms, hand=hand), view, ms=960)
 
 
 def test_a_swing_with_no_measured_contact_still_renders(overlay):
@@ -813,7 +811,7 @@ def test_a_swing_with_no_measured_contact_still_renders(overlay):
 
 @pytest.mark.parametrize("ms", [-40.0, -20.0, 0.0, 20.0, 40.0])
 def test_the_clip_runs_to_contact_and_holds_there(overlay, ms):
-    """End to end through the overlay's own clock.
+    """End to end through review playback and the embedded renderer.
 
     `_now_s` at the freeze must be the instant the sweep found, and the bat
     sampled there must be the bat the sweep was holding — the picture and the
@@ -924,53 +922,6 @@ def test_a_struck_swing_renders_in_both_views(overlay):
             overlay.trigger(record=rec)
             overlay._view = view
             _run(overlay, rec)
-
-
-def test_the_overlay_closes_itself(overlay):
-    overlay.trigger(record=make_record())
-    assert overlay.is_active()
-    overlay.dismiss()
-    for _ in range(40):
-        overlay.update(16)
-    assert not overlay.is_active()
-
-
-def test_escape_closes_and_tab_toggles_the_view(overlay):
-    overlay.trigger(record=make_record())
-    start = overlay._view
-    assert overlay.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_TAB))
-    assert overlay._view != start
-    assert overlay.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_ESCAPE))
-    for _ in range(40):
-        overlay.update(16)
-    assert not overlay.is_active()
-
-
-def test_scrubbing_pauses_and_moves_the_clock(overlay):
-    """A scrub step is a fortieth of the replay, whatever length that is —
-    read off the overlay rather than off a literal, since the clip is as long
-    as the slice of pitch it has to show."""
-    overlay.trigger(record=make_record())
-    step = (overlay._replay_end_ms - 420) // 40
-    for _ in range(80):
-        overlay.update(16)
-    before = overlay._elapsed_ms
-    overlay.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_LEFT))
-    assert overlay._paused
-    assert overlay._elapsed_ms < before
-    overlay.update(16)
-    assert overlay._elapsed_ms == pytest.approx(before - step, abs=1)
-
-
-def test_space_restarts_a_finished_replay(overlay):
-    overlay.trigger(record=make_record())
-    end = overlay._freeze_end_ms
-    for _ in range(300):
-        overlay.update(16)
-    assert overlay._elapsed_ms == end
-    overlay.handle_event(pygame.event.Event(pygame.KEYDOWN, key=pygame.K_SPACE))
-    assert overlay._elapsed_ms < end
-    assert not overlay._paused
 
 
 # ---- The camera stands where the label says --------------------------------
@@ -1113,10 +1064,8 @@ def test_first_touch_has_adjacent_bat_and_ball_pixels(overlay, view, ms):
 def _lit_bounds(surface):
     """Bounding box of everything actually drawn.
 
-    Not `get_bounding_rect`: the overlay lays a full-screen dim down first,
-    and (0, 0, 0, alpha) over black is still black, so on an opaque surface
-    that helper reports the whole screen no matter what was drawn. The dim is
-    the thing we need to see *through*, so scan for non-black pixels instead.
+    An opaque surface's `get_bounding_rect` reports the whole screen, so
+    scan for non-black pixels instead.
     """
     import numpy as np
     from pygame import surfarray
@@ -1132,19 +1081,13 @@ def _lit_bounds(surface):
 def test_nothing_is_drawn_outside_the_panel(overlay, ms, view):
     """The views clip to their own rect. A bat that met the ball 9 ft out
     front runs off the end of the field of view, and without the clip it
-    scribbles across the dimmed gameplay behind the panel.
+    scribbles across the workspace controls outside the panel.
 
     Checked over the whole bounding box rather than by probing corners,
     because a spill that happens at one row height slips past corners — the
     same reason `test_pitching_box_panel` measures it this way.
     """
-    overlay.trigger(record=make_record(ms))
-    overlay._view = view
-    surface = pygame.Surface(SCREEN)
-    for _ in range(250):
-        overlay.update(16)
-        surface.fill((0, 0, 0))
-        overlay.render(surface)
+    surface = _run_view(overlay, make_record(ms), view)
     lit = _lit_bounds(surface)
     assert lit is not None, "the overlay drew nothing"
     assert overlay._panel_rect().contains(lit), f"{lit} escaped {overlay._panel_rect()}"
@@ -1260,76 +1203,6 @@ def test_the_spray_label_lands_inside_the_view(overlay, monkeypatch):
     assert labels, "no spray label was drawn"
     view = overlay._view_rect()
     assert all(view.contains(r) for r in labels), labels[-1]
-
-
-# ---- The nested loop that runs the overlay ---------------------------------
-# `Game` can't be constructed headlessly, so the loop is bound to a stub that
-# carries only what it touches — the same shape as
-# tests/test_exit_to_menu_routing.py.
-
-
-class _StubOverlay:
-    """Active for a fixed number of frames, then done."""
-
-    def __init__(self, frames=3):
-        self._left = frames
-        self.rendered = 0
-
-    def is_active(self):
-        return self._left > 0
-
-    def update(self, dt_ms):
-        self._left -= 1
-
-    def render(self, surface):
-        self.rendered += 1
-
-    def handle_event(self, event):
-        return True
-
-    def dismiss(self):
-        self._left = 0
-
-
-class _StubBanner:
-    def __init__(self):
-        self.draws = 0
-
-    def draw(self):
-        self.draws += 1
-
-
-class _StubReplayGame:
-    from strikefactor.main import Game as _G
-    _run_swing_replay_loop = _G._run_swing_replay_loop
-    del _G
-
-    def __init__(self):
-        self.clock = pygame.time.Clock()
-        self.screen = pygame.Surface(SCREEN)
-        self.state_manager = type("_SM", (), {"current_state": None})()
-        self.swing_replay_overlay = _StubOverlay()
-        self.banner = _StubBanner()
-        self.huds = 0
-        self.flips = 0
-
-    def _draw_active_hud(self, screen):
-        self.huds += 1
-
-    def flip_display(self):
-        self.flips += 1
-
-
-def test_the_replay_loop_draws_nothing_over_the_panel():
-    """The field and the HUD are dimmed by the overlay's scrim, but anything
-    drawn after it is not, so the loop draws nothing after it: no banner and
-    no state overlay (Sandbox's sidebar, inning end's CONTINUE). Those belong
-    to the main loop's frame, which draws them again when the replay closes."""
-    g = _StubReplayGame()
-    g._run_swing_replay_loop()
-    assert g.swing_replay_overlay.rendered == 3
-    assert g.huds == 3, "the HUD is still drawn — it is behind the scrim"
-    assert g.banner.draws == 0
 
 
 class _AnimStubGame:
@@ -1589,13 +1462,5 @@ def test_a_ball_met_behind_the_plate_is_framed_and_reported(overlay, hand,
 
 def _run_view(overlay, record, view, ms=4000, step=16):
     """`_run`, holding one view."""
-    surface = pygame.Surface(SCREEN)
-    overlay.trigger(record=record)
     overlay._view = view
-    elapsed = 0
-    while elapsed < ms:
-        overlay.update(step)
-        surface.fill((0, 0, 0))
-        overlay.render(surface)
-        elapsed += step
-    return surface
+    return _run(overlay, record, ms=ms, step=step)

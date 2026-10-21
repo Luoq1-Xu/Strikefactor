@@ -3,6 +3,7 @@ Game state classes for StrikeFactor baseball simulator.
 Each state handles its own rendering, input processing, and state transitions.
 """
 
+import contextlib
 from abc import ABC, abstractmethod
 from datetime import datetime
 
@@ -17,6 +18,7 @@ from strikefactor.ui.pitching_box_panel import PitchingBoxPanel, PitchingSide
 from strikefactor.ui.play_by_play_panel import PlayByPlayPanel
 from strikefactor.ui.settings_panel import KeyBindingsPanel, SettingsPanel
 from strikefactor.ui.widgets import Button, ButtonGroup
+from strikefactor.utils.pitch_physics import DEFAULT_CAMERA
 
 
 class GameState(ABC):
@@ -970,8 +972,8 @@ class SandboxGameplayState(GameState):
     """Sandbox gameplay state with user-controlled pitch selection."""
 
     # ── Left sidebar ─────────────────────────────────────────────────────
-    # The one sidebar in the game: the pitcher switch and the pitch toggles,
-    # which are selections and have no key. Everything else that used to sit
+    # The one sidebar in the game: the pitcher switch, the pitch toggles and
+    # FIXED AIM, which are selections and have no key. Everything else that used to sit
     # in this column (ZONE, BATTER, REVIEW, SOUND, MENU, EXIT) is a key
     # binding, so Arcade and GameDay show no buttons at all during play.
     SIDEBAR_X = 6
@@ -982,6 +984,21 @@ class SandboxGameplayState(GameState):
     SIDEBAR_COL_GAP = 4        # so two selected neighbours stay two blocks
     PITCH_COLUMNS = 2
 
+    # ── Fixed aim ────────────────────────────────────────────────────────
+    # FIXED AIM pins every pitch to one spot the player places. The spot is
+    # in feet at the plate (world frame, +x toward third), so it stays put
+    # when the batter switches sides. The area runs 1.5 ft past each edge of
+    # the 17 in plate and from the dirt to well over the zone (1.5-3.5 ft),
+    # which covers the chase and waste spots as well as the zone.
+    AIM_X_LIMIT_FT = 0.708 + 1.5
+    AIM_Z_RANGE_FT = (0.5, 5.0)
+    AIM_DEFAULT_FT = (0.0, 2.5)    # the middle of the zone
+
+    # Class-level so a state built without __init__ (tests) still pitches.
+    aim_on = False
+    aim_ft = AIM_DEFAULT_FT
+    _dragging_aim = False
+
     def __init__(self, game):
         super().__init__(game)
         self.pitch_simulation = None
@@ -989,11 +1006,11 @@ class SandboxGameplayState(GameState):
         self._buttons = ButtonGroup()
 
     def buttons(self):
-        """The sidebar as specs: one slot per pitcher, a gap, then the
-        current pitcher's arsenal in a grid that grows with it.
+        """The sidebar as specs: one slot per pitcher, a gap, the current
+        pitcher's arsenal in a grid that grows with it, a gap, FIXED AIM.
 
-        The pitcher on the mound and the pitches switched on are drawn
-        *selected*, which is the whole display of the sandbox's state.
+        The pitcher on the mound, the pitches switched on and a fixed aim are
+        drawn *selected*, which is the whole display of the sandbox's state.
         """
         manager = self.game.pitcher_manager
         current = self.game.current_pitcher
@@ -1010,7 +1027,8 @@ class SandboxGameplayState(GameState):
         first_row = len(manager.pitchers) + 1          # one empty slot between
         col_w = ((self.SIDEBAR_W - self.SIDEBAR_COL_GAP * (self.PITCH_COLUMNS - 1))
                  // self.PITCH_COLUMNS)
-        for index, pitch in enumerate(current.get_pitch_names()):
+        pitches = current.get_pitch_names()
+        for index, pitch in enumerate(pitches):
             row, col = divmod(index, self.PITCH_COLUMNS)
             out.append(Button(
                 ('pitch', pitch), pitch,
@@ -1018,6 +1036,13 @@ class SandboxGameplayState(GameState):
                             self.SIDEBAR_TOP + self.SIDEBAR_STEP * (first_row + row),
                             col_w, self.SIDEBAR_H),
                 selected=pitch in self.active_pitches))
+        pitch_rows = -(-len(pitches) // self.PITCH_COLUMNS)
+        aim_row = first_row + pitch_rows + 1           # one empty slot between
+        out.append(Button(
+            ('aim', 'fixed'), 'FIXED AIM',
+            pygame.Rect(self.SIDEBAR_X, self.SIDEBAR_TOP + self.SIDEBAR_STEP * aim_row,
+                        self.SIDEBAR_W, self.SIDEBAR_H),
+            selected=self.aim_on))
         return out
 
     def _sidebar_shown(self):
@@ -1038,6 +1063,49 @@ class SandboxGameplayState(GameState):
     def exit(self):
         """Clean up sandbox gameplay state."""
         self.pitch_simulation = None
+        self._dragging_aim = False
+        # The field renderer is shared with Arcade and GameDay.
+        self.game.field_renderer.aim_marker = None
+
+    # ── Fixed aim ────────────────────────────────────────────────────────
+
+    def toggle_aim(self):
+        self.aim_on = not self.aim_on
+        self._dragging_aim = False
+
+    def reset_aim(self):
+        """A new Sandbox session starts with the aim off, at the default spot."""
+        self.aim_on = False
+        self.aim_ft = self.AIM_DEFAULT_FT
+        self._dragging_aim = False
+
+    def _clamp_aim_ft(self, x_ft, z_ft):
+        z_lo, z_hi = self.AIM_Z_RANGE_FT
+        return (max(-self.AIM_X_LIMIT_FT, min(self.AIM_X_LIMIT_FT, x_ft)),
+                max(z_lo, min(z_hi, z_ft)))
+
+    def _in_aim_area(self, pos_px):
+        x_ft, z_ft = DEFAULT_CAMERA.screen_to_world_at_plate(*pos_px)
+        return self._clamp_aim_ft(x_ft, z_ft) == (x_ft, z_ft)
+
+    def _place_aim(self, pos_px):
+        self.aim_ft = self._clamp_aim_ft(*DEFAULT_CAMERA.screen_to_world_at_plate(*pos_px))
+
+    def _aim_px(self):
+        """The aim in screen px. Exact at the plate: the pitch's own
+        conversion back to feet (PitchSimulation) is the inverse of this."""
+        x_ft, z_ft = self.aim_ft
+        screen_x, screen_y, _depth = DEFAULT_CAMERA.project(x_ft, 0.0, z_ft)
+        return screen_x, screen_y
+
+    def _visible_aim_px(self):
+        """Where to draw the crosshair, or None. H hides it with the sidebar."""
+        return self._aim_px() if self.aim_on and self._sidebar_shown() else None
+
+    def _sync_aim_marker(self):
+        """Hand the crosshair to the field renderer, whose draw_field draws it
+        here and in every frame a pitch draws itself."""
+        self.game.field_renderer.aim_marker = self._visible_aim_px()
 
     def _refresh_display(self):
         """Refresh the game display - scorebug handles stats rendering."""
@@ -1094,8 +1162,23 @@ class SandboxGameplayState(GameState):
                 kind, name = action
                 if kind == 'pitcher':
                     self.switch_pitcher(name)
-                else:
+                elif kind == 'pitch':
                     self.toggle_pitch(name)
+                elif kind == 'aim':
+                    self.toggle_aim()
+            elif self.aim_on and event.button == 1 and self._in_aim_area(event.pos):
+                # A press places the crosshair; holding it drags.
+                self._place_aim(event.pos)
+                self._dragging_aim = True
+
+        if event.type == pygame.MOUSEMOTION and self._dragging_aim:
+            if self.aim_on and event.buttons[0] and self._sidebar_shown():
+                self._place_aim(event.pos)   # clamped to the area's edge
+            else:
+                self._dragging_aim = False
+
+        if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            self._dragging_aim = False
 
         return True
 
@@ -1114,8 +1197,19 @@ class SandboxGameplayState(GameState):
         self.game.current_state = self.game.build_ai_state()
         self.game.pitch_chosen = chosen_pitch
 
-        # Randomly select from active pitches
-        self.game.current_pitcher.pitch(self._create_pitch_simulation, chosen_pitch)
+        # FIXED AIM: the pitcher throws at the player's spot for this one
+        # pitch. `pitch()` blocks until the pitch is over.
+        self._dragging_aim = False
+        self._sync_aim_marker()   # the aim may have changed since the last frame
+        pitcher = self.game.current_pitcher
+        aim = (pitcher.aimed_at(self._aim_px()) if self.aim_on
+               else contextlib.nullcontext())
+        with aim:
+            pitcher.pitch(self._create_pitch_simulation, chosen_pitch)
+        if self.aim_on:
+            # A click queued during the follow-through would land on the
+            # next frame and move the crosshair the player didn't touch.
+            pygame.event.clear(pygame.MOUSEBUTTONDOWN)
 
     def _create_pitch_simulation(self, release_point, pitchername, speed_mph, pfx_x, pfx_z, target_x, target_y, pitchtype):
         """Create and start a pitch simulation."""
@@ -1129,6 +1223,7 @@ class SandboxGameplayState(GameState):
         """Render the sandbox gameplay state."""
         screen.fill("black")
         self.game.current_pitcher.draw_pitcher(0, 0)
+        self._sync_aim_marker()
         self.game.field_renderer.draw_strikezone()
         self.game.field_renderer.draw_field(self.game.scoreKeeper.get_bases())
         self.game.batter.draw_stance(1)
@@ -1648,7 +1743,6 @@ class GameDayTransitionState(GameState):
     _FG = gdt.FG
     _DIM = gdt.DIM
     _DIM_SOFT = gdt.DIM_SOFT
-    _DIVIDER = gdt.DIVIDER
 
     # Hit / out classification reused across screens. Composed from
     # `strikefactor.outcomes` so a new outcome joins one group there rather

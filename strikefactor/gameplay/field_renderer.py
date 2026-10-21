@@ -8,7 +8,9 @@ import pygame
 import pygame.gfxdraw
 
 from strikefactor import paths
+from strikefactor.ui import gameday_theme as gdt
 from strikefactor.utils.io import atomic_write_json
+from strikefactor.utils.pitch_physics import DEFAULT_CAMERA
 
 # Bucket key sentinel used until the Game tells us which (mode, difficulty)
 # bucket is active. Pitches recorded under this key indicate the bucket
@@ -70,6 +72,10 @@ class FieldRenderer:
         # Averages. Game sets the starting mode from the show_strikezone setting.
         self.strikezonedrawn = self.ZONE_HIDDEN
         self.show_bases = True  # Disabled in minimal HUD mode (the corner widget shows them).
+        # Sandbox's FIXED AIM crosshair, (x, y) screen px at the plate, or
+        # None. Drawn by draw_field, so it shows in the frames a pitch draws
+        # itself too. SandboxGameplayState sets it and clears it on exit.
+        self.aim_marker = None
 
         # Heatmap fonts are reused every frame the heatmap is active; build
         # them once here rather than reallocating a Font object per frame.
@@ -227,6 +233,28 @@ class FieldRenderer:
         self.draw_homeplate()
         if self.show_bases:
             self.draw_bases(bases_status)
+        if self.aim_marker is not None:
+            self.draw_aim_marker(self.aim_marker)
+
+    # The crosshair's ring is the ball's size at the plate, so a pitch on
+    # the spot fills it. Gray, so it reads apart from the white ball and
+    # the white bat cursor.
+    AIM_MARKER_COLOR = gdt.DIM
+    AIM_TICK_GAP_PX = 4        # from the ring to the start of each tick
+    AIM_TICK_LEN_PX = 8
+
+    def draw_aim_marker(self, pos):
+        """A ring the size of the ball with four ticks pointing in at it."""
+        x, y = int(round(pos[0])), int(round(pos[1]))
+        radius = int(round(DEFAULT_CAMERA.project_radius(0.0)))
+        color = self.AIM_MARKER_COLOR
+        pygame.gfxdraw.aacircle(self.screen, x, y, radius, color)
+        near = radius + self.AIM_TICK_GAP_PX
+        far = near + self.AIM_TICK_LEN_PX
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            pygame.draw.line(self.screen, color,
+                             (x + dx * near, y + dy * near),
+                             (x + dx * far, y + dy * far))
 
     def get_zone_segment(self, x, y):
         """
@@ -512,17 +540,6 @@ class FieldRenderer:
             mode, diff = key.split("|", 1)
             return f"{mode.upper()} / {diff.upper()}"
         return key.upper()
-
-    def reset_heatmap_data(self):
-        """Reset the active bucket's heatmap and counters."""
-        b = self._buckets[self._active_key]
-        b['heatmap_data'][:] = [0] * 9
-        b['heatmap_attempts'][:] = [0] * 9
-        for f in self.BUCKET_INT_FIELDS:
-            b[f] = 0
-        # Refresh instance attrs from the cleared bucket.
-        self._bind_instance_to_active()
-        self.save_data()
 
     # ----------------- Persistence -----------------
 

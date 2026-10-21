@@ -84,8 +84,6 @@ class PitchSimulation:
     # the play has already shown itself: the fielder wears a "!" at the
     # moment of the misplay (hit_animation._charge_error), so the banner
     # only has to name it.
-    _DISPLAY_NAMES = outcomes.DISPLAY_NAMES
-
     @staticmethod
     def _format_display_outcome(outcome):
         if not isinstance(outcome, str):
@@ -133,9 +131,11 @@ class PitchSimulation:
         else:
             self.intent_x_ft = self.intent_z_ft = None
 
-        # Mistake pitch: drift target toward center zone
+        # Mistake pitch: drift target toward center zone. Never on a pitch the
+        # player aimed (Sandbox's FIXED AIM), which lands exactly on its spot.
         self.mistake_pitch = False
-        if mistake_chance > 0 and random.random() < mistake_chance:
+        if (not self._player_aimed() and mistake_chance > 0
+                and random.random() < mistake_chance):
             # Center zone in feet: roughly x=0, z=2.8 (mid-zone height)
             self.target_x_ft = self.target_x_ft * 0.3  # Pull 70% toward center
             self.target_z_ft = self.target_z_ft * 0.3 + 2.8 * 0.7
@@ -354,6 +354,11 @@ class PitchSimulation:
 
         # Get engine FPS setting for physics calculations
         self.engine_fps = self.game.settings_manager.get_engine_fps()
+
+    def _player_aimed(self):
+        """True for a pitch thrown at the player's spot (Pitcher.aimed_at)."""
+        intent = getattr(self, 'pitch_intent', None)
+        return intent is not None and intent.aimed_by == 'player'
 
     def run(self):
         self.game.banner.hide_banner()
@@ -1618,8 +1623,13 @@ class PitchSimulation:
 
         # Build new state with richer representation
         new_state = self.game.build_ai_state()
-        self.game.current_pitcher.get_ai().update(self.previous_state, self.game.pitch_chosen,
-                                                 new_state, self.game.outcome_value.get(self.outcome, 0))
+        # A pitch the player aimed teaches the AI nothing about its own
+        # choices: the reward belongs to a location the pitcher didn't pick,
+        # and the Q-table is the one Arcade and GameDay pitch from.
+        if not self._player_aimed():
+            self.game.current_pitcher.get_ai().update(
+                self.previous_state, self.game.pitch_chosen,
+                new_state, self.game.outcome_value.get(self.outcome, 0))
         self.game.current_state = new_state
         self.game.pitch_trajectories.append(self.game.last_pitch_information)
         self.game.current_pitches += 1

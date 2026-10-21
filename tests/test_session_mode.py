@@ -29,7 +29,9 @@ def _game(menu_state='sandbox_menu'):
         scoreKeeper=ScoreKeeper(),
         challenge_manager=SimpleNamespace(reset_all=lambda: None,
                                           set_unlimited=lambda flag: None),
-        state_manager=SimpleNamespace(change_state=lambda name: None),
+        state_manager=SimpleNamespace(
+            change_state=lambda name: None,
+            states={'sandbox_gameplay': SimpleNamespace(reset_aim=lambda: None)}),
         current_pitcher=SimpleNamespace(clear_fatigue_stats=lambda: None),
         _reset_review=lambda: None,
         _db_start_game=lambda mode, pitcher_name=None: calls.append(('db_start', mode)),

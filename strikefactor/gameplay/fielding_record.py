@@ -70,10 +70,6 @@ class FieldingRecord:
         return tuple(f.time_ms for f in self.frames)
 
     @cached_property
-    def event_times(self):
-        return tuple(e.time_ms for e in self.events)
-
-    @cached_property
     def possession_event_times(self):
         return tuple(e.time_ms for e in self.events if e.label in {
             "WALL IMPACT", "MISPLAY", "BALL SECURED", "THROW RELEASE", "THROW ARRIVAL", "BASE POSSESSION", "BOUNCE",
