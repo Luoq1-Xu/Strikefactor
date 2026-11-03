@@ -67,3 +67,11 @@ class ReviewStore:
         swing = replace(record.swing, outcome=outcome) if record.swing is not None else None
         self._records[review_id] = replace(record, outcome=outcome, swing=swing)
         self._sorted = None
+
+    def mark_abs_verdict(self, review_id, verdict):
+        """Note how an ABS challenge of this pitch's call went."""
+        record = self.get(review_id)
+        if record is None:
+            return
+        self._records[review_id] = replace(record, abs_verdict=verdict)
+        self._sorted = None

@@ -1640,7 +1640,17 @@ class PitchSimulation:
         # choices: the reward belongs to a location the pitcher didn't pick,
         # and the Q-table is the one Arcade and GameDay pitch from.
         if not self._player_aimed():
-            self.game.current_pitcher.get_ai().update(
+            ai = self.game.current_pitcher.get_ai()
+            # The challenge window is still open, so this learns the umpire's
+            # call. Keep what the update overwrites on the open challenge: an
+            # overturn re-learns the pitch from the call that stands
+            # (`Game._relearn_overturned_pitch`).
+            pending = getattr(self.game, 'pending_challenge', None)
+            if pending is not None:
+                pending['ai_update'] = (
+                    ai, self.previous_state, self.game.pitch_chosen,
+                    ai.entry(self.previous_state, self.game.pitch_chosen))
+            ai.update(
                 self.previous_state, self.game.pitch_chosen,
                 new_state, self.game.outcome_value.get(self.outcome, 0))
         self.game.current_state = new_state

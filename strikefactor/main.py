@@ -1301,7 +1301,6 @@ class Game:
             'game_stats': copy.deepcopy(self.game_stats),
             'scoreKeeper': copy.deepcopy(self.scoreKeeper),
             'inning_ended': self.inning_ended,
-            'last_pitch_information': copy.deepcopy(self.last_pitch_information),
             'menu_state': self.menu_state,
             'state_name': self.state_manager.current_state_name,
         }
@@ -1342,6 +1341,12 @@ class Game:
         and put the AI's state back to before it was thrown. `current_state`
         does depend on the count; `_reverse_last_call` recomputes it once the
         corrected call is applied.
+
+        The pitch's trail (`last_pitch_information`) is not restored either.
+        `cleanup` appends that same list to `pitch_trajectories`, which is
+        what the T view draws. Restoring it used to swap in the snapshot's
+        copy, so the recolour landed on the copy and T kept the umpire's
+        colour. `_recolor_trail_for_call` now recolours the list in place.
         """
         import copy
         src = snap['game_stats']
@@ -1359,7 +1364,6 @@ class Game:
         self.scoreKeeper.restore_from(snap['scoreKeeper'])
 
         self.inning_ended = snap['inning_ended']
-        self.last_pitch_information = list(snap['last_pitch_information'])
 
         # If the call moved us to a different state (e.g. inning_end after a
         # strike-3 walkoff), walk back to where we were when the pitch ended.
@@ -1568,7 +1572,12 @@ class Game:
         self.pending_challenge = None
 
     def _record_abs_challenge(self, pc, overturned, final_outcome):
-        """Put the verdict on the challenged pitch's DB row.
+        """Put the verdict on the challenged pitch's records: its Review
+        entry and its DB row.
+
+        Review gets the verdict either way, so the replay shows the call as
+        "BALL (OVERTURNED)" or "STRIKE (UPHELD)". The outcome itself has
+        already been revised by `_reverse_last_call` on an overturn.
 
         The row was written before the challenge could be made (see
         `PitchSimulation.cleanup`), which handed its id to `pc`. On an
@@ -1576,6 +1585,11 @@ class Game:
         call scored or unscored — a bases-loaded walk given or taken away —
         with the earned runs beside them.
         """
+        store = getattr(self, 'review_store', None)
+        if store is not None:
+            store.mark_abs_verdict(pc.get('review_id'),
+                                   "OVERTURNED" if overturned else "UPHELD")
+
         pitch_id = pc.get('pitch_id')
         if pitch_id is None:
             return
@@ -1739,6 +1753,7 @@ class Game:
         # The pitch finished (and built the AI's next state) on the umpire's
         # count; the next pitch has to be chosen from the corrected one.
         self.current_state = self.build_ai_state()
+        self._relearn_overturned_pitch(pc, final_outcome)
 
         # Review keeps the pitch identity through an ABS metadata revision.
         store = getattr(self, 'review_store', None)
@@ -1746,15 +1761,44 @@ class Game:
         if record is not None:
             store.revise_outcome(record.review_id, final_outcome.upper())
 
-        # Recolor the on-field trail dot to match the new call.
-        if self.last_pitch_information:
-            new_color = (227, 75, 80) if new_call == "strike" else (75, 227, 148)
-            last = self.last_pitch_information[-1]
-            for entry in self.last_pitch_information:
-                if entry[0] == last[0] and entry[1] == last[1]:
-                    entry[3] = new_color
+        self._recolor_trail_for_call(new_call)
 
         return final_outcome
+
+    def _recolor_trail_for_call(self, call):
+        """Paint the challenged pitch's plate markers in the colour of `call`.
+
+        The same rule `PitchSimulation.cleanup` uses: every trail entry at the
+        plate endpoint takes the call's colour. The labelled entries also take
+        the call's name. This list is the one `cleanup` appended to
+        `pitch_trajectories`, so the T view follows the corrected call.
+        """
+        trail = self.last_pitch_information
+        if not trail:
+            return
+        color = outcomes.COLORS[call.upper()]
+        last = trail[-1]
+        for entry in trail:
+            if entry[0] == last[0] and entry[1] == last[1]:
+                entry[3] = color
+                if entry[4]:
+                    entry[4] = call
+
+    def _relearn_overturned_pitch(self, pc, final_outcome):
+        """Teach the pitch-selection AI this pitch again, from the call that stands.
+
+        `cleanup` runs the Q-update before a challenge can be made, so it
+        learned the umpire's call: that call's reward and the count it left.
+        It kept what the update overwrote in `pc['ai_update']`. Put that back
+        and learn the pitch again from the corrected outcome and count.
+        """
+        undo = pc.get('ai_update')
+        if undo is None:
+            return
+        ai, state, action, entry = undo
+        ai.restore_entry(state, action, entry)
+        ai.update(state, action, self.current_state,
+                  self.outcome_value.get(final_outcome, 0))
 
     def check_inning_end(self):
         """Check if the inning should end."""
