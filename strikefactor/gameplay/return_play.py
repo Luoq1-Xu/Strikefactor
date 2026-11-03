@@ -47,7 +47,12 @@ class ReturnCandidate:
     legs: tuple
     approaches: dict
     concession: float = 0.0
+    # tag, force, batter_before_first, or appeal: holding the ball on the
+    # base a runner left too soon, which needs no sweep, like a force.
     kind: str = "tag"
+    # The out also takes a run off the board: a play at home, or an appeal
+    # against a runner who left early and is scoring or has scored.
+    saves_run: bool = False
 
     @property
     def arrival_s(self):
@@ -58,7 +63,8 @@ class ReturnCandidate:
         sweep = TAG_SWEEP_S if self.kind == "tag" else 0.0
         probability = infield_timing.p_out_from_margin(
             self.runner_s - self.arrival_s - sweep, extra_bases.SIGMA_TAG_S)
-        return probability * (1.0 + min(2, outs) * 0.5 + (self.base == 4)) - self.concession
+        run = self.base == 4 or self.saves_run
+        return probability * (1.0 + min(2, outs) * 0.5 + run) - self.concession
 
 
 def choose_return(candidates, outs, current=None):
@@ -76,10 +82,13 @@ def choose_return(candidates, outs, current=None):
 
 
 def schedule_return(base, point, pickup_s, defenders, defense, *, holder,
-                    transfer_s=None, allow_relay=True, carry_delay_s=None):
+                    transfer_s=None, allow_relay=True, carry_delay_s=None, allow_holder_carry=False):
     """Preview with the same actors, cover waits and exchanges as execution."""
     receiver_pool = {1: ("1B", "P", "2B"), 2: ("SS", "2B"),
                      3: ("3B", "SS"), 4: ("C", "P")}[base]
+    # Only the fielder holding the ball now can carry it. A relay below
+    # reassigns `holder` to the cutoff man, who has not got it yet.
+    ball_holder = holder
 
     def approach(role, target):
         f = defenders[role]
@@ -108,13 +117,13 @@ def schedule_return(base, point, pickup_s, defenders, defense, *, holder,
     flight = math.dist(point, BASE_FT[base]) / arm
     release = max(release, cover.arrival_s - flight)
     legs.append(ThrowLeg(point, BASE_FT[base], release, release + flight, holder, receiver))
-    if carry_delay_s is not None and holder in receiver_pool:
-        f = defenders[holder]
+    if carry_delay_s is not None and (ball_holder in receiver_pool or allow_holder_carry):
+        f = defenders[ball_holder]
         carry = BaseApproach(f.position, BASE_FT[base], pickup_s + carry_delay_s,
                             f.speed_fts, f.acceleration_s, 0.0)
         if carry.arrival_s <= legs[-1].arrival_s:
             return (ThrowLeg(f.position, BASE_FT[base], carry.start_s,
-                             carry.arrival_s, holder, holder),), {holder: carry}
+                             carry.arrival_s, ball_holder, ball_holder),), {ball_holder: carry}
     return tuple(legs), approaches
 
 

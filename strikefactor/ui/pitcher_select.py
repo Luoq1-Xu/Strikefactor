@@ -24,7 +24,8 @@ from strikefactor.ui import gameday_theme as gdt
 from strikefactor.ui.pitcher_carousel import PitcherCarousel
 from strikefactor.ui.widgets import Button, ButtonGroup
 
-CARD_RECT = pygame.Rect(310, 220, 660, 280)
+# Tall enough for a five-pitch arsenal plus GameDay's record line.
+CARD_RECT = pygame.Rect(310, 196, 660, 320)
 
 # The arrows flank the card, centred on it; the confirm button is centred
 # under it, and one row of secondary buttons can sit beneath that.
@@ -43,12 +44,15 @@ class PitcherSelect:
     ``extras`` is a callable returning ``[(action, label)]`` for the row under
     the confirm button. A callable rather than a list because what GameDay
     offers there depends on whether a game is waiting to be resumed.
+    ``show_record`` puts the player's GameDay record on the card; only
+    GameDay, which has games to win or lose, asks for it.
     """
 
     def __init__(self, pitcher_manager, *, header, subtitle, headline="STEP IN.",
                  confirm_label="STEP IN  >", back_label="<  BACK",
-                 extras=None, default='yamamoto'):
-        self.carousel = PitcherCarousel(pitcher_manager, default=default)
+                 extras=None, default='yamamoto', show_record=False):
+        self.carousel = PitcherCarousel(pitcher_manager, default=default,
+                                        show_record=show_record)
         self.header = header
         self.subtitle = subtitle
         self.headline = headline
@@ -61,9 +65,14 @@ class PitcherSelect:
         return self.carousel.get_selected()
 
     def reset(self, default=None):
-        """Put the carousel back on ``default`` and drop the keyboard cursor."""
+        """Put the carousel back on ``default`` and drop the keyboard cursor.
+
+        Also re-reads the record on the next draw, since a game may have
+        finished since the screen was last open.
+        """
         if default is not None:
             self.carousel.reset(default)
+        self.carousel.refresh()
         self._group.clear_focus()
 
     # --- buttons ---

@@ -3,6 +3,7 @@
 import random
 from types import SimpleNamespace
 
+import conftest
 import pytest
 
 from strikefactor import outcomes
@@ -34,7 +35,9 @@ def _finish(anim, step):
 @pytest.mark.parametrize("bases", [(1,), (1, 2), (1, 2, 3)])
 @pytest.mark.parametrize("step", [16, 250])
 def test_uncaught_liner_cannot_leave_the_forced_runner_on_the_batters_base(mode, bases, step):
-    anim = _animation(mode, bases)
+    # Pin the uncaught premise: bounded updates can now catch this seeded
+    # trajectory inside a coarse frame. This test concerns the force after landing.
+    anim = conftest.uncaught(_animation(mode, bases))
     record = _finish(anim, step)
     assert not anim._secured_in_flight
     result = record.running_result

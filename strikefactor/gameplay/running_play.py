@@ -54,7 +54,12 @@ class RunnerMovement:
 
     @property
     def scored_s(self):
-        return next((t for base, t in self.touches if base == 4), None)
+        # A corrective return withdraws an early crossing. A subsequent
+        # trip home scores at that later touch, never at the withdrawn one.
+        if self.final_base in (1, 2, 3) or not self.touches:
+            return None
+        base, time_s = self.touches[-1]
+        return time_s if base == 4 else None
 
 
 @dataclass(frozen=True)
@@ -62,8 +67,28 @@ class RunnerRetirement:
     runner_id: str
     time_s: float
     base: int
-    kind: str  # force, batter_before_first, tag, catch
+    # force, batter_before_first, tag, catch, or appeal: the ball held on
+    # the base a runner left before a caught fly was first touched.
+    kind: str
     role: str | None = None
+    # False only for an appeal made after the third out, which takes away
+    # a run but does not add a fourth official inning out.
+    official: bool = True
+
+
+@dataclass(frozen=True)
+class RetouchRecord:
+    """A runner who was off his base when a caught fly was first touched.
+
+    `resolution` is "pending" during play, "retouched", "appealed" or
+    "moot" (retired another way, or no useful appeal remains after the
+    half-inning ended). `retouched_s` is None unless he got back.
+    """
+    runner_id: str
+    base: int
+    departed_s: float
+    retouched_s: float | None
+    resolution: str
 
 
 @dataclass(frozen=True)
@@ -76,10 +101,14 @@ class RunningResult:
     error_bases: int = 0
     retirements: tuple = ()
     fielding_sequence: tuple = ()
+    first_touch_s: float | None = None  # a fielder's first touch of a fly ball, caught or dropped
+    retouches: tuple = ()  # RetouchRecord for each runner who left too soon
 
     @property
     def outs_added(self):
-        return len(self.retirements) if self.retirements else sum(m.out_s is not None for m in self.movements)
+        if self.retirements:
+            return sum(r.official for r in self.retirements)
+        return sum(m.out_s is not None for m in self.movements)
 
     @property
     def double_play(self):
@@ -108,6 +137,37 @@ class RunningResult:
         return (batter.final_base if self.outcome in outcomes.HIT_OUTCOMES
                 and batter.final_base is not None and batter.final_base > self.hit_bases else None)
 
+    def counts_run(self, movement, outs=0, *, unlimited_outs=False):
+        """Resolve a home touch against actual outs and retouch appeals.
+
+        A third-out appeal on a preceding runner also annuls following
+        runs, even ones which crossed earlier. An advantageous subsequent
+        appeal has the same scoring effect without adding an official out.
+        """
+        crossed = movement.scored_s
+        if crossed is None or movement.out_s is not None:
+            return False
+        if unlimited_outs:
+            return True
+        retired = sorted((r for r in self.retirements if r.official), key=lambda r: r.time_s)
+        times = ([r.time_s for r in retired] if self.retirements else
+                 sorted(m.out_s for m in self.movements if m.out_s is not None))
+        needed = 3 - outs
+        if not 0 < needed <= len(times):
+            return True
+        third_s = times[needed - 1]
+        if crossed >= third_s:
+            return False
+        if any(r.time_s == third_s and r.kind in ("force", "batter_before_first", "catch")
+               for r in retired):
+            return False
+        if (not self.retirements and self.outcome in outcomes.BATTED_OUT_OUTCOMES
+                and self.batter.out_s == third_s):
+            return False
+        starts = {m.runner_id: m.start_base for m in self.movements}
+        return not any(r.kind == "appeal" and (not r.official or r.time_s == third_s)
+                       and starts[r.runner_id] > movement.start_base for r in self.retirements)
+
 
 @dataclass(frozen=True)
 class ThrowLeg:
@@ -127,15 +187,16 @@ class ThrowLeg:
 @dataclass(frozen=True)
 class BaseRace:
     base: int
-    runner_s: float
+    # None only for an appeal against a runner who is not retouching.
+    runner_s: float | None
     defense_s: float
     tag_s: float | None = None
-    kind: str = "tag"
+    kind: str = "tag"  # tag, force, batter_before_first or appeal
 
     @property
     def margin_s(self):
-        return self.runner_s - self.defense_s
+        return None if self.runner_s is None else self.runner_s - self.defense_s
 
     @property
     def tag_margin_s(self):
-        return None if self.tag_s is None else self.runner_s - self.tag_s
+        return None if self.tag_s is None or self.runner_s is None else self.runner_s - self.tag_s

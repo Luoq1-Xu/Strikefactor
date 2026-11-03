@@ -4,6 +4,13 @@ import pygame
 
 from strikefactor.gameplay import hit_animation as ha
 
+# A runner who left before a caught fly was touched and still has to get back.
+RETOUCH_COLOR = (255, 170, 60)
+
+
+def _base_name(base):
+    return "HOME" if base == 4 else f"{base}B"
+
 
 def _label(screen, text, size, color, center, alpha, offset):
     font = _font(size)
@@ -72,6 +79,12 @@ def draw_frame(screen, frame):
         point = ha.HOME if base == 4 else ha.BASES[f"{base}B"]
         _label(screen, f"{verdict} AT {where}", 24, color,
                (round(point[0]), round(point[1]-43)), 1.0, 1)
+    for _, base in frame.retouch_owed:
+        # On the bag itself, so it stays visible whoever holds the controls,
+        # including for a runner who has already crossed the plate.
+        bx, by = map(round, ha.BASES[f"{base}B"])
+        pygame.draw.circle(screen, RETOUCH_COLOR, (bx, by), 14, 2)
+        _label(screen, "NEEDS TAG", 20, RETOUCH_COLOR, (bx, by + 24), 1.0, 1)
     if frame.send_control is not None:
         rid, state, remaining, destination, key = frame.send_control[:5]
         runners = ((frame.runner,) if frame.runner is not None else ()) + frame.runners
@@ -81,26 +94,38 @@ def draw_frame(screen, frame):
             x, y = map(round, selected.pos)
             pygame.draw.circle(screen, color, (x, y-7), 13, 2)
 
-        def base_name(base):
-            return "HOME" if base == 4 else f"{base}B"
+        base_name = _base_name
 
         if len(frame.send_control) == 5:
             text = (f"{key.upper()}  SEND LEAD RUNNER" if state == "available" else
                     "SEND QUEUED" if state == "armed" else f"GOING TO {base_name(destination)}")
             _label(screen, text, 25, color, (screen.get_width()//2, 46), 1.0, 1)
         else:
-            retreat, retreat_key, send, pending, cancel = frame.send_control[5:]
+            retreat, retreat_key, send, pending, cancel = frame.send_control[5:10]
             verb = ("AT" if selected is not None and selected.state == "holding" else
                     "RETURNING TO" if selected is not None and selected.state == "returning" else "TO")
-            heading = f"LEAD  {verb} {base_name(destination)}"
+            heading = f"RUNNER {rid}  {verb} {base_name(destination)}"
             if pending is not None:
                 heading += f"  /  THEN {base_name(pending)}"
+            owed = next((base for owner, base in frame.retouch_owed if owner == rid), None)
+            if owed is not None:
+                # Persistent until he retouches or is put out: the catch made
+                # his head start a liability, and only Retreat fixes it.
+                heading = f"NEEDS TAG AT {base_name(owed)}"
+                if selected is not None and selected.state == "returning":
+                    heading += "  /  RETURNING"
+                    via = frame.send_control[11] if len(frame.send_control) > 11 else ()
+                    if via:
+                        heading += " VIA " + ", ".join(base_name(base) for base in via)
             choices = []
             if send is not None:
                 choices.append(f"{key.upper()}  SEND TO {base_name(send)}")
             if retreat is not None:
                 choices.append(f"{retreat_key.upper()}  {'HOLD AT' if cancel else 'RETURN TO'} {base_name(retreat)}")
-            _label(screen, heading, 25, color, (screen.get_width()//2, 42), 1.0, 1)
+            if len(frame.send_control) > 10 and frame.send_control[10] is not None:
+                choices.append(f"{frame.send_control[10].upper()}  SELECT RUNNER")
+            _label(screen, heading, 25, RETOUCH_COLOR if owed is not None else color,
+                   (screen.get_width()//2, 42), 1.0, 1)
             _label(screen, "     ".join(choices), 23, color, (screen.get_width()//2, 66), 1.0, 1)
         if remaining is not None:
             bar = pygame.Rect(screen.get_width()//2-100, 84, 200, 4)

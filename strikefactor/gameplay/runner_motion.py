@@ -108,6 +108,11 @@ def _corner_direction(base):
     return _unit(tuple(c - a for a, c in zip(before, after)))
 
 
+# A runner carries through a bag he is rounding at this share of top speed,
+# forward or retracing.
+ROUNDING_SPEED_SHARE = 0.72
+
+
 @dataclass(frozen=True)
 class RunLeg:
     origin: tuple
@@ -194,10 +199,13 @@ class CircuitRun:
     stopped_at_s: float | None = None
     returning: bool = False
     run_through_first: bool = False  # keep the first-leg deceleration beyond the bag when holding
+    advance_used: bool = False  # a corrective return never grants a new automatic advance
 
     def __post_init__(self):
         if self.start_base:
             self.target_base = self.start_base
+        elif self.first is not None:
+            self.advance_used = True
 
     @property
     def top_fts(self):
@@ -235,21 +243,40 @@ class CircuitRun:
         a, b = self.position_at(time_s), self.position_at(time_s + 0.001)
         return tuple((y-x)/0.001 for x, y in zip(a, b))
 
+    def _truncate(self, time_s):
+        """End the played route at `time_s`, keeping everything before it.
+
+        The leg in progress is cut there and any leg that has not started
+        is dropped. Cutting only the last leg used to leave a rounding tail
+        running after a retreat: the runner kept going to the bag, touched
+        it after he had turned back, and then jumped onto the return leg.
+        """
+        kept = []
+        for piece in self.pieces:
+            if piece.start_s >= time_s:
+                continue
+            if time_s < min(piece.cutoff_s, piece.arrival_s):
+                piece = replace(piece, cutoff_s=time_s)
+            kept.append(piece)
+        self.pieces[:] = kept
+        if (not kept and self.first is not None
+                and time_s < min(self.first_cutoff_s, self.first.arrival_s)):
+            self.first_cutoff_s = time_s
+
     def commit_next(self, time_s):
         """Change only the unplayed tail; committed movement never jumps."""
         if self.target_base >= 4 or self.stopped_at_s is not None or self.returning:
             return False
+        self.advance_used = True
         current, nxt = self.target_base, self.target_base + 1
         origin = BASE_FT[current]
         if time_s < self.arrival_s:
             point = self.position_at(time_s)
             velocity = self.velocity_at(time_s)
             speed = min(self.top_fts, math.hypot(*velocity))
-            if self.pieces:
-                self.pieces[-1] = replace(self.pieces[-1], cutoff_s=time_s)
-            else:
-                self.first_cutoff_s = time_s
-            tail = RunLeg(point, current, time_s, self.top_fts, speed, self.top_fts*0.72,
+            self._truncate(time_s)
+            tail = RunLeg(point, current, time_s, self.top_fts, speed,
+                          self.top_fts*ROUNDING_SPEED_SHARE,
                           _unit(velocity), _corner_direction(current))
             self.pieces.append(tail)
             start, initial, direction = tail.arrival_s, tail.end_fts, tail.end_direction
@@ -286,17 +313,75 @@ class CircuitRun:
     def base_at(self, time_s):
         return next((base for base, t in reversed(self.touches(time_s))), self.start_base)
 
-    def return_to(self, base, time_s):
+    def contacts(self, base):
+        """`(arrive_s, leave_s)` for each time the runner is on `base`.
+
+        Read off the played and planned legs. A bag he carries through is a
+        zero-length contact; a bag he holds has `leave_s = inf`. Nothing
+        after a retirement counts.
+        """
+        out_s = math.inf if self.stopped_at_s is None else self.stopped_at_s
+        arrivals = []
+        if base == self.start_base and self.start_base > 0:
+            arrivals.append((0.0, 0))
+        if base == 1 and self.first is not None and self.first.arrival_s <= self.first_cutoff_s:
+            arrivals.append((self.first.arrival_s, 0))
+        for i, piece in enumerate(self.pieces):
+            if piece.base == base and piece.arrival_s <= piece.cutoff_s:
+                arrivals.append((piece.arrival_s, i + 1))
+        spans = []
+        for arrive, after in arrivals:
+            if arrive > out_s:
+                continue
+            leave = next((p.start_s for p in self.pieces[after:] if p.start_s >= arrive), math.inf)
+            if base == 1 and after == 0 and self.first is not None and self.run_through_first:
+                leave = min(leave, self.first.arrival_s)
+            spans.append((arrive, min(leave, out_s)))
+        return tuple(spans)
+
+    def retrace_to(self, base, time_s):
+        """Go back to `base`, retouching every bag passed on the way out.
+
+        A runner returning to his original base must touch the bases in
+        reverse order (OBR 5.09(c)(2)), so a return from beyond second to
+        first goes through second rather than across the diamond. He
+        carries through an intermediate bag at rounding speed. Past
+        positions and contacts are kept; only the unplayed tail changes.
+        """
         point = self.position_at(time_s)
-        if self.pieces:
-            self.pieces[-1] = replace(self.pieces[-1], cutoff_s=time_s)
-        self.pieces.append(RunLeg(point, base, time_s, self.top_fts))
+        last = self.base_at(time_s)
+        self._truncate(time_s)
+        stops = [b for b in range(max(last, base), base - 1, -1)]
+        if len(stops) > 1 and math.dist(point, BASE_FT[stops[0]]) < 1e-6:
+            stops = stops[1:]
+        start, initial, direction, origin = time_s, 0.0, None, point
+        for i, stop in enumerate(stops):
+            through = i < len(stops) - 1
+            leg = RunLeg(origin, stop, start, self.top_fts, initial,
+                         self.top_fts*ROUNDING_SPEED_SHARE if through else 0.0,
+                         direction, tuple(-x for x in _corner_direction(stop)) if through else None)
+            self.pieces.append(leg)
+            start, initial, direction, origin = leg.arrival_s, leg.end_fts, leg.end_direction, BASE_FT[stop]
         self.target_base, self.returning = base, True
+
+    def return_to(self, base, time_s):
+        self.retrace_to(base, time_s)
+
+    def forward_base(self, time_s):
+        """The next forward bag when interrupting a corrective return."""
+        if not self.returning:
+            return self.target_base + 1
+        point = self.position_at(time_s)
+        for base in range(1, 5):
+            if math.dist(point, BASE_FT[base]) < 1e-6:
+                return base + 1
+        return next((p.base + 1 for p in self.pieces
+                     if p.start_s <= time_s < min(p.arrival_s, p.cutoff_s)), self.target_base + 1)
 
     def resume_to(self, base, time_s):
         """Turn back toward an attempted bag without rewriting past contacts."""
         point = self.position_at(time_s)
-        if self.pieces:
-            self.pieces[-1] = replace(self.pieces[-1], cutoff_s=time_s)
+        self._truncate(time_s)
         self.pieces.append(RunLeg(point, base, time_s, self.top_fts))
         self.target_base, self.returning = base, False
+        self.advance_used = True

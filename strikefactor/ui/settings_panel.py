@@ -479,6 +479,7 @@ class KeyBindingsPanel(_RowPanel):
         KeyAction.FIELDING_REPLAY,
         KeyAction.SEND_RUNNER,
         KeyAction.RETREAT_RUNNER,
+        KeyAction.SELECT_RUNNER,
         KeyAction.MAIN_MENU,
     ]
 

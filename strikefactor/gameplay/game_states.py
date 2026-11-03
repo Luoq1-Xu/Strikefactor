@@ -1257,6 +1257,7 @@ class GameDayState(GameState):
             header="=== GAMEDAY · SETUP ===",
             subtitle="9 INN · CHOOSE YOUR OPPONENT",
             extras=self._extra_buttons,
+            show_record=True,
         )
         self.carousel = self.select.carousel
 

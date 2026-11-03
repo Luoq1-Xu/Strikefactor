@@ -267,6 +267,7 @@ class PitchSimulation:
         self.baserunning_mode = None
         self._send_key_held = False
         self._retreat_key_held = False
+        self._select_key_held = False
         # Which way the ball left the bat, pull-positive degrees. Set on every
         # bat-on-ball event including fouls — a foul has a direction and it is
         # often *why* it was a foul — and left None on a whiff, where there is
@@ -498,6 +499,7 @@ class PitchSimulation:
             command_keys = {
                 bindings.get_key_for_action(KeyAction.SEND_RUNNER) if bindings else pygame.K_g: '_send_key_held',
                 bindings.get_key_for_action(KeyAction.RETREAT_RUNNER) if bindings else pygame.K_d: '_retreat_key_held',
+                bindings.get_key_for_action(KeyAction.SELECT_RUNNER) if bindings else pygame.K_TAB: '_select_key_held',
             }
             if event.type in (pygame.KEYDOWN, pygame.KEYUP) and event.key in command_keys:
                 setattr(self, command_keys[event.key], event.type == pygame.KEYDOWN)
@@ -943,7 +945,7 @@ class PitchSimulation:
             import json
             from dataclasses import asdict
             payload = asdict(running_result)
-            payload["schema_version"] = 4
+            payload["schema_version"] = 5
             payload["control"] = asdict(control) if control is not None else None
             self.running_play_json = json.dumps(payload, separators=(",", ":"))
         running_outs = running_result.running_outs if running_result is not None else 0
@@ -1339,6 +1341,7 @@ class PitchSimulation:
             baserunning_mode=self.baserunning_mode,
             send_key_name=self._send_key_name(),
             retreat_key_name=self._retreat_key_name(),
+            select_key_name=self._select_key_name(),
             batted_ball_type=self.game.hit_outcome_manager.last_batted_ball_type,
             # Where the ball actually left, resolved once in
             # `_evaluate_contact`. On fair contact this is the bat's own
@@ -1366,6 +1369,14 @@ class PitchSimulation:
             return bindings.get_key_name(bindings.get_key_for_action(KeyAction.SEND_RUNNER))
         except AttributeError:
             return "G"
+
+    def _select_key_name(self):
+        from strikefactor.key_binding_manager import KeyAction
+        try:
+            bindings = self.game.key_binding_manager
+            return bindings.get_key_name(bindings.get_key_for_action(KeyAction.SELECT_RUNNER))
+        except (AttributeError, TypeError):
+            return "Tab"
 
     def _retreat_key_name(self):
         from strikefactor.key_binding_manager import KeyAction
@@ -1474,6 +1485,8 @@ class PitchSimulation:
                     ('_send_key_held', self.hit_animation.send_runner),
                 self.game.key_binding_manager.get_key_for_action(KeyAction.RETREAT_RUNNER):
                     ('_retreat_key_held', self.hit_animation.retreat_runner),
+                self.game.key_binding_manager.get_key_for_action(KeyAction.SELECT_RUNNER):
+                    ('_select_key_held', self.hit_animation.select_runner),
             }
             if event.type in (pygame.KEYDOWN, pygame.KEYUP) and event.key in commands:
                 latch, command = commands[event.key]

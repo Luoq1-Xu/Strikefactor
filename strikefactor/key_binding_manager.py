@@ -23,6 +23,7 @@ class KeyAction(Enum):
     FIELDING_REPLAY = "fielding_replay"
     SEND_RUNNER = "send_runner"
     RETREAT_RUNNER = "retreat_runner"
+    SELECT_RUNNER = "select_runner"
 
 class KeyBindingManager:
     def __init__(self, settings_manager):
@@ -44,6 +45,7 @@ class KeyBindingManager:
             KeyAction.FIELDING_REPLAY.value: pygame.K_f,
             KeyAction.SEND_RUNNER.value: pygame.K_g,
             KeyAction.RETREAT_RUNNER.value: pygame.K_d,
+            KeyAction.SELECT_RUNNER.value: pygame.K_TAB,
         }
 
         self.current_bindings = self.load_bindings()
@@ -58,7 +60,8 @@ class KeyBindingManager:
                 bindings = json.load(f)
                 for key, value in self.default_bindings.items():
                     if key not in bindings:
-                        if key in (KeyAction.SEND_RUNNER.value, KeyAction.RETREAT_RUNNER.value) and value in bindings.values():
+                        if key in (KeyAction.SEND_RUNNER.value, KeyAction.RETREAT_RUNNER.value,
+                                   KeyAction.SELECT_RUNNER.value) and value in bindings.values():
                             # Adding Send must not steal a custom legacy hotkey.
                             candidates = [value, pygame.K_j, pygame.K_LSHIFT] + list(range(pygame.K_a, pygame.K_z+1))
                             value = next(k for k in candidates if k not in bindings.values()
@@ -127,8 +130,9 @@ class KeyBindingManager:
             KeyAction.TOGGLE_HUD_MODE: "Toggle HUD Mode",
             KeyAction.SWING_REPLAY: "Review: Swing",
             KeyAction.FIELDING_REPLAY: "Review: Fielding",
-            KeyAction.SEND_RUNNER: "Send Lead Runner",
-            KeyAction.RETREAT_RUNNER: "Retreat Lead Runner",
+            KeyAction.SEND_RUNNER: "Send Selected Runner",
+            KeyAction.RETREAT_RUNNER: "Retreat Selected Runner",
+            KeyAction.SELECT_RUNNER: "Select Next Runner",
         }
         return action_names.get(action, action.value.replace('_', ' ').title())
 
@@ -186,7 +190,7 @@ class KeyBindingManager:
 
     def is_key_available(self, key_code: int, exclude_action: Optional[KeyAction] = None) -> bool:
         """Check if a key is available for binding."""
-        if exclude_action in (KeyAction.SEND_RUNNER, KeyAction.RETREAT_RUNNER) and key_code in (pygame.K_w, pygame.K_e, pygame.K_F11):
+        if exclude_action in (KeyAction.SEND_RUNNER, KeyAction.RETREAT_RUNNER, KeyAction.SELECT_RUNNER) and key_code in (pygame.K_w, pygame.K_e, pygame.K_F11):
             return False
         for action in KeyAction:
             if exclude_action and action == exclude_action:

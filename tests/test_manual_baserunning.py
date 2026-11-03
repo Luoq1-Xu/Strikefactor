@@ -1,6 +1,7 @@
 """Player commitments and defensive possession must remain one physical play."""
 
 import json
+import math
 import random
 import sqlite3
 from types import SimpleNamespace
@@ -9,7 +10,7 @@ import pygame
 import pytest
 
 from strikefactor.data.pitch_database import SCHEMA_VERSION, PitchDB
-from strikefactor.gameplay import defense
+from strikefactor.gameplay import defense, rundown
 from strikefactor.gameplay import hit_animation as ha
 from strikefactor.gameplay.base_geometry import BASE_FT
 from strikefactor.gameplay.fielding_record import FieldingRecorder
@@ -68,6 +69,99 @@ def _early_send(anim):
     anim._elapsed = 400
     assert anim.send_runner()
     assert not anim.send_runner()
+
+
+@pytest.mark.parametrize("step", [8, 16, 50, 250])
+@pytest.mark.parametrize("period", [16, 160, 400, 800])
+@pytest.mark.parametrize("level", ["sandlot", "minors", "league", "gold_glove"])
+def test_alternating_send_and_retreat_cannot_sustain_an_endless_throw_exchange(step, period, level):
+    anim = _animation(level=level)
+    _early_send(anim)
+    _pickup(anim)
+    recorder = FieldingRecorder(anim, "rundown")
+    command_ms = 5300
+    while anim._elapsed < 15000 and not anim.finished:
+        anim.update(min(anim._elapsed+step, command_ms))
+        recorder.capture(anim)
+        if anim._elapsed >= command_ms:
+            route = anim._circuits["B"]
+            before = route.position_at(command_ms/1000)
+            released = tuple(leg for leg in anim._return_legs if leg.release_s <= command_ms/1000)
+            (anim.send_runner if route.returning else anim.retreat_runner)()
+            assert route.position_at(command_ms/1000) == before
+            assert anim._return_legs[:len(released)] == released
+            command_ms += period
+    assert anim.finished, "repeated reversals kept the play live for 15 seconds"
+    record = recorder.record
+    assert record is not None
+    assert any(e.label == "RUNDOWN START" for e in record.events)
+    assert record.running_result.running_outs == 1
+    assert record.running_result.hit_bases == 1
+    assert record.running_result.batter.final_base is None
+    assert len(anim._return_legs) <= 3
+    tags = [e for e in record.events if e.label.startswith("TAG OUT")]
+    assert len(tags) == 1
+    tag = tags[0]
+    frame = record.sample(tag.time_ms)
+    assert frame.runner.state == "out"
+    assert frame.base_call[:2] == ("OUT", tag.base)
+    holder = next(f for f in frame.fielders if f.role == tag.role)
+    assert math.dist(ha._to_field_ft(holder.pos), ha._to_field_ft(frame.runner.pos)) <= rundown.TAG_REACH_FT+1e-8
+    assert holder.glove == pytest.approx((frame.runner.pos[0], frame.runner.pos[1]-9))
+    assert all(math.dist(ha._to_field_ft(frame.runner.pos), bag) > 1e-6 for bag in BASE_FT.values())
+
+
+def test_a_runner_can_escape_a_physical_chase_by_reaching_a_safe_bag():
+    anim = _animation(level="sandlot")
+    _early_send(anim)
+    _pickup(anim)
+    anim.update(5400)
+    assert anim._elapsed >= anim._anim_ms(anim._return_legs[-1].arrival_s)
+    assert anim.retreat_runner()
+    anim._start_rundown(5.4)
+    assert anim._manual_settled_s(5.4) is None
+    record = _finish(anim)
+    assert record.running_result.batter.final_base == 1
+    assert record.running_result.running_outs == 0
+    assert anim._rundown is None
+
+
+@pytest.mark.parametrize("game_mode", ["arcade", "sandbox"])
+@pytest.mark.parametrize("departure_s", [4.0, 9.0])
+def test_rundown_tag_respects_third_out_time_play_scoring_and_sandbox(departure_s, game_mode):
+    anim = _animation(outs=2, game_mode=game_mode)
+    _early_send(anim)
+    _pickup(anim)
+    lead = CircuitRun(None, 27, start_base=3)
+    lead.commit_next(departure_s)
+    anim._circuits["3"] = lead
+    anim.baserunning.selected_by_player = True  # Keep controlling the batter during the rundown.
+    # There is no useful play at home; the actual catcher and pitcher are
+    # too far away to receive a throw before this runner scores.
+    for role in ("C", "P"):
+        f = anim.fielders[role]
+        f.pos[:] = ha._to_screen(-180, 250)
+        f.target = tuple(f.pos)
+        anim._lean_excluded.add(role)
+    command_ms = 5300
+    while anim._elapsed < 20000 and not anim.finished:
+        anim.update(min(anim._elapsed+50, command_ms))
+        if anim._elapsed >= command_ms:
+            if anim._circuits["B"].stopped_at_s is None:
+                (anim.send_runner if anim._circuits["B"].returning else anim.retreat_runner)()
+            command_ms += 160
+    assert anim.finished
+    result = anim.running_result
+    assert result.outs_added == 1
+    assert result.retirements[0].kind == "tag"
+    if game_mode == "sandbox":
+        assert anim._inning_end_s is None
+    else:
+        assert anim._inning_end_s == result.batter.out_s
+    keeper = ScoreKeeper(unlimited_outs=game_mode == "sandbox")
+    keeper.runners = [Runner(3)]
+    play = keeper.update_running_play(result, outs=2)
+    assert play.runs == (1 if game_mode == "sandbox" or departure_s == 4.0 else 0)
 
 
 @pytest.mark.parametrize("step", [16, 250])
@@ -375,6 +469,30 @@ def test_send_input_is_timestamped_and_never_serves_as_continue(monkeypatch):
     assert "continue" not in calls
 
 
+def test_runner_selection_is_remappable_timestamped_and_does_not_repeat_or_continue(monkeypatch):
+    pygame.font.init()
+    anim = _animation(bases=(1, 3), shape="POP_UP")
+    anim.update(0)
+    calls = []
+    sim = _simulation(anim, calls)
+    sim.game.key_binding_manager.current_bindings["select_runner"] = pygame.K_j
+    monkeypatch.setattr(pygame.event, "get", lambda: [
+        pygame.event.Event(pygame.KEYDOWN, key=pygame.K_j, timestamp=400),
+        pygame.event.Event(pygame.KEYDOWN, key=pygame.K_j, timestamp=450, repeat=True)])
+    sim._handle_hit_animation_phase(600, 0.016)
+    assert anim.baserunning.runner_id == "1"
+    assert [(c["action"], c["time_s"]) for c in anim.baserunning.commands] == [("select", 0.4)]
+    assert calls == []
+    assert sim._select_key_held
+    assert anim.presentation_frame().send_control[10] == "Tab"  # snapshot belongs to the play
+    anim.finished = anim.banner_fired = True
+    monkeypatch.setattr(pygame.event, "get", lambda: [
+        pygame.event.Event(pygame.KEYUP, key=pygame.K_j),
+        pygame.event.Event(pygame.KEYDOWN, key=pygame.K_j)])
+    sim._handle_hit_animation_phase(616, 0.016)
+    assert "continue" not in calls
+
+
 def test_manual_overlay_is_recorded_and_replay_draws_the_same_frame():
     pygame.font.init()
     anim = _animation()
@@ -451,7 +569,7 @@ def test_manual_finalization_preserves_hit_credit_outs_and_control_metadata(infi
     assert game.hits == int(not infield_out)
     assert sim.baserunning_mode == "manual"
     saved = json.loads(sim.running_play_json)
-    assert saved["schema_version"] == 4
+    assert saved["schema_version"] == 5
     assert saved["outcome"] == ("GROUNDOUT" if infield_out else "SINGLE")
     assert saved["control"]["requested_s"] == 0.4
     assert saved["control"]["state"] == "expired"
@@ -601,6 +719,34 @@ def test_defense_can_throw_back_and_tag_a_retreating_runner_at_a_previously_touc
     assert frame.base_call[:2] == ("OUT", 1)
     receiver = next(f for f in frame.fielders if f.role == tag.role)
     assert receiver.glove == pytest.approx((frame.runner.pos[0], frame.runner.pos[1]-9))
+
+
+def test_sending_a_retreating_runner_away_from_a_waiting_tag_drops_the_stale_tag():
+    # The glove once swept toward where the runner would be at the old tag
+    # time, now 60 ft up the line, flinging the ball there and back.
+    anim = _animation()
+    _early_send(anim)
+    _pickup(anim)
+    anim.update(6900)
+    assert anim.retreat_runner()
+    for _ in range(400):
+        race = anim._return_race
+        now = anim._elapsed / (1000 * anim.time_scale)
+        if anim._return_base == 1 and race.tag_s is not None and now >= race.defense_s:
+            break
+        anim.update(anim._elapsed + 16)
+    else:
+        pytest.fail("no tag was set up at first")
+    stale_tag_s = race.tag_s
+    assert now < stale_tag_s
+    assert anim.send_runner()
+    assert anim._return_race.tag_s is None
+    ball = ha._to_field_ft(anim._ball_shadow)
+    while anim._elapsed < anim._anim_ms(stale_tag_s + 0.1):
+        anim.update(anim._elapsed + 16)
+        moved, ball = math.dist(ball, ha._to_field_ft(anim._ball_shadow)), ha._to_field_ft(anim._ball_shadow)
+        assert moved < 0.016 * anim.defense.throw_fts * 1.05  # never faster than a throw
+    assert not any(e.label == "TAG OUT" and e.time_s == stale_tag_s for e in anim._running_events)
 
 
 def test_a_mandatory_first_base_leg_cannot_be_retreating_and_auto_ignores_both_commands():

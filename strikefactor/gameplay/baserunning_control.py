@@ -23,6 +23,7 @@ class BaserunningControl:
     deadline_s: float | None = None
     closed: bool = False
     commands: list = field(default_factory=list)
+    selected_by_player: bool = False
 
     def open(self, runner_id, time_s):
         if self.mode != "manual" or self.closed:
@@ -31,6 +32,7 @@ class BaserunningControl:
             self.cancel_pending("runner changed")
             self.runner_id = runner_id
             self.state, self.destination = "available", None
+            self.requested_s = None
         if self.opened_s is None:
             self.opened_s = time_s
 

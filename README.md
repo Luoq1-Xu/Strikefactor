@@ -110,6 +110,7 @@ Each pitcher has a pre-trained Q-learning AI model that adapts pitch selection b
 | **F** | Review — latest recorded ball/fielding play |
 | **G** | Send the highlighted runner one more base (Manual baserunning) |
 | **D** | Retreat the highlighted runner or cancel a queued advance |
+| **TAB** | Select the next runner (Manual baserunning) |
 | **ESC** | Return to Main Menu |
 
 All key bindings (except swing controls) can be customized in the settings menu.
@@ -169,11 +170,15 @@ See [docs/unified-review.md](docs/unified-review.md) for the data and playback c
   destination and the exact next base a Send will add. Press **D** to return a
   moving runner to their last touched base, or cancel a queued advance while
   keeping a required leg. Controls remain available during running and for
-  **2.5 seconds after runners and the ball settle**. Caught balls still require
-  a legal tag-up, and forced runners must reach their required base. The
+  **2.5 seconds after runners and the ball settle**. Use **Tab** to select a
+  different runner. You can send runners while liners, flies and popups are
+  airborne. If caught, **NEEDS TAG AT** marks runners who left early; press
+  **D** to return through the required bags. The defense can appeal at the
+  original bag even after the runner reaches another base or crosses home.
+  Forced runners must reach their required base. The
   **D HOLD** prompt confirms a settled play without waiting for the timer. The
   defense can redirect unreleased throws and make a play at the return base.
-  Both keys are remappable. Use Up/Down or the mouse wheel to scroll settings
+  All three running keys are remappable. Use Up/Down or the mouse wheel to scroll settings
   and key bindings.
 
 ## 📊 Analytics & Visualization

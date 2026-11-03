@@ -116,6 +116,35 @@ def test_batter_beats_the_relay_for_a_fielders_choice(monkeypatch, mode, step):
     assert not any(e.label == "FORCE OUT 1B" for e in record.events)
 
 
+@pytest.mark.parametrize("step", [16, 250])
+def test_a_relay_redirected_away_from_first_leaves_the_batter_safe_on_a_fielders_choice(monkeypatch, step):
+    # The planned relay forecast the out at first. Sending the ball to third
+    # instead must take that forecast back: the batter reaches untouched.
+    # The defense is held to the redirect, as when a runner caught off third
+    # draws the throw (found by fuzzing a manual play).
+    anim = _pickup(monkeypatch, bases=(1, 3))
+    for _ in range(400):
+        if anim._return_runner == "B" and len(anim._return_legs) == 2:
+            break
+        anim.update(anim._elapsed + 16)
+    else:
+        pytest.fail("the turn never planned its relay to first")
+    now = anim._elapsed / (1000 * anim.time_scale)
+    pivot = anim._return_legs[0]
+    assert now < anim._return_legs[1].release_s  # the relay is not thrown yet
+    legs, approaches = anim._return_schedule(3, pivot.target, now, holder=pivot.receiver,
+                                             transfer_s=0.0, allow_relay=False)
+    anim._replace_return_plan((pivot,), legs, approaches, "3", 3, now, "THROW REDIRECT")
+    assert anim.play_timing is None and not anim._first_base_retired
+    for rethink in ("_reconsider_return", "_redirect_cutoff"):
+        monkeypatch.setattr(anim, rethink, lambda now_s: None)
+    result = _finish(anim, step).running_result
+    assert result.batter.out_s is None and result.batter.final_base == 1
+    assert result.outcome == outcomes.FIELDERS_CHOICE
+    assert [(r.runner_id, r.kind) for r in result.retirements] == [("1", "force")]
+    assert anim.play_timing is None and not anim._first_base_retired
+
+
 @pytest.mark.parametrize("delay", [0.0, 0.8])
 def test_slow_pickup_or_bobble_takes_the_available_out_at_first(monkeypatch, delay):
     anim = _pickup(monkeypatch, pickup_s=3.0-delay, point=(50, 70), misplay_s=delay)
@@ -272,7 +301,7 @@ def test_finalization_and_gameday_record_outs_once_without_crediting_a_hit(monke
     assert game.currentouts == outs_added and game.hits == 0 and not sim.is_hit
     assert sim.tag_margin_s is None
     payload = json.loads(sim.running_play_json)
-    assert payload["schema_version"] == 4
+    assert payload["schema_version"] == 5
     assert len(payload["retirements"]) == outs_added
     assert "OUT ADVANCING" not in banners[0]
     assert banners[0] == result.display_name

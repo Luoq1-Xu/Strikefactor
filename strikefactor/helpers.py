@@ -304,14 +304,10 @@ class ScoreKeeper:
         """
         before = {str(r.base): r for r in self.runners}
         reconstructed = self._reconstructed()[:]
-        retired = sorted(m.out_s for m in result.movements if m.out_s is not None)
-        outs_needed = 3 - outs
-        third_s = (retired[outs_needed - 1]
-                   if not self.unlimited_outs and 0 < outs_needed <= len(retired) else None)
-        batter_out_third = (third_s is not None and result.outcome in outcomes.BATTED_OUT_OUTCOMES
-                            and result.batter.out_s == third_s)
-        force_third = any(r.time_s == third_s and r.kind in ("force", "batter_before_first")
-                          for r in result.retirements)
+        # Official outs only. A runner retired by an appeal after the third
+        # out loses his run but is not a fourth out (OBR 5.09(c)).
+        retired = (sorted(r.time_s for r in result.retirements if r.official) if result.retirements
+                   else sorted(m.out_s for m in result.movements if m.out_s is not None))
         error = result.outcome == outcomes.REACHED_ON_ERROR
         clean_third = not self.unlimited_outs and self._clean_outs(self.pitcher, outs) >= 2
         rbi_allowed = {r for r in self.runners if r.base + _out_advance(result.error_out, r.base) > 3}
@@ -339,17 +335,20 @@ class ScoreKeeper:
             else:
                 runner = before[move.runner_id]
             runner.scored = False
+            # Where the runner ended up, not the furthest bag he touched: a
+            # runner who retraces to retouch his base gains nothing.
+            reached = (move.final_base if move.final_base is not None
+                       else max((base for base, _ in move.touches), default=move.start_base))
             if runner.clean_base is not None:
                 if move.runner_id == "B" and not error:
                     # A clean advance on another throw is earned running,
                     # even when it does not increase the credited hit length.
-                    runner.clean_base = max((base for base, _ in move.touches), default=runner.clean_base)
+                    runner.clean_base = reached if move.touches else runner.clean_base
                 elif move.runner_id != "B":
                     if error:
                         runner.clean_base += 0 if clean_third else _out_advance(result.error_out, runner.clean_base)
                     else:
-                        end = max((base for base, t in move.touches), default=move.start_base)
-                        runner.clean_base += end - move.start_base
+                        runner.clean_base += reached - move.start_base
             if move.out_s is not None:
                 self.runners.remove(runner)
                 runner.onBase = False
@@ -357,7 +356,7 @@ class ScoreKeeper:
             runner.base = move.final_base
             runner.onBase = move.final_base in (1, 2, 3)
             crossed = move.scored_s
-            if crossed is not None and not (batter_out_third or force_third) and (third_s is None or crossed < third_s):
+            if result.counts_run(move, outs, unlimited_outs=self.unlimited_outs):
                 scoring.append((crossed, runner))
             elif crossed is not None:
                 # An annulled run cannot remain in a surviving on-base slot.

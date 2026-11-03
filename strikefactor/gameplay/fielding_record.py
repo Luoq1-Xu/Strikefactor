@@ -39,6 +39,7 @@ class FieldingFrame:
     runners: tuple = ()
     base_call: tuple | None = None  # SAFE/OUT, target base, arrival/tag margin
     send_control: tuple | None = None  # control snapshot; renderer also accepts legacy five-field frames
+    retouch_owed: tuple = ()  # (runner_id, base) for each runner who still has to retouch after a catch
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +74,7 @@ class FieldingRecord:
     def possession_event_times(self):
         return tuple(e.time_ms for e in self.events if e.label in {
             "WALL IMPACT", "MISPLAY", "BALL SECURED", "THROW RELEASE", "THROW ARRIVAL", "BASE POSSESSION", "BOUNCE",
+            "CARRY START", "FIRST TOUCH", "CATCH",
         })
 
     @property
@@ -201,12 +203,13 @@ class FieldingRecorder:
         # Running and relay events are exact instants from the original play.
         # Observe only events which have happened, including a skipped end.
         observed_s = frame.time_ms / (1000*animation.time_scale)
-        if animation._inning_end_s is not None:
-            observed_s = min(observed_s, animation._inning_end_s)
+        touch_s = min(observed_s, animation._inning_end_s) if animation._inning_end_s is not None else observed_s
+        if animation._inning_end_s is not None and not animation._appeal_play:
+            observed_s = touch_s
         running = list(animation._running_events)
         for rid, route in animation._circuits.items():
             running.extend(RunningEvent(
-                t, "BASE TOUCHED", rid, base) for base, t in route.touches(observed_s)
+                t, "BASE TOUCHED", rid, base) for base, t in route.touches(touch_s)
                 if rid != "B" or base != 1)
         for event in running:
             key = (event.label, event.runner_id, event.base, event.role, event.time_s)

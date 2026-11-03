@@ -110,7 +110,9 @@ def play_display_name(outcome, double_play=False, fielding_sequence=()):
         return display_name(outcome)
     numbers = {"P": "1", "C": "2", "1B": "3", "2B": "4", "3B": "5",
                "SS": "6", "LF": "7", "CF": "8", "RF": "9"}
-    sequence = "–".join(numbers[role] for role in fielding_sequence)
+    # A plain hyphen, as a scorebook writes it (6-4-3). The game's pixel font
+    # has no en dash and would draw a missing-glyph box in its place.
+    sequence = "-".join(numbers[role] for role in fielding_sequence)
     return "DOUBLE PLAY" + (f" · {sequence}" if sequence else "")
 
 
