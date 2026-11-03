@@ -202,6 +202,25 @@ class ERAI():
         best_future = self.best_future_reward(new_state)
         self.update_q_value(old_state, action, old, reward, best_future)
 
+    def entry(self, state, action):
+        """What `update` would overwrite for (state, action): its Q-value and
+        visit count, each None if the pair has none yet.
+
+        Hand it back to `restore_entry` to undo that update. An ABS overturn
+        does this to re-learn a pitch from the call that stands.
+        """
+        key = (tuple(state), action)
+        return self.q.get(key), self._get_visits().get(key)
+
+    def restore_entry(self, state, action, entry):
+        """Put back an `entry` read before an update that should not stand."""
+        key = (tuple(state), action)
+        for table, value in zip((self.q, self._get_visits()), entry):
+            if value is None:
+                table.pop(key, None)
+            else:
+                table[key] = value
+
     def get_q_value(self, state, action):
         """
         Return the Q-value for the state `state` and the action `action`.

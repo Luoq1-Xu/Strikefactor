@@ -312,7 +312,7 @@ class ReviewOverlay:
         if record:
             balls, strikes, outs = record.count
             title = (f"#{record.number} · {record.pitcher} · {record.pitch_type} {record.speed_mph:.0f} MPH"
-                     f" · {record.outcome} · {balls}-{strikes}, {outs} OUT · {record.scope}")
+                     f" · {record.outcome_label} · {balls}-{strikes}, {outs} OUT · {record.scope}")
             self._text(screen, title, pygame.Rect(132, 22, w - 254, 22))
         if self.sidebar:
             previous = screen.get_clip()
@@ -331,7 +331,7 @@ class ReviewOverlay:
                     pygame.draw.rect(screen, gdt.FG, check.inflate(-6, -6))
                 gdt.blit_text(screen, f"#{rec.number} {rec.pitch_type} {rec.speed_mph:.0f} MPH",
                               self.fonts['small'], (area.x + 36, y + 4), gdt.FG)
-                gdt.blit_text(screen, rec.outcome, self.fonts['micro'], (area.x + 36, y + 28), gdt.DIM)
+                gdt.blit_text(screen, rec.outcome_label, self.fonts['micro'], (area.x + 36, y + 28), gdt.DIM)
             screen.set_clip(previous)
             self._text(screen, f"{len(self.filtered)} SHOWN · {len(self.selected)} COMPARED",
                        self._history_caption_rect(), color=gdt.DIM)

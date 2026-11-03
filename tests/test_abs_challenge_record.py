@@ -421,3 +421,185 @@ def test_an_upheld_strike_three_shows_k_not_the_reset_count():
     game._count_after_call_label = Game._count_after_call_label
     Game.request_abs_challenge(game)
     assert shown['post_count_label'] == "K"
+
+
+# ---- The trail the T view draws follows the call that stands ----------------
+
+RED, GREEN, WHITE = (227, 75, 80), (75, 227, 148), (255, 255, 255)
+
+
+def _game_at_the_call(trail, count=(1, 1)):
+    """The game as `_make_ball_strike_call` sees it: the pitch's trail so far
+    (all in flight), about to be called on `count`."""
+    from strikefactor.main import Game, GameStats
+
+    stats = SimpleNamespace(
+        strikes=0, balls=0, currentballs=count[0], currentstrikes=count[1],
+        currentouts=0, currentstrikeouts=0, currentwalks=0, homeruns_allowed=0,
+        hits=0, pitchnumber=2, first_pitch_thrown=True, pitch_chosen="FF")
+    game = SimpleNamespace(
+        game_stats=stats, scoreKeeper=ScoreKeeper(), inning_ended=False,
+        last_pitch_information=trail, pitch_trajectories=[], menu_state="gameplay",
+        state_manager=SimpleNamespace(current_state_name="gameplay"),
+        gameday_manager=None,
+        field_renderer=SimpleNamespace(total_at_bats=0, total_walks=0, hit_records=[]),
+        banner=SimpleNamespace(_pending_banner=None, hide_banner=lambda: None),
+        sound_manager=SimpleNamespace(pending_sounds=[]),
+        dispatch_ball_call=lambda *a, **k: None,
+        dispatch_strike_call=lambda *a, **k: None,
+        build_ai_state=lambda: "state from the corrected count",
+        outcome_value=GameStats().outcome_value,
+        _outcome_after_call=Game._outcome_after_call,
+    )
+    for name in ("restore_for_abs", "_recolor_trail_for_call",
+                 "_relearn_overturned_pitch"):
+        setattr(game, name, getattr(Game, name).__get__(game))
+    return game
+
+
+@pytest.mark.parametrize("call,color,truth,new_color", [
+    ("strike", RED, False, GREEN),
+    ("ball", GREEN, True, RED),
+])
+def test_an_overturn_recolors_the_trail_the_t_view_draws(call, color, truth, new_color):
+    """T draws `pitch_trajectories`, which holds the very list the pitch's trail
+    is. The overturn used to swap `last_pitch_information` for the snapshot's
+    copy and recolour that, so T kept the umpire's colour."""
+    from strikefactor.main import Game
+
+    in_flight = [[640, 300, 5, WHITE, ""], [632, 440, 8, WHITE, ""]]
+    trail = [list(e) for e in in_flight]
+    game = _game_at_the_call(trail)
+    snapshot = Game.snapshot_for_abs(game)
+    # The pitch goes on drawing its call at the plate, then cleanup files the
+    # trail for T.
+    trail += [[630, 480, 9, color, call], [630, 480, 9, color, call]]
+    game.pitch_trajectories.append(trail)
+    game.pending_challenge = dict(
+        snapshot=snapshot, truth_strike=truth, original_call=call,
+        pitchtype="FF", speed_mph=96.0, ball_xy=(630, 480))
+
+    Game._reverse_last_call(game)
+
+    shown = game.pitch_trajectories[-1]
+    assert shown is game.last_pitch_information
+    new_call = "strike" if truth else "ball"
+    assert [e[3:] for e in shown[2:]] == [[new_color, new_call]] * 2
+    assert shown[:2] == in_flight, "the flight is not part of the call"
+
+
+def test_an_upheld_challenge_leaves_the_trail_alone(recorder):
+    from strikefactor.main import Game
+
+    trail = [[640, 300, 5, WHITE, ""], [630, 480, 9, RED, "strike"]]
+    game = SimpleNamespace(last_pitch_information=trail, pitch_trajectories=[trail])
+    Game._record_abs_challenge(game, {"pitch_id": "pid-1", "truth_strike": True},
+                               False, None)
+    assert game.pitch_trajectories[-1][-1] == [630, 480, 9, RED, "strike"]
+
+
+# ---- Review names the verdict --------------------------------------------------
+
+def _review_store_with_a_take(outcome="BALL"):
+    from strikefactor.gameplay.review_record import PitchPoint, ReviewRecord
+    from strikefactor.gameplay.review_store import ReviewStore
+
+    store = ReviewStore()
+    rec = ReviewRecord(store.allocate_id(), "Sale", "FF", 96, outcome, "R",
+                       (1, 1, 0), "SESSION", (PitchPoint(0, 630, 480, 9),))
+    store.publish(rec)
+    return store, rec.review_id
+
+
+@pytest.mark.parametrize("overturned,final,label", [
+    (True, "strike", "STRIKE (OVERTURNED)"),
+    (False, None, "BALL (UPHELD)"),
+])
+def test_the_replay_shows_the_call_that_stands_and_the_verdict(
+        recorder, overturned, final, label):
+    from strikefactor.main import Game
+
+    store, review_id = _review_store_with_a_take("BALL")
+    if overturned:
+        store.revise_outcome(review_id, final.upper())   # `_reverse_last_call`
+    game = SimpleNamespace(review_store=store, scoreKeeper=ScoreKeeper())
+    pc = {"pitch_id": "pid-1", "review_id": review_id, "truth_strike": overturned,
+          "snapshot": {"scoreKeeper": ScoreKeeper()}}
+    Game._record_abs_challenge(game, pc, overturned, final)
+
+    assert store.get(review_id).outcome_label == label
+
+
+def test_the_verdict_reaches_review_even_without_a_db_row(recorder):
+    from strikefactor.main import Game
+
+    store, review_id = _review_store_with_a_take("STRIKE")
+    Game._record_abs_challenge(SimpleNamespace(review_store=store),
+                               {"pitch_id": None, "review_id": review_id},
+                               False, None)
+    assert store.get(review_id).abs_verdict == "UPHELD"
+    assert recorder.amended == []
+
+
+def test_an_unchallenged_pitch_is_labelled_by_its_outcome_alone():
+    store, review_id = _review_store_with_a_take("WALK")
+    assert store.get(review_id).outcome_label == "WALK"
+
+
+# ---- The AI learns the call that stands ----------------------------------------
+
+def _ai():
+    from strikefactor.ai.AI_2 import ERAI
+    return ERAI(["FF", "SL"])
+
+
+@pytest.mark.parametrize("seen_before", [False, True])
+def test_an_overturn_relearns_the_pitch_from_the_corrected_call(seen_before):
+    """cleanup's Q-update runs while the challenge window is still open, so it
+    learns the umpire's call. An overturn puts back what it overwrote and
+    learns the pitch again, as if the umpire had called it right."""
+    from strikefactor.main import Game, GameStats
+
+    values = GameStats().outcome_value
+    state, action = (0, 1, 1), "FF"
+    learned, right_first_time = _ai(), _ai()
+    if seen_before:
+        for ai in (learned, right_first_time):
+            ai.update(state, action, (0, 1, 2), values["strike"])
+
+    undo = (learned, state, action, learned.entry(state, action))
+    learned.update(state, action, "state the umpire's ball left", values["ball"])
+    game = SimpleNamespace(current_state=(0, 1, 2), outcome_value=values)
+    Game._relearn_overturned_pitch(game, {"ai_update": undo}, "strike")
+
+    right_first_time.update(state, action, (0, 1, 2), values["strike"])
+    assert learned.q == right_first_time.q
+    assert learned.visits == right_first_time.visits
+
+
+def test_cleanup_hands_the_ai_update_to_the_open_challenge(recorder):
+    from strikefactor.gameplay.pitch_simulation import PitchSimulation
+    from strikefactor.main import GameStats
+
+    ai = _ai()
+    game = SimpleNamespace(
+        ball=(630, 480), swing_started=0, pitchnumber=1, last_pitch_information=[],
+        pitch_trajectories=[], pitch_history=[], current_pitches=0,
+        field_renderer=SimpleNamespace(record_pitch=lambda: None, total_pitches=1),
+        current_pitcher=SimpleNamespace(_get_count_state=lambda: "even",
+                                        get_ai=lambda: ai),
+        batter_profile=SimpleNamespace(record_pitch=lambda **kw: None),
+        batter=SimpleNamespace(get_handedness=lambda: "R"),
+        build_ai_state=lambda: (0, 0, 1), outcome_value=GameStats().outcome_value,
+        pitch_chosen="FF", scoreKeeper=ScoreKeeper(),
+        pending_challenge={"review_id": (1, 1)},
+    )
+    sim = object.__new__(PitchSimulation)
+    sim.game, sim.new_entry, sim.pitchtype, sim.outcome = game, {}, "FF", "ball"
+    sim.previous_state = (0, 0, 0)
+    sim._score_before_pitch = sim._earned_before_pitch = 0
+    sim.cleanup()
+
+    owner, state, action, entry = game.pending_challenge["ai_update"]
+    assert (owner, state, action, entry) == (ai, (0, 0, 0), "FF", (None, None))
+    assert ((0, 0, 0), "FF") in ai.q, "the umpire's call is still learned meanwhile"

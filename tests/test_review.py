@@ -611,6 +611,9 @@ def test_abs_revises_the_same_review_pitch_including_terminal_calls(game, truth,
     game._outcome_after_call = Game._outcome_after_call
     game.build_ai_state = lambda: 'state from the corrected count'
     game.last_pitch_information = []
+    game._recolor_trail_for_call = lambda call: Game._recolor_trail_for_call(game, call)
+    game._relearn_overturned_pitch = (
+        lambda pc, outcome: Game._relearn_overturned_pitch(game, pc, outcome))
     final = Game._reverse_last_call(game)
     assert len(game.review_store.records) == 1
     assert game.review_store.get(rec.review_id).outcome == result

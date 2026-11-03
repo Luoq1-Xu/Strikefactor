@@ -29,10 +29,17 @@ class ReviewRecord:
     fielding: object = None
     fielding_unavailable: str = "No fielding play on this pitch."
     bases: tuple[str, ...] = ('white', 'white', 'white')
+    abs_verdict: str = ""  # "OVERTURNED" / "UPHELD" once an ABS challenge rules on it
 
     @property
     def number(self):
         return self.review_id[1]
+
+    @property
+    def outcome_label(self):
+        """The outcome as Review shows it: the call that stands, and the ABS
+        verdict when the call was challenged."""
+        return f"{self.outcome} ({self.abs_verdict})" if self.abs_verdict else self.outcome
 
     def unavailable(self, view):
         if view == "swing" and self.swing is None:
