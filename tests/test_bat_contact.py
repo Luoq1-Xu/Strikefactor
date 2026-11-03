@@ -19,7 +19,10 @@ import pytest
 
 from strikefactor.gameplay import bat_contact as bc
 from strikefactor.gameplay import bat_path as bp
+from strikefactor.gameplay import spray
 from strikefactor.utils.pitch_physics import DEFAULT_CAMERA, PitchTrajectory
+
+UNDERCUT_IN = bc.SWING_UNDERCUT_FT * 12.0
 
 
 def pitch(speed_mph=93.0, target_z=2.5, target_x=0.0):
@@ -32,19 +35,16 @@ def pitch(speed_mph=93.0, target_z=2.5, target_x=0.0):
 def squared_up(trajectory, hand="R"):
     """The swing of a hitter who tracks the ball and puts the bat on it.
 
-    Found by iteration rather than stated, because where the barrel arrives
-    depends on where the player aims and where they should aim depends on
-    where the barrel arrives. It converges in a couple of passes; six is
-    generous. This is the reference every timing sweep below is measured from.
+    The game's own path: a cursor on the ball's plate crossing, carried to the
+    barrel's depth by `aim_at_pitch`. That puts the bat's axis
+    `SWING_UNDERCUT_FT` under the ball's centre, which is the contact a swing
+    is for: a line drive. This is the reference every timing sweep below is
+    measured from.
     """
-    aim = (0.0, 2.5)
-    for _ in range(6):
-        swing = bp.swing(aim, hand)
-        ball = trajectory.position_at(
-            trajectory.time_at_depth(swing.contact_depth_ft))
-        px, py, _ = DEFAULT_CAMERA.project(*ball)
-        aim = DEFAULT_CAMERA.screen_to_world_at_plate(px, py)
-    return bp.swing(aim, hand)
+    ball = trajectory.position_at(trajectory.travel_time)
+    px, py, _ = DEFAULT_CAMERA.project(ball[0], 0.0, ball[2])
+    cursor = DEFAULT_CAMERA.screen_to_world_at_plate(px, py)
+    return bp.swing(bc.aim_at_pitch(cursor, trajectory, hand), hand)
 
 
 def swing_at(trajectory, swing, timing_ms, **kw):
@@ -72,9 +72,31 @@ def test_a_squared_up_swing_hits_the_ball_on_the_sweet_spot():
     got = swing_at(tr, squared_up(tr), 0.0)
     assert got is not None
     assert got.along == pytest.approx(bp.CONTACT_SWEET_SPOT_FRAC, abs=0.05)
-    assert abs(got.vertical_offset_ft * 12.0) < 0.5, "squared up, in inches"
-    assert got.quality > 0.95
+    assert got.vertical_offset_ft * 12.0 == pytest.approx(UNDERCUT_IN, abs=0.05)
+    assert got.quality > 0.96
     assert not got.is_foul()
+
+
+def test_the_hardest_hit_ball_is_the_one_struck_dead_centre():
+    """Quality peaks with the bat's axis on the ball's own line, which is
+    half an inch *above* where a swing aims. That ball is a low liner or a
+    hard grounder; the line drive a swing is for is struck a little less
+    hard, and a ball lifted further still less. It is what a bat and a ball
+    do, and it is what keeps fly balls from being struck as well as line
+    drives."""
+    tr = pitch()
+    scores = {}
+    for inches_high in (0.0, UNDERCUT_IN, 2.0 * UNDERCUT_IN):
+        swing = bp.swing(bc.aim_at_pitch(aim_off_by(tr, inches_high), tr, "R"),
+                         "R")
+        scores[inches_high] = swing_at(tr, swing, 0.0)
+    dead_centre = scores[UNDERCUT_IN]
+    assert abs(dead_centre.vertical_offset_ft * 12.0) < 0.05
+    assert dead_centre.quality > 0.999
+    assert dead_centre.launch_deg < 10.0
+    assert scores[0.0].quality < dead_centre.quality
+    assert scores[2.0 * UNDERCUT_IN].quality == pytest.approx(
+        scores[0.0].quality, abs=0.01), "the peak should be symmetric"
 
 
 @pytest.mark.parametrize("timing_ms", [-200.0, -120.0, 150.0, 300.0])
@@ -130,14 +152,30 @@ def test_a_perfectly_aimed_perfectly_timed_swing_squares_the_ball_up(name):
 
     `aim_at_pitch` resolves which point on the ray the cursor meant. There is
     no tolerance in this assertion on purpose: a perfect swing is perfect.
+
+    Perfect is the bat `SWING_UNDERCUT_FT` under the ball's centre, not on it:
+    that is the contact the swing is for, a line drive, where dead centre is a
+    ground ball. It costs a little quality, because the hardest-hit ball is
+    the one struck dead centre, and no more than that. And it holds where the
+    barrel arrives *behind* the plate's front edge, which is where a pitch
+    away is met.
     """
     tr = pitch(**ARSENAL[name])
     swing = bp.swing(bc.aim_at_pitch(cursor_on_the_ball(tr), tr, "R"), "R")
     got = swing_at(tr, swing, 0.0)
     assert got is not None
-    assert got.quality > 0.99
-    assert abs(got.vertical_offset_ft * 12.0) < 0.05, "inches off centre"
+    assert got.quality > 0.96
+    # The datum is a height at the barrel's depth, and the offset is measured
+    # square to the bat, so on a bat tilted down after a low pitch the two
+    # differ by the tilt's cosine squared. A fifth of an inch at most.
+    assert 0.75 * UNDERCUT_IN <= got.vertical_offset_ft * 12.0 <= UNDERCUT_IN + 0.02
     assert not got.is_foul()
+    # A line drive, or a degree into the next band on a pitch up in the zone,
+    # where the bat is barrel-up and lifts the ball a little more.
+    assert 10.0 < got.launch_deg < 28.0, "a perfect swing is a line drive"
+    if name == "away":
+        assert swing.contact_depth_ft < 0.0
+        assert got.depth_ft < 0.0
 
 
 def test_the_resolved_aim_carries_the_player_error_through_untouched():
@@ -195,13 +233,15 @@ def test_contact_depth_moves_with_timing():
         assert got is not None, f"{ms} ms should still find the ball"
         depths.append(got.depth_ft)
     assert depths == sorted(depths, reverse=True)
-    assert depths[0] > depths[-1] + 2.0, "feet apart across 40 ms, not inches"
+    assert depths[0] > depths[-1] + 1.5, "feet apart across 45 ms, not inches"
+    assert depths[-1] < 0.0, "a late swing meets the ball behind the plate"
 
 
 def test_contact_depth_also_moves_with_location():
-    """Independently of timing. An inside pitch sits close to the hands on
-    screen, so the bat is foreshortened reaching it and the ball is met well
-    out in front — pulled. Both dependencies are real and they are separate."""
+    """Independently of timing. The bat is further round when it meets a pitch
+    inside, so the barrel is further out in front — pulled — and behind square
+    on one away, which is met at the plate's front edge or just behind it.
+    Both dependencies are real and they are separate."""
     inside = pitch(target_x=0.65)
     away = pitch(target_x=-0.65)
     a = swing_at(inside, squared_up(inside), 0.0)
@@ -210,15 +250,33 @@ def test_contact_depth_also_moves_with_location():
     assert a.depth_ft > b.depth_ft + 0.7
 
 
+def test_timing_reaches_the_balls_direction_before_it_reaches_the_barrel():
+    """A few milliseconds off, the ball is still on the barrel and goes
+    somewhere else. That is the order a real hitter meets it in, and it is new:
+    the bat used to be 49 degrees past square, so the same error slid the ball
+    most of the way to the handle before it turned it at all.
+    """
+    tr = pitch()
+    ref = squared_up(tr)
+    on_time = swing_at(tr, ref, 0.0, **TIGHT)
+    early = swing_at(tr, ref, -10.0, **TIGHT)     # ~5 ms left after the slide
+    late = swing_at(tr, ref, 10.0, **TIGHT)
+    for got in (early, late):
+        assert got.quality > 0.95, "still squared up"
+        assert abs(got.along - bp.CONTACT_SWEET_SPOT_FRAC) < 0.06
+    assert early.spray_deg > on_time.spray_deg + 5.0, "early should pull it"
+    assert late.spray_deg < on_time.spray_deg - 5.0, "late should push it"
+
+
 def test_early_meets_the_ball_off_the_end_and_late_on_the_handle():
-    """Where along the bat, which is the other thing the sweep tells you and
-    the thing quality is mostly made of."""
+    """Where along the bat, which is what timing does to the ball once it is
+    far enough off to stop being only a direction."""
     tr = pitch()
     ref = squared_up(tr)
     early = swing_at(tr, ref, -15.0, **TIGHT)
     late = swing_at(tr, ref, 20.0, **TIGHT)
-    assert early.along > bp.CONTACT_SWEET_SPOT_FRAC
-    assert late.along < bp.CONTACT_SWEET_SPOT_FRAC
+    assert early.along > bp.CONTACT_SWEET_SPOT_FRAC + 0.05
+    assert late.along < bp.CONTACT_SWEET_SPOT_FRAC - 0.05
 
     # And at a difficulty that covers 20 ms, both are slid onto the sweet spot.
     # The assist is meant to be visible here: this is what it buys.
@@ -227,6 +285,79 @@ def test_early_meets_the_ball_off_the_end_and_late_on_the_handle():
         assert helped.along == pytest.approx(
             bp.CONTACT_SWEET_SPOT_FRAC, abs=0.01)
         assert helped.shift_s == pytest.approx(-ms / 1000.0, abs=1e-4)
+
+
+# ---- The exit direction -----------------------------------------------------
+
+@pytest.mark.parametrize("hand", ["R", "L"])
+def test_the_exit_direction_is_stamped_once_and_both_angles_read_it(hand):
+    """One collision, one vector, two readings.
+
+    `resolve_contact` asks `bat_ball_collision` once and carries the answer.
+    `spray_deg` and `launch_deg` are that vector's bearing and elevation, so
+    they cannot describe two different balls.
+    """
+    side = spray.spin_for(hand)
+    tr = PitchTrajectory.from_pitch_params(
+        release_pos=(-1.8 * side, 54.0, 6.0), speed_mph=93.0,
+        pfx_x_inches=-4.0 * side, pfx_z_inches=14.0,
+        target_x_ft=0.2 * side, target_z_ft=2.5)
+    got = swing_at(tr, squared_up(tr, hand), 8.0, **TIGHT)
+    x, y, z = got.exit_direction
+    assert math.sqrt(x * x + y * y + z * z) == pytest.approx(1.0)
+    assert got.spray_deg == pytest.approx(math.degrees(math.atan2(x, y)))
+    assert got.launch_deg == pytest.approx(
+        math.degrees(math.atan2(z, math.hypot(x, y))))
+    assert y > 0.0, "a ball struck on the barrel goes out, not back"
+
+
+def test_the_two_hands_get_the_same_exit_direction():
+    """Pull-positive, so a mirrored swing at a mirrored pitch is the same
+    vector to the last bit that matters."""
+    got = {}
+    for hand in ("R", "L"):
+        side = spray.spin_for(hand)
+        tr = PitchTrajectory.from_pitch_params(
+            release_pos=(-1.8 * side, 54.0, 6.0), speed_mph=93.0,
+            pfx_x_inches=-4.0 * side, pfx_z_inches=14.0,
+            target_x_ft=0.4 * side, target_z_ft=2.1)
+        got[hand] = swing_at(tr, squared_up(tr, hand), 9.0, **TIGHT)
+    assert got["L"].exit_direction == pytest.approx(got["R"].exit_direction,
+                                                    abs=1e-9)
+
+
+def test_getting_under_the_ball_lifts_it_and_getting_over_it_tops_it():
+    """The vertical half, through the real sweep. About thirty degrees of
+    launch for every inch of bat position, which is what a bat and a ball do
+    and nearly twice what the fitted model allowed."""
+    tr = pitch()
+    launches = []
+    for inches_high in (1.0, 0.5, 0.0, -0.5, -1.0):
+        swing = bp.swing(bc.aim_at_pitch(aim_off_by(tr, inches_high), tr, "R"),
+                         "R")
+        launches.append(swing_at(tr, swing, 0.0).launch_deg)
+    assert launches == sorted(launches)
+    per_inch = (launches[-1] - launches[0]) / 2.0
+    assert 22.0 < per_inch < 40.0, f"{per_inch:.0f} deg of launch per inch"
+
+
+def test_the_assisted_swing_gets_an_exit_direction_too():
+    """The spatial assist sweeps a translated swing, and the bat's velocity is
+    read off whichever swing was swept.
+
+    A near miss is moved only until the surfaces touch, so what it makes is a
+    foul tip: the ball is barely turned and carries on toward the backstop.
+    That is why widening the contact zone turns whiffs into fouls and never
+    into balls in play, and the collision says so without being told.
+    """
+    tr = pitch()
+    swing = bp.swing(bc.aim_at_pitch(aim_off_by(tr, 4.0), tr, "R"), "R")
+    got = swing_at(tr, swing, 0.0)
+    assert math.hypot(*got.spatial_shift_ft) > 0.0
+    assert math.sqrt(sum(c * c for c in got.exit_direction)) == pytest.approx(1.0)
+    assert got.exit_direction[1] < 0.0, "a tipped ball keeps going back"
+    assert spray.is_foul(got.spray_deg)
+    assert got.is_foul()
 
 
 # ---- Quality ----------------------------------------------------------------
@@ -448,8 +579,11 @@ def test_the_follow_through_is_swept_too():
     # barrel arrived, which is what being early means.
     assert all(c.depth_ft > ref.contact_depth_ft + 0.25 for _, c in after)
 
+    # Late swings never get there. (A tenth of a millisecond of slack: the
+    # bat's axis passes under the ball's centre by design, so the two are
+    # nearest a hair after the authored pose and not exactly at it.)
     late = [swing_at(tr, ref, ms) for ms in range(5, 91)]
-    assert all(c.swing_t_s <= bp.SWING_DURATION_S for c in late if c)
+    assert all(c.swing_t_s <= bp.SWING_DURATION_S + 1e-4 for c in late if c)
 
 
 def test_the_bat_is_tapered_and_the_sweep_can_tell():
@@ -458,9 +592,9 @@ def test_the_bat_is_tapered_and_the_sweep_can_tell():
     assert bp.bat_radius_ft(0.2) < 0.5 * bp.bat_radius_ft(1.0)
     tr = pitch()
     ref = squared_up(tr)
-    got = [swing_at(tr, ref, ms, **TIGHT) for ms in range(-25, 26, 5)]
+    got = [swing_at(tr, ref, ms, **TIGHT) for ms in range(-20, 31, 5)]
     alongs = [c.along for c in got if c]
-    assert max(alongs) - min(alongs) > 0.2
+    assert max(alongs) - min(alongs) > 0.15
 
 
 def test_contact_is_reported_in_feet_and_seconds():
@@ -515,7 +649,7 @@ def test_the_sweep_is_cheap_enough_to_run_on_an_input_frame():
 # The ladder in `settings_manager.get_difficulty_multipliers`, restated so this
 # module can be tested without a settings file — same contract as `DIFFICULTIES`
 # above, and a test below pins it to the real table.
-AIM_ASSIST = [("ROOKIE", 0.90), ("AMATEUR", 0.80), ("PROFESSIONAL", 0.50),
+AIM_ASSIST = [("ROOKIE", 0.90), ("AMATEUR", 0.88), ("PROFESSIONAL", 0.50),
               ("ALL_STAR", 0.35), ("HALL_OF_FAME", 0.20)]
 
 
@@ -526,17 +660,20 @@ def aim_off_by(trajectory, inches_high, across_in=0.0):
 
 
 def miss_inches(trajectory, cursor, assist):
-    """How far the resolved aim still sits from the ball, in inches.
+    """How far the resolved aim still sits from where a perfect one would put
+    the bat, in inches.
 
     Measured where it matters — at the barrel's own depth, which is what
-    `aim_at_pitch` resolves against — rather than at the plate.
+    `aim_at_pitch` resolves against — rather than at the plate, and against
+    the swing's datum: `SWING_UNDERCUT_FT` under the ball's centre.
     """
     aim = bc.aim_at_pitch(cursor, trajectory, "R", assist=assist)
     swing = bp.swing(aim, "R")
     depth = swing.contact_depth_ft
     ball = trajectory.position_at(trajectory.time_at_depth(depth))
     barrel = bp._unproject(aim, depth)
-    return math.hypot(barrel[0] - ball[0], barrel[1] - ball[2]) * 12.0
+    return math.hypot(barrel[0] - ball[0],
+                      barrel[1] - (ball[2] - bc.SWING_UNDERCUT_FT)) * 12.0
 
 
 def test_the_assist_does_nothing_to_a_perfect_aim():

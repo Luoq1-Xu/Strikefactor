@@ -19,16 +19,24 @@ class _StubGame:
 
     exit_to_menu = Game.exit_to_menu
 
-    def __init__(self, gamemode, state_name):
+    def __init__(self, gamemode, state_name, in_gameday_mode=False):
         self.current_gamemode = gamemode
+        self.in_gameday_mode = in_gameday_mode
         self.state_manager = _StubStateManager(state_name)
         self.went = None
+        self.torn_down = False
 
     def return_to_sandbox_menu(self):
         self.went = 'sandbox_menu'
 
     def set_menu_state(self, state):
         self.went = ('set_menu_state', state)
+
+    def _teardown_active_session(self):
+        self.torn_down = True
+
+    def enter_gameday_mode(self):
+        self.went = 'gameday_setup'
 
 
 def test_sandbox_gameplay_escapes_to_sandbox_menu():
@@ -50,7 +58,11 @@ def test_arcade_gameplay_escapes_to_arcade_menu():
     assert g.went == ('set_menu_state', 0)
 
 
-def test_gameday_gameplay_escapes_to_arcade_menu():
-    g = _StubGame(0, 'gameplay')
+def test_gameday_gameplay_escapes_to_gameday_setup():
+    """GameDay is a mode on the main menu, not a button on the Arcade one, so
+    its menu is its own setup screen: the one that can resume the game just
+    left. The session is torn down first, as every other exit does."""
+    g = _StubGame(0, 'gameplay', in_gameday_mode=True)
     g.exit_to_menu()
-    assert g.went == ('set_menu_state', 0)
+    assert g.went == 'gameday_setup'
+    assert g.torn_down

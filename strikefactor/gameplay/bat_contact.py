@@ -63,15 +63,19 @@ it: quality came out non-monotone in timing error, dipping at dead-on and
 peaking at +/-20 ms. The swing is slid by a stated amount off a datum the
 player is actually racing; the ball is left exactly where it is.
 
-**Timing shows up as spray, not as weakness**, and with the bat isotropic that
-is now what the geometry does on its own rather than an aspiration. Sweeping
-the residual error against a plain bat, `along` runs 1.00 — the very tip — at
-14 ms early, through the sweet spot at 0, to 0.62 on the handle at 30 ms late,
-and the swing misses entirely past about 14 ms early because not even the tip
-is there yet. That is a hitter getting jammed when late and reaching the end of
-the bat when early, and it falls out of two solids and a clock. Only once the
-ball is off the barrel entirely does quality fall, which is the point at which
-a real hitter also stops squaring it up.
+**Timing shows up as direction first, and as weakness only later.** The bat
+is near square when it arrives, so a ball met a few milliseconds early or late
+is still met on the barrel: what changes is how far round the bat has turned,
+and `bat_ball_collision` turns that into where the ball goes — early pulls it,
+late sends it the other way. Further off, the ball slides along the bat as
+well, toward the tip when early and toward the handle when late, and that is
+where quality falls: a hitter reaching the end of the bat, or getting jammed.
+Both fall out of two solids and a clock.
+
+**The ball's direction is settled here, once.** `resolve_contact` hands the
+winning frame to `bat_ball_collision` and stamps the result on the `Contact`
+(`exit_direction`). `spray_deg` and `launch_deg` are two readings of that one
+vector. Nothing downstream may work either of them out again.
 
 **The best contact wins, not the first.** The bat's fattened surface reaches
 the ball over a span of instants, and "first touch" among them is not the one
@@ -91,7 +95,7 @@ particular trajectory.
 import math
 from dataclasses import dataclass
 
-from strikefactor.gameplay import bat_path, spray
+from strikefactor.gameplay import bat_ball_collision, bat_path, spray
 
 # A baseball is 2.9 in across.
 BALL_RADIUS_FT = 0.121
@@ -193,6 +197,33 @@ TIMING_CHARGE_SIGMA_FLOOR_S = 0.020
 # not, so a power swing stays harder even where the two windows agree.
 POWER_SPATIAL_ASSIST_FT = -0.035
 
+# How far under the ball's centre a swing puts the bat's axis when the cursor
+# is on the ball: a little over half an inch. `aim_at_pitch` is where it is
+# applied, and nowhere else.
+#
+# It is not dead centre because dead centre is a ground ball. A ball struck
+# with the bat's axis on its own line leaves between the bat's path and the
+# pitch's, about 8 degrees up, and every inch the bat is under it adds about
+# 30 (`bat_ball_collision`). Half an inch under is a line drive in the low
+# twenties, which is the ball a hitter is trying to hit.
+#
+# **Quality still peaks at dead centre**, so a perfectly aimed swing scores
+# about 0.975 and not 1.00. That is deliberate, and it is the physics: the
+# hardest-hit ball is the one struck square, a low liner, and a ball lifted
+# for carry is struck a little less hard. Moving the peak here as well was
+# tried, and it made fly balls as well struck as line drives: home runs came
+# out at 7.9% of fair contact against 5.8% before.
+#
+# A stated assumption about what the hitter intends, in the same sense as
+# `bat_path.ATTACK_ANGLE_DEG`: the game has no input for it. It replaced
+# `ball_flight.ZERO_OFFSET_LAUNCH_DEG`, which was the same statement made as
+# a fitted intercept on the launch angle. Sized against the batted-ball mix
+# over the canonical player model (`tools/calibrate_contact.py`), not against
+# the on-time swing: the fair population sits several degrees under the
+# squared-up launch angle, because a mistimed bat is above its own contact
+# height on both sides of the swing and so tops the ball.
+SWING_UNDERCUT_FT = 0.045
+
 # Contact quality. Both sigmas are stated in the units the geometry produces,
 # which is the point of the rewrite: `vertical_offset` used to be screen pixels
 # and `along` did not exist at all.
@@ -240,7 +271,24 @@ SWEET_SIGMA = 0.13
 # timing on the bat, which sprays more contact foul on its own — 19% at ROOKIE
 # against 38% at HALL OF FAME, with nothing tuned. The span came in from 0.30
 # because of it: the threshold has less of the ladder left to carry.
-FOUL_QUALITY_THRESHOLD = 0.59
+#
+# **It went up 0.59 -> 0.71 with the square bat, and what it is holding
+# changed.** The launch angle comes off a real collision now, and that
+# collision is about 30 degrees of launch per inch of bat position against
+# the 18 the fitted model gave. So the same spread of fair contact that used
+# to read as MLB's batted-ball mix read as pop-ups and choppers: 59% grounders
+# and 16% line drives against 42 and 24. Fair contact has to be squarer than
+# it was, which is two moves made together. AMATEUR's `aim_assist` went
+# 0.80 -> 0.88 (`settings_manager`), which puts more swings near the middle
+# of the bat, and this came up to call the glancing ones foul. Measured over
+# the canonical player model before and after: whiff / foul / fair
+# 30.0 / 32.1 / 37.9 against 30.4 / 30.6 / 39.1, and a mix of
+# 41.7 / 24.1 / 27.3 / 6.8 against 43.0 / 24.8 / 26.4 / 5.9.
+#
+# Direction carries more of the verdict than it did (32% of contact against
+# 20%), because a ball struck glancingly enough now leaves backward and is
+# foul by where it went. The two limbs overlap on most of those.
+FOUL_QUALITY_THRESHOLD = 0.71
 FOUL_THRESHOLD_SPAN = 0.22
 
 
@@ -265,19 +313,27 @@ class Contact:
     # the same reason `SwingRecord` carries `aim_assist`.
     shift_s: float = 0.0
     # Where the bat was pointing, as `spray.attack_direction_deg` of the axis
-    # the sweep was holding: degrees from centre field, pull-positive for
-    # either batter.
+    # the sweep was holding: degrees past square, pull-positive for either
+    # batter.
     #
-    # Two of them, because spray is calibrated on the two separately.
-    # `pose_attack_deg` is the *nominal* contact pose — a function of the aim
-    # alone, so it is the pitch-location half — and the difference between them
-    # is the turn the residual timing put on the bat. See `spray`.
-    #
-    # The bearing used to die here. `axis_point_ft` and `along` were kept and
-    # the axis they came from was dropped, so five modules downstream had to
-    # invent a direction for the ball out of a timing sign or a coin flip.
+    # Two of them. `pose_attack_deg` is the *nominal* contact pose — a function
+    # of the aim alone — and the difference between them is the turn the
+    # residual timing put on the bat, which `batted_ball_path` bends the flight
+    # by. Facts about the bat. Where the *ball* went is `exit_direction`.
     attack_deg: float = 0.0
     pose_attack_deg: float = 0.0
+    # The direction the ball left in, as a unit vector stated pull-positive:
+    # `(toward the batter's pull field, toward the pitcher, up)`. Computed
+    # once, by `bat_ball_collision` in `resolve_contact`, and carried.
+    # `spray_deg` and `launch_deg` below are the two readings of it.
+    #
+    # One vector because it is one collision: on a tilted bat, getting under
+    # the ball also turns it sideways, and two separately computed angles
+    # could not know that about each other.
+    #
+    # The default is a ball hit level and straight back up the middle, which
+    # is what a `Contact` built by hand without a collision means.
+    exit_direction: tuple = (0.0, 1.0, 0.0)
     # The width of the Gaussian `timing_score` charges `shift_s` against, in
     # seconds. Carried for the same reason `shift_s` is: it is a property of
     # the difficulty that granted the slide, and recomputing it downstream
@@ -300,9 +356,12 @@ class Contact:
 
         An output, and the one the whole rebuild was for. It varies with where
         the pitch was — an inside pitch is met further out front, because the
-        bat is more foreshortened reaching it — *and* with how the swing was
+        bat is further round when it gets there — *and* with how the swing was
         timed, because an early bat crosses the ball's line while the ball is
         still out there.
+
+        Negative is behind the plate's front edge, which is where a pitch on
+        the outside corner is met and where a late swing meets anything.
         """
         return self.ball_ft[1]
 
@@ -405,13 +464,26 @@ class Contact:
     def spray_deg(self):
         """Where this ball went: degrees from centre field, pull-positive.
 
+        The horizontal reading of `exit_direction`.
+
         Difficulty-free, unlike everything else about the verdict. Difficulty
         reaches spray the way it reaches a real hitter — through
         `timing_assist_s`, which decides how much of the player's timing error
         is still on the bat when it meets the ball — rather than through a
         dial on the direction itself.
         """
-        return spray.spray_angle_deg(self.pose_attack_deg, self.attack_deg)
+        return bat_ball_collision.spray_deg(self.exit_direction)
+
+    @property
+    def launch_deg(self):
+        """This ball's launch angle: degrees above horizontal.
+
+        The vertical reading of `exit_direction`, and the same vector
+        `spray_deg` reads. Contact quality is deliberately not an input: how
+        square the contact was is the size of the miss, and this is its
+        direction.
+        """
+        return bat_ball_collision.launch_deg(self.exit_direction)
 
     def is_foul(self, threshold=FOUL_QUALITY_THRESHOLD):
         """Whether this contact goes foul rather than into play.
@@ -503,7 +575,7 @@ def timing_error_s(swing, trajectory, swing_start_s):
 def foul_threshold(timing_window_mult):
     """The quality below which contact goes foul, at this difficulty.
 
-    Runs from about 0.48 at ROOKIE to 0.72 at HALL OF FAME against 0.59 in the
+    Runs from about 0.60 at ROOKIE to 0.84 at HALL OF FAME against 0.71 in the
     middle, mirroring what `contact_timing_window` did to the old perfect and
     foul windows — which it scaled together, so a harder setting made it harder
     both to touch the ball and to square it up.
@@ -590,6 +662,16 @@ def aim_at_pitch(cursor_ft, trajectory, handedness, *, assist=0.0):
     the handedness alone. What depends on the pitch is which point on the
     cursor's ray the player meant, and that is a question about the ball.
 
+    The barrel meets the ball much nearer the plate than it did when this was
+    written — half a foot out on a middle pitch, where it was over two — so
+    the correction is smaller than the numbers above. It is not gone, and on
+    an outside pitch it changes sign: the barrel arrives *behind* the plate's
+    front edge there, where the ball is lower than its plate crossing.
+
+    **A cursor on the ball puts the bat `SWING_UNDERCUT_FT` under its
+    centre**, not on it. That is the contact the swing is for, a line drive;
+    see the note over the constant.
+
     **`assist` is the in-swing adjustment, and it is the one thing here that is
     game feel rather than geometry.** Everything above corrects a bias the
     player could not have seen; `assist` shrinks the error they genuinely made,
@@ -613,7 +695,8 @@ def aim_at_pitch(cursor_ft, trajectory, handedness, *, assist=0.0):
     for _ in range(AIM_RESOLVE_PASSES):
         depth = bat_path.swing(aim, handedness).contact_depth_ft
         met = trajectory.position_at(trajectory.time_at_depth(depth))
-        named = bat_path.to_plate_frame((met[0], met[2]), depth)
+        named = bat_path.to_plate_frame(
+            (met[0], met[2] - SWING_UNDERCUT_FT), depth)
         aim = (cursor_ft[0] + named[0] - plate[0] - cx,
                cursor_ft[1] + named[1] - plate[2] - cz)
     return aim
@@ -813,6 +896,32 @@ def _apply_spatial_assist(swing, trajectory, start_s, best, allowance):
     return None
 
 
+def _exit_direction(swing, trajectory, t_s, pitch_t_s, ball, knob, axis,
+                    axis_point, along):
+    """The direction the ball left in, pull-positive. Asked once per contact.
+
+    Everything `bat_ball_collision` needs is already in the winning frame of
+    the sweep: where the ball was against the bat's axis, how fast each was
+    moving, and how thick the bat is there. `swing` is the swing that was
+    actually swept — the translated one when the spatial assist moved it — so
+    the bat's velocity is read off the bat that made the contact.
+
+    A ball whose centre lies beyond either end of the solid's axis met the
+    rounded end, and the bat is a sphere there.
+    """
+    span = sum(v * v for v in axis)
+    station = (0.0 if span <= 1e-12 else
+               sum((ball[j] - knob[j]) * axis[j] for j in range(3)) / span)
+    world = bat_ball_collision.exit_direction(
+        tuple(ball[j] - axis_point[j] for j in range(3)),
+        axis,
+        bat_path.bat_radius_ft(along) + BALL_RADIUS_FT,
+        trajectory.velocity_at(pitch_t_s),
+        swing.point_velocity_at(t_s, along),
+        end_cap=not 0.0 <= station <= 1.0)
+    return spray.pull_frame(world, swing.spin)
+
+
 def resolve_contact(swing, trajectory, swing_start_s, *,
                     zone_size_mult=1.0, timing_window_mult=1.0, power=False):
     """Sweep `swing` against `trajectory` and return the `Contact`, or None.
@@ -868,6 +977,8 @@ def resolve_contact(swing, trajectory, swing_start_s, *,
     axis = tuple(tip[j] - knob[j] for j in range(3))
     axis_point = tuple(knob[j] + axis[j] * along for j in range(3))
     return Contact(
+        exit_direction=_exit_direction(corrected, trajectory, t_s, pitch_t,
+                                       ball, knob, axis, axis_point, along),
         swing_t_s=t_s,
         pitch_t_s=pitch_t,
         ball_ft=ball,

@@ -22,8 +22,7 @@ _LEGACY_GAME = {  # a record from before hit totals were stored
 
 def _state():
     state = object.__new__(GameDayHistoryState)
-    state.game = SimpleNamespace(
-        ui_manager=SimpleNamespace(set_visibility_state=lambda name: None))
+    state.game = SimpleNamespace()
     state._fonts = None
     state._pbp = None
     state.selected = None

@@ -72,6 +72,51 @@ def test_a_clean_inning_earns_every_run():
     assert sk.get_score() == sk.get_earned_runs() == 4
 
 
+@pytest.mark.parametrize("outs", [2, 3, 10])
+@pytest.mark.parametrize("outcome", [outcomes.GROUNDOUT, outcomes.FLYOUT])
+def test_endless_productive_outs_keep_advancing_and_scoring_runners(outs, outcome):
+    sk = ScoreKeeper(unlimited_outs=True)
+    sk.runners = [Runner(3)]
+    sk.update_hit_event(outcome, outs=outs)
+    assert sk.get_score() == sk.get_earned_runs() == 1
+    assert sk.last_play == Play(1, 1, outcome == outcomes.FLYOUT)
+    assert not sk.runners
+
+
+@pytest.mark.parametrize("outs", [2, 10])
+@pytest.mark.parametrize("observed", [False, True])
+def test_endless_dropped_sacrifice_still_credits_the_productive_out(outs, observed):
+    from strikefactor.gameplay.running_play import RunnerMovement, RunningResult
+
+    sk = ScoreKeeper(unlimited_outs=True)
+    sk.runners = [Runner(3)]
+    if observed:
+        sk.update_running_play(RunningResult(ERROR, 0, (
+            RunnerMovement("B", 0, 1, ((1, 4.3),)),
+            RunnerMovement("3", 3, 4, ((4, 7.0),)),
+        ), error_out=outcomes.FLYOUT, error_bases=1), outs=outs)
+    else:
+        sk.update_hit_event(ERROR, outs=outs, clean_outcome=outcomes.FLYOUT)
+    assert sk.get_score() == sk.get_earned_runs() == 1
+    assert sk.last_play == Play(1, 1, True)
+    assert sk.isRunnerOnBase(1)
+
+
+def test_endless_errors_do_not_end_the_reconstructed_inning_for_later_hits_and_walks():
+    sk = ScoreKeeper(unlimited_outs=True)
+    for _ in range(3):
+        sk.update_hit_event(ERROR, outs=10)
+    sk.update_walk_event(outs=10)
+    sk.update_walk_event(outs=10)
+    sk.update_walk_event(outs=10)
+    sk.update_walk_event(outs=10)
+    assert sk.get_score() == 4
+    assert sk.get_earned_runs() == 1  # runners who reached on errors stay unearned
+    sk.update_hit_event(outcomes.HOME_RUN, outs=10)
+    assert sk.get_score() == 8
+    assert sk.get_earned_runs() == 5
+
+
 def test_rule_9_16_a_nothing_is_earned_after_the_third_out_that_should_have_been():
     """Two out, an error, two home runs: three runs, none earned, because the
     error should have ended the inning."""
@@ -506,7 +551,7 @@ def _finalize(classified, sk, outs=0, **anim):
         field_renderer=SimpleNamespace(record_hit=count("hits"),
                                        record_at_bat=count("at_bats"),
                                        record_sacrifice_fly=count("sacrifice_flies")),
-        ui_manager=SimpleNamespace(show_banner=lambda text: None),
+        banner=SimpleNamespace(show_banner=lambda text: None),
         counts=counts,
     )
     sim = object.__new__(PitchSimulation)

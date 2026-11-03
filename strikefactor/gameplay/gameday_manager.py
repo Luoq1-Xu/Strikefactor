@@ -29,7 +29,7 @@ _OUT_RESULTS = tuple(o.upper() for o in outcomes.OUT_OUTCOMES)
 _REACH_RESULTS = tuple(o.upper() for o in outcomes.REACH_OUTCOMES)
 # Compared through `db_key`, because a play log read back from the pitch
 # database or an older history file does not share the event log's spelling.
-_REACH_KEYS = frozenset(outcomes.db_key(o) for o in outcomes.REACH_OUTCOMES)
+_ERROR_KEYS = frozenset(outcomes.db_key(o) for o in outcomes.ERROR_OUTCOMES)
 _STRIKEOUT = outcomes.STRIKEOUT.upper()
 _WALK = outcomes.WALK.upper()
 _HOME_RUN = outcomes.HOME_RUN
@@ -82,7 +82,9 @@ class GameEvent:
 
     def __init__(self, inning: int, is_top: bool, batter_name: str,
                  pitcher_name: str, result: str, runs_scored: int = 0,
-                 rbi: Optional[int] = None, sacrifice_fly: bool = False):
+                 rbi: Optional[int] = None, sacrifice_fly: bool = False,
+                 running_outs: int = 0, batter_on_throw_base: Optional[int] = None,
+                 double_play: bool = False, fielding_sequence: tuple = ()):
         self.inning = inning
         self.is_top = is_top  # Top = opponent batting, Bottom = player batting
         self.batter_name = batter_name
@@ -97,6 +99,10 @@ class GameEvent:
         self.rbi = runs_scored if rbi is None else rbi
         # A plate appearance but not an at-bat (Rule 9.02(a)(1)).
         self.sacrifice_fly = sacrifice_fly
+        self.running_outs = running_outs
+        self.batter_on_throw_base = batter_on_throw_base
+        self.double_play = double_play
+        self.fielding_sequence = tuple(fielding_sequence)
 
     def __str__(self):
         half = "Top" if self.is_top else "Bot"
@@ -104,7 +110,12 @@ class GameEvent:
         if self.result.startswith("MOUND VISIT"):
             return f"[{half} {self.inning}] {self.result}"
         runs_str = f" ({self.runs_scored} run{'s' if self.runs_scored != 1 else ''})" if self.runs_scored > 0 else ""
-        return f"[{half} {self.inning}] {self.batter_name} - {self.result}{runs_str} (vs {self.pitcher_name})"
+        running_str = (" · OUT ADVANCING" if self.running_outs
+                       and not self.double_play and self.result != outcomes.FIELDERS_CHOICE else "")
+        on_throw = (f" · TO {'HOME' if self.batter_on_throw_base == 4 else str(self.batter_on_throw_base) + 'B'} ON THROW"
+                    if self.batter_on_throw_base is not None else "")
+        result = outcomes.play_display_name(self.result, self.double_play, self.fielding_sequence)
+        return f"[{half} {self.inning}] {self.batter_name} - {result}{on_throw}{running_str}{runs_str} (vs {self.pitcher_name})"
 
     def to_dict(self) -> dict:
         """Serialize to a JSON-safe dict (used by GameDayManager.to_dict)."""
@@ -117,6 +128,10 @@ class GameEvent:
             'runs_scored': self.runs_scored,
             'rbi': self.rbi,
             'sacrifice_fly': self.sacrifice_fly,
+            'running_outs': self.running_outs,
+            'batter_on_throw_base': self.batter_on_throw_base,
+            'double_play': self.double_play,
+            'fielding_sequence': self.fielding_sequence,
         }
 
     @classmethod
@@ -130,6 +145,10 @@ class GameEvent:
             runs_scored=d.get('runs_scored', 0),
             rbi=d.get('rbi'),
             sacrifice_fly=d.get('sacrifice_fly', False),
+            running_outs=d.get('running_outs', 0),
+            batter_on_throw_base=d.get('batter_on_throw_base'),
+            double_play=d.get('double_play', False),
+            fielding_sequence=d.get('fielding_sequence', ()),
         )
 
 
@@ -212,6 +231,8 @@ class PitcherStats:
         elif outcome == _WALK:
             self.walks += 1
             # Walk doesn't reset consecutive hits (still in trouble)
+        elif outcome == outcomes.FIELDERS_CHOICE:
+            self.consecutive_hits = 0
         elif outcome in _REACH_RESULTS:
             # Neither an out nor a hit allowed, and the pitcher is still in
             # the same trouble a walk leaves him in — so, like a walk, it
@@ -862,6 +883,8 @@ class GameDayManager:
             pitcher_stats.record_pitch()
 
         pitcher_stats.record_outcome(outcome)
+        running_outs = getattr(play, "running_outs", 0) if play is not None else 0
+        pitcher_stats.outs_recorded += running_outs
         if charges is None:
             charges = [(None, runs_scored, runs_scored)]
         self._charge_runs(self.opponent_pitcher_stats, pitcher_stats, charges)
@@ -873,6 +896,10 @@ class GameDayManager:
             outcome, runs_scored,
             rbi=play.rbi if play else None,
             sacrifice_fly=bool(play and play.sacrifice_fly),
+            running_outs=running_outs,
+            batter_on_throw_base=getattr(play, "batter_on_throw_base", None),
+            double_play=getattr(play, "double_play", False),
+            fielding_sequence=getattr(play, "fielding_sequence", ()),
         )
         self.event_log.append(event)
 
@@ -889,6 +916,8 @@ class GameDayManager:
             self.player_consecutive_hits += 1
         elif outcome in _OUT_RESULTS or outcome in _REACH_RESULTS:
             self.player_consecutive_hits = 0
+
+        self.current_outs += running_outs
 
         # Check for outs
         if outcome in _OUT_RESULTS:
@@ -1116,7 +1145,7 @@ class GameDayManager:
         """
         player_errors = opponent_errors = 0
         for result, is_top in plays:
-            if outcomes.db_key(result) not in _REACH_KEYS:
+            if outcomes.db_key(result) not in _ERROR_KEYS:
                 continue
             if is_top:
                 player_errors += 1

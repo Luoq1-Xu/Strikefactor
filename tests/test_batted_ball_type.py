@@ -11,75 +11,115 @@ drew a FLY 11% of the time and a LINER 30%; measured over recorded play, 14.8%
 of every bat-over-the-ball contact came out airborne and 29.2% of bat-under
 contacts came out grounders.
 
-Two of that model's three tables were also unreachable, which is why the
-`test_every_shape_is_reachable` case below is not redundant with the sign
-tests: the POP_UP offset anchor sat at 22 px when bat and ball stop touching at
-17.2, so pop-ups ran 1.0% of play against MLB's 7% and could only ever win out
-of a Gaussian tail.
-
-The replacement is `ball_flight.launch_angle_deg`, which applies the argument
-`spray` already makes for the horizontal — a cylinder's surface normal is
-radial to its own axis, so the ball leaves perpendicular to the bat — to the
-vertical axis, and bands the result by Statcast's cuts.
+Its first replacement was a fit on the vertical offset alone
+(`ball_flight.launch_angle_deg`), with a bounded jitter that existed to keep a
+bat over the ball from ever producing a fly ball. The launch angle is now the
+vertical reading of one collision between the bat and the ball
+(`bat_ball_collision`, stamped on the `Contact`), which holds the same
+guarantee with no jitter to bound. What is checked here is that guarantee
+through the real chain — a swing, a pitch, the sweep — and that nothing
+downstream works the angle out a second time.
 """
 
-import math
+import inspect
 
 import pytest
 
 from strikefactor.gameplay import ball_flight as bf
+from strikefactor.gameplay import bat_contact as bc
+from strikefactor.gameplay import bat_path as bp
 from strikefactor.gameplay import hit_animation
-from strikefactor.gameplay.hit_outcome_manager import (
-    FT_PER_PX_Z,
-    INCHES_PER_FT,
-    HitOutcomeManager,
-)
+from strikefactor.gameplay.hit_outcome_manager import HitOutcomeManager
+from tools import calibrate_contact as harness
 
+HANDS = ("R", "L")
 AIRBORNE = ("FLY", "POP_UP")
-IN_PER_PX = FT_PER_PX_Z * INCHES_PER_FT
+UNDERCUT_IN = bc.SWING_UNDERCUT_FT * 12.0
 
-# Far enough off centre that no plausible amount of swing-plane scatter should
-# be able to argue with the sign. Inside it, near-centred contact is genuinely
-# ambiguous and is *supposed* to be.
-DECISIVE_IN = 0.6
+# Far enough off centre that nothing about the swing can argue with the sign.
+# They are not the same distance either side, because dead centre is not the
+# middle of the launch range: a ball struck there leaves at about 8 degrees,
+# already a ground ball. So half an inch over is decisive, and it takes an
+# inch under to be sure of getting the ball off the ground when the swing is
+# late and the pitch is low.
+DECISIVE_OVER_IN = 0.5
+DECISIVE_UNDER_IN = 1.0
+
+# Residual timing errors to sweep, in ms, at a difficulty whose assist leaves
+# nearly all of them on the bat. Early, on time, late and later.
+TIGHT = dict(timing_window_mult=0.2)
+TIMINGS_MS = (-12.0, 0.0, 14.0, 22.0)
+LOCATIONS = ((0.0, 2.5), (0.6, 3.2), (-0.6, 3.2), (0.6, 1.8), (-0.6, 1.8))
 
 
-def classify(offset_px):
-    """The production path from a screen-pixel offset to a batted-ball type.
+def swing_through(hand, x, z, bat_over_in, timing_ms=0.0, **kw):
+    """One real contact, with the bat aimed `bat_over_in` above the ball's
+    centre (negative is under it). None on a whiff."""
+    tr = harness._pitch(hand, x, z, 93.0)
+    cx, cz = harness._cursor_on_ball(tr)
+    # `aim_at_pitch` puts a cursor on the ball `SWING_UNDERCUT_FT` under its
+    # centre, so the cursor is raised by that much to state the aim from the
+    # centre itself.
+    cursor = (cx, cz + (bat_over_in + UNDERCUT_IN) / 12.0)
+    swing = bp.swing(bc.aim_at_pitch(cursor, tr, hand), hand)
+    start = (tr.time_at_depth(swing.contact_depth_ft) - bp.SWING_DURATION_S
+             + timing_ms / 1000.0)
+    return bc.resolve_contact(swing, tr, start, **kw)
 
-    Two steps now rather than one, and worth spelling out because the split is
-    the point: `ball_flight.launch_angle_deg` *draws* the angle (with its
-    bounded jitter) and `_classify_batted_ball_type` names the Statcast band it
-    fell in. The angle used to be drawn inside the classifier and thrown away,
-    which is how a continuous quantity ended up quantised to three values by
-    the time anything flew the ball.
 
-    `HitOutcomeManager` is instantiated bare because neither half reads state.
-    """
-    m = HitOutcomeManager.__new__(HitOutcomeManager)
-    return m._classify_batted_ball_type(
-        bf.launch_angle_deg(offset_px * IN_PER_PX))
+def contacts(hand):
+    """Every contact in a grid of aims, locations and timings, for one hand."""
+    out = []
+    for x, z in LOCATIONS:
+        for step in range(-10, 11):
+            for ms in TIMINGS_MS:
+                got = swing_through(hand, x, z, step * 0.25, ms, **TIGHT)
+                if got is not None:
+                    out.append(got)
+    return out
+
+
+def shape_of(contact):
+    """The production path from a contact to a batted-ball type."""
+    return HitOutcomeManager._classify_batted_ball_type(
+        HitOutcomeManager.launch_angle_deg(contact))
 
 
 # ---- The reported bug ------------------------------------------------------
 
-@pytest.mark.parametrize("inches", [-2.7, -2.0, -1.5, -1.2, -0.9, -0.6])
-def test_the_bat_over_the_ball_is_never_a_fly_ball(inches):
-    """The complaint, stated directly and swept across the whole reachable
-    over-the-ball range. Scraping the top of the ball sends it into the
-    ground; it does not send it into the outfield air."""
-    got = [classify(inches / IN_PER_PX) for _ in range(4000)]
-    assert not any(s in AIRBORNE for s in got), (
-        "bat %.1f in over the ball produced %s" % (
-            abs(inches), sorted({s for s in got if s in AIRBORNE})))
+@pytest.mark.parametrize("hand", HANDS)
+def test_the_bat_over_the_ball_is_never_a_fly_ball(hand):
+    """The complaint, stated directly and swept across every contact the grid
+    produces: early and late, at five places in the zone, from a bat grazing
+    the top of the ball to one grazing the bottom.
+
+    Read off the contact's *own* offset, which is the number the replay shows
+    the player. Scraping the top of the ball sends it into the ground; it does
+    not send it into the outfield air.
+    """
+    over = [c for c in contacts(hand)
+            if c.vertical_offset_ft * 12.0 <= -DECISIVE_OVER_IN]
+    assert len(over) > 100, "the sweep found too few bat-over contacts"
+    for c in over:
+        assert shape_of(c) not in AIRBORNE, (
+            "bat %.2f in over the ball launched at %+.1f deg" % (
+                -c.vertical_offset_ft * 12.0, c.launch_deg))
 
 
-@pytest.mark.parametrize("inches", [0.6, 0.9, 1.2, 1.5, 2.0, 2.7])
-def test_the_bat_under_the_ball_is_never_a_grounder(inches):
-    """The mirror, which the old model got wrong just as often — 29.2% of
+@pytest.mark.parametrize("hand", HANDS)
+def test_the_bat_well_under_the_ball_is_never_a_grounder(hand):
+    """The mirror, which the weighted roll got wrong just as often — 29.2% of
     recorded bat-under contacts were classified GROUNDER."""
-    got = [classify(inches / IN_PER_PX) for _ in range(4000)]
-    assert "GROUNDER" not in got
+    under = [c for c in contacts(hand)
+             if c.vertical_offset_ft * 12.0 >= DECISIVE_UNDER_IN
+             # A ball clipped so thinly that it carried on backward has no
+             # launch angle worth the name; it is a foul tip.
+             and c.exit_direction[1] > 0.0]
+    assert len(under) > 60, "the sweep found too few bat-under contacts"
+    for c in under:
+        assert shape_of(c) != "GROUNDER", (
+            "bat %.2f in under the ball launched at %+.1f deg" % (
+                c.vertical_offset_ft * 12.0, c.launch_deg))
 
 
 def test_quality_is_not_an_input_to_the_geometry_at_all():
@@ -92,180 +132,149 @@ def test_quality_is_not_an_input_to_the_geometry_at_all():
     because it is not passed to it. A sweep would pass whatever the loop chose
     and see no effect, which is exactly what a silently-ignored argument also
     looks like."""
-    import inspect
     params = inspect.signature(
         HitOutcomeManager._classify_batted_ball_type).parameters
     assert list(params) == ["launch_deg"], (
         "the batted-ball band takes the launch angle and nothing else; got %s"
         % list(params))
-    # And the geometry it bands still holds over the whole reachable undercut.
-    got = [classify(-1.2 / IN_PER_PX) for _ in range(2000)]
-    assert not any(s in AIRBORNE for s in got)
+    # And neither do the two functions that produce the angle.
+    from strikefactor.gameplay import bat_ball_collision
+    for fn in (bat_ball_collision.exit_direction,
+               bat_ball_collision.first_touch_normal):
+        assert "quality" not in inspect.signature(fn).parameters
 
 
 # ---- The model itself ------------------------------------------------------
 
-def test_a_ball_struck_dead_centre_is_a_line_drive():
-    assert bf.shape_for_launch_angle(
-        bf.launch_angle_deg(0.0, jitter=False)) == "LINER"
+@pytest.mark.parametrize("hand", HANDS)
+def test_the_contact_a_swing_is_for_is_a_line_drive(hand):
+    """A cursor on the ball, timed right: the bat `SWING_UNDERCUT_FT` under
+    the ball's centre, and a line drive over most of the zone.
+
+    Not all of it, and the exception is baseball. Low and away the bat is
+    barrel-down and behind square, the ball slides down it as it leaves, and
+    the best swing there is a hard ground ball the other way. Up in the zone
+    the same swing gets the ball in the air.
+    """
+    launches = {}
+    for x, z in LOCATIONS:
+        got = swing_through(hand, x, z, -UNDERCUT_IN)
+        assert got.quality > 0.96
+        launches[(x, z)] = got.launch_deg
+        assert 5.0 < got.launch_deg < 28.0, (x, z, got.launch_deg)
+    assert shape_of(swing_through(hand, 0.0, 2.5, -UNDERCUT_IN)) == "LINER"
+    assert launches[(-0.6, 1.8)] == min(launches.values())
+    assert launches[(-0.6, 1.8)] < launches[(-0.6, 3.2)] - 10.0
 
 
-def test_the_launch_angle_rises_with_the_undercut_at_a_real_rate():
+@pytest.mark.parametrize("hand", HANDS)
+def test_a_ball_struck_dead_centre_is_a_hard_ground_ball(hand):
+    """Why the swing aims under the centre and not at it. With the bat's axis
+    on the ball's own line the ball leaves between the bat's path and the
+    pitch's — about eight degrees up, which is the top of the ground-ball
+    band. `ZERO_OFFSET_LAUNCH_DEG` said sixteen, and it was a fitted number."""
+    got = swing_through(hand, 0.0, 2.5, 0.0)
+    assert abs(got.vertical_offset_ft * 12.0) < 0.05
+    assert 4.0 < got.launch_deg < bp.ATTACK_ANGLE_DEG
+    assert shape_of(got) == "GROUNDER"
+
+
+@pytest.mark.parametrize("hand", HANDS)
+def test_the_launch_angle_rises_with_the_undercut_at_a_real_rate(hand):
     """Monotone *and* responsive. A test that asserted only monotonicity
-    would pass on a step function, which is the tautology CLAUDE.md records
-    `test_the_attack_angle_is_continuous_across_the_reach_boundary` having
-    been — the useful property is the rate."""
-    xs = [i * 0.1 for i in range(-27, 28)]
-    ys = [bf.launch_angle_deg(x, jitter=False) for x in xs]
-    assert ys == sorted(ys)
-    # Around the centre the normal turns fastest: ~0.85 rad per radius.
-    rate = (bf.launch_angle_deg(0.5, jitter=False)
-            - bf.launch_angle_deg(-0.5, jitter=False))
-    assert 15.0 < rate < 25.0, "degrees per inch through the centre"
-
-
-def test_the_normal_comes_all_the_way_round_at_the_touching_offset():
-    """At an offset equal to the summed radii the two are exactly tangent, so
-    the normal is vertical and the asin saturates rather than going complex."""
-    r = bf.CONTACT_NORMAL_RADIUS_IN
-    assert bf.launch_angle_deg(r, jitter=False) == pytest.approx(
-        bf.ZERO_OFFSET_LAUNCH_DEG + bf.NORMAL_GAIN * 90.0)
-    assert bf.shape_for_launch_angle(
-        bf.launch_angle_deg(r, jitter=False)) == "POP_UP"
-    assert bf.shape_for_launch_angle(
-        bf.launch_angle_deg(-r, jitter=False)) == "GROUNDER"
-    # Past tangency is not a contact at all, but it must not raise.
-    for d in (-4.0, 4.0, -100.0, 100.0):
-        assert math.isfinite(bf.launch_angle_deg(d, jitter=False))
+    would pass on a step function; the useful property is the rate, and it is
+    about thirty degrees an inch through the centre."""
+    over = [1.5 - 0.25 * i for i in range(13)]          # 1.5 over .. 1.5 under
+    launches = [swing_through(hand, 0.0, 2.5, o).launch_deg for o in over]
+    assert launches == sorted(launches)
+    centre = len(over) // 2
+    rate = (launches[centre + 2] - launches[centre - 2]) / 1.0
+    assert 24.0 < rate < 36.0, f"{rate:.0f} deg of launch per inch"
 
 
 def test_every_shape_is_reachable_from_a_contact_that_can_happen():
     """The defect that made pop-ups 1.0% of play against MLB's 7%: the old
     POP_UP anchor named an offset at which a bat and a ball are no longer
-    touching. Every shape must be produced by some offset inside tangency."""
-    r = bf.CONTACT_NORMAL_RADIUS_IN
-    reachable = {
-        bf.shape_for_launch_angle(bf.launch_angle_deg(-r + 2 * r * i / 400.0,
-                                                      jitter=False))
-        for i in range(401)
-    }
+    touching. Every shape must come off some bat that met the ball."""
+    reachable = {shape_of(swing_through("R", 0.0, 2.5, 2.0 - 0.1 * i))
+                 for i in range(41)}
     assert reachable == {"GROUNDER", "LINER", "FLY", "POP_UP"}
 
 
-def test_the_bounded_jitter_cannot_outvote_the_geometry():
-    """Why the scatter is truncated rather than merely narrow. Asserted at the
-    most extreme draw the bound allows, so it cannot pass by luck the way a
-    sampled version would — with an unbounded Gaussian this test fails only
-    once every few thousand runs, which is the worst possible way to hold a
-    guarantee."""
-    limit = bf.JITTER_LIMIT_SIGMA * bf.LAUNCH_JITTER_DEG
-    hardest_up = bf.launch_angle_deg(-DECISIVE_IN, jitter=False) + limit
-    assert bf.shape_for_launch_angle(hardest_up) not in AIRBORNE
-    hardest_down = bf.launch_angle_deg(DECISIVE_IN, jitter=False) - limit
-    assert bf.shape_for_launch_angle(hardest_down) != "GROUNDER"
+def test_one_contact_has_one_launch_angle():
+    """Nothing is drawn. The fit this replaced carried a jitter, so the angle
+    had to be drawn once and carried, and the animation's fallback drew it
+    again. Asking the same contact any number of times gives one answer."""
+    got = swing_through("R", 0.2, 2.6, -0.3, 6.0, **TIGHT)
+    manager = HitOutcomeManager(None, None)
+    asked = {manager.launch_angle_deg(got) for _ in range(50)}
+    assert asked == {got.launch_deg}
 
 
-def test_the_jitter_really_is_bounded():
-    """The bound above is only worth stating if the draw respects it."""
-    limit = bf.JITTER_LIMIT_SIGMA * bf.LAUNCH_JITTER_DEG
-    drawn = [bf.launch_angle_deg(0.0) for _ in range(20000)]
-    assert min(drawn) >= bf.ZERO_OFFSET_LAUNCH_DEG - limit - 1e-9
-    assert max(drawn) <= bf.ZERO_OFFSET_LAUNCH_DEG + limit + 1e-9
-    # ...and that it is a spread, not a constant the bound happens to contain.
-    assert max(drawn) - min(drawn) > limit
+def test_the_launch_angle_fit_is_gone():
+    """`ball_flight.launch_angle_deg(vertical_offset_in)` read the vertical
+    half of the collision off the offset alone: an intercept, a gain on the
+    normal's rise and a bounded scatter. It could not know that on a tilted
+    bat the same undercut also turns the ball sideways, and its response was
+    a little over half what a bat and a ball give. None of its names may come
+    back, and the animation's second copy of it goes with them."""
+    for name in ("launch_angle_deg", "ZERO_OFFSET_LAUNCH_DEG", "NORMAL_GAIN",
+                 "CONTACT_NORMAL_RADIUS_IN", "LAUNCH_JITTER_DEG",
+                 "JITTER_LIMIT_SIGMA"):
+        assert not hasattr(bf, name), name
+    assert not hasattr(hit_animation, "_shape_from_offset")
+    assert not hasattr(hit_animation, "_OFFSET_PX_TO_IN")
+    assert "vertical_offset" not in inspect.signature(
+        hit_animation.HitAnimation.__init__).parameters
+    # The bands and the classifier are what `ball_flight` keeps.
+    assert bf.shape_for_launch_angle(9.9) == "GROUNDER"
+    assert bf.shape_for_launch_angle(10.0) == "LINER"
+    assert bf.shape_for_launch_angle(25.0) == "FLY"
+    assert bf.shape_for_launch_angle(50.0) == "POP_UP"
 
 
-# ---- Calibration -----------------------------------------------------------
+# ---- The animation is told, it does not work it out -------------------------
 
-def test_the_league_type_mix_is_reproduced():
-    """GB 42 / LD 24 / FB 27 / PU 7, the 2025 MLB split the old prior tables
-    were tuned to hit — the point being that the geometry reaches it without
-    a prior, so the marginals and the individual contacts agree.
+def test_a_supplied_type_still_wins():
+    """The canonical source is `hit_outcome_manager`."""
+    for t in ("GROUNDER", "LINER", "FLY", "POP_UP"):
+        assert hit_animation._pick_shape("IN_PLAY", t) == t
+        assert hit_animation._pick_shape("FOUL", t, launch_deg=70.0) == t
+    assert hit_animation._pick_shape("HOME RUN", "GROUNDER") == "FLY"
 
-    Computed by integrating the jitter over the bands rather than sampling:
-    deterministic, and it costs nothing. The offset distribution is the
-    measured one, which is symmetric because the contact geometry is unbiased
-    (a perfect cursor gives 0.00 in of offset everywhere in the zone); its
-    width is the recorded p25/p75 of +/-0.82 in.
-    """
-    def phi(x):
-        return 0.5 * (1.0 + math.erf(x / math.sqrt(2.0)))
-
-    def jitter_cdf(x):
-        """The truncated jitter, so this integrates the model as it is drawn."""
-        a = bf.JITTER_LIMIT_SIGMA
-        lo, hi = phi(-a), phi(a)
-        return min(1.0, max(0.0, (phi(x / bf.LAUNCH_JITTER_DEG) - lo) / (hi - lo)))
-
-    sd, r = 1.22, bf.CONTACT_NORMAL_RADIUS_IN
-    edges = [e for e, _ in bf.SHAPE_LAUNCH_BANDS]
-    names = [s for _, s in bf.SHAPE_LAUNCH_BANDS] + [bf.STEEPEST_SHAPE]
-    acc = dict.fromkeys(names, 0.0)
-    total = 0.0
-    for i in range(1001):
-        d = -r + 2.0 * r * i / 1000.0
-        w = math.exp(-0.5 * (d / sd) ** 2)
-        total += w
-        mu = bf.launch_angle_deg(d, jitter=False)
-        prev = 0.0
-        for j, e in enumerate(edges):
-            p = jitter_cdf(e - mu)
-            acc[names[j]] += w * (p - prev)
-            prev = p
-        acc[names[-1]] += w * (1.0 - prev)
-
-    mix = {k: 100.0 * v / total for k, v in acc.items()}
-    assert 36.0 < mix["GROUNDER"] < 46.0, mix
-    assert 21.0 < mix["LINER"] < 29.0, mix
-    assert 23.0 < mix["FLY"] < 31.0, mix
-    assert 4.0 < mix["POP_UP"] < 11.0, mix
-
-
-# ---- The animation's own copy of the question ------------------------------
 
 @pytest.mark.parametrize("outcome", ["IN_PLAY", "FOUL"])
-def test_the_animation_fallback_agrees_with_the_classifier(outcome):
-    """The engine resolves a foul's shape upstream now (`_foul_shape`), so the
-    game no longer reaches this fallback — but it is still the FOUL path's
-    model, still reached by legacy callers, and it has to keep agreeing with
-    the classifier or the two can drift apart unseen. It bucketed raw pixels
-    before, with two thresholds above the reachable range."""
-    for inches in (-2.0, -1.2, -0.8):
-        got = {hit_animation._pick_shape(outcome, inches / IN_PER_PX)
-               for _ in range(2000)}
-        assert not (got & set(AIRBORNE)), (outcome, inches, got)
-    for inches in (0.8, 1.2, 2.0):
-        got = {hit_animation._pick_shape(outcome, inches / IN_PER_PX)
-               for _ in range(2000)}
-        assert "GROUNDER" not in got, (outcome, inches, got)
+def test_a_caller_with_only_a_launch_angle_gets_its_band(outcome):
+    """Through the one classifier, so the animation cannot disagree with
+    `hit_outcome_manager` about what an angle is called."""
+    for angle in (-30.0, 5.0, 12.0, 24.9, 25.0, 49.0, 50.0, 80.0):
+        assert hit_animation._pick_shape(outcome, None, angle) == (
+            bf.shape_for_launch_angle(angle))
 
 
-def test_a_foul_can_finally_pop_up():
-    """POP_UP needed an offset over 25 px on the old fallback and bat and ball
-    stop touching at 17.2, so no foul has ever animated as a pop-up — which is
+def test_a_foul_can_pop_up():
+    """POP_UP needed an offset over 25 px on the oldest fallback and bat and
+    ball stop touching at 17.2, so no foul animated as a pop-up — which is
     the single most ordinary thing a foul ball does."""
-    got = {hit_animation._pick_shape("FOUL", 2.4 / IN_PER_PX)
-           for _ in range(2000)}
-    assert "POP_UP" in got
+    assert hit_animation._pick_shape("FOUL", None, 68.0) == "POP_UP"
 
 
 def test_a_flyout_stays_airborne():
     """The bands may only choose *which* airborne shape a flyout was. A
     ball caught on the fly cannot be animated as a ball that never left the
-    dirt, whatever the offset says."""
-    for inches in (-2.5, -1.0, 0.0, 1.0, 2.5):
-        got = {hit_animation._pick_shape("FLYOUT", inches / IN_PER_PX)
-               for _ in range(500)}
-        assert got <= set(AIRBORNE), (inches, got)
+    dirt, whatever the angle says."""
+    for angle in (-20.0, 5.0, 15.0, 30.0, 60.0, None):
+        assert hit_animation._pick_shape("FLYOUT", None, angle) in AIRBORNE
 
 
-def test_a_supplied_type_still_wins():
-    """The canonical source is `hit_outcome_manager`. The offset-derived path
-    is only for callers with nothing to be told."""
-    for t in ("GROUNDER", "LINER", "FLY", "POP_UP"):
-        assert hit_animation._pick_shape("IN_PLAY", 0.0, t) == t
-    assert hit_animation._pick_shape("HOME RUN", -2.0 / IN_PER_PX,
-                                     "GROUNDER") == "FLY"
+def test_a_caller_who_states_nothing_gets_a_line_drive():
+    """There is no geometry left in the animation to fall back on, by design:
+    only the caller has the contact. Deterministic, where the fallback it
+    replaced drew a jittered angle off a vertical offset."""
+    for outcome in ("IN_PLAY", "FOUL"):
+        assert {hit_animation._pick_shape(outcome) for _ in range(20)} == {
+            hit_animation.DEFAULT_SHAPE}
+    assert hit_animation.DEFAULT_SHAPE == "LINER"
 
 
 # ---- The tables must not come back -----------------------------------------
@@ -278,5 +287,5 @@ def test_the_prior_tables_are_gone():
     import strikefactor.gameplay.hit_outcome_manager as hom
     for name in ("_TYPE_OFFSET_ANCHORS", "_TYPE_OFFSET_SIGMA",
                  "_TYPE_QUALITY_BIAS", "_TYPE_BASE_PRIOR",
-                 "_BATTED_BALL_TYPES"):
+                 "_BATTED_BALL_TYPES", "INCHES_PER_FT"):
         assert not hasattr(hom, name), name

@@ -108,14 +108,13 @@ is future work, not a reason to move the bat or rerun a fielding play.
 
 ## Modal lifecycle
 
-`ui/review_modal.run_modal` is the single host, also used by the one surviving
-compatibility wrapper, `_run_swing_replay_loop`. `Game.request_review` gates it to safe moments:
+`ui/review_modal.run_modal` is the workspace's host. `Game.request_review` gates it to safe moments:
 between pitches, completed-play screens and result screens. A live pitch or
 unfinished fielding play cannot open it.
 
 Only the review handles input. Mouse coordinates cross from the window to the
-internal surface once. Resize, fullscreen and QUIT remain operational. Background
-pygame_gui widgets are neither drawn nor sent input. Close leaves the actual
+internal surface once. Resize, fullscreen and QUIT remain operational. The
+underlying state's buttons are neither drawn nor sent input. Close leaves the actual
 underlying state object in place—no `exit()`/`enter()` reconstruction, no menu
 routing and no repeated inning/walk-off transitions.
 
@@ -125,19 +124,14 @@ and held-key set are refreshed on return. Both the main loop and completed-play
 loop discard the remainder of the batch that originally opened Review; otherwise
 a click queued beside the review key could become Continue immediately on close.
 
-`_run_swing_replay_loop` remains a compatibility surface. The legacy PitchViz
-window (`StatSwing`) and its `ViewPitchesState` have been deleted: nothing but a
-test still entered them. The visible sidebar has one REVIEW action. `VisualizationState` is the exception
-— it is live again as the T view (`Game.toggle_track`).
+V/R/F enter Review. `VisualizationState` remains the separate T view
+(`Game.toggle_track`). `SwingView` owns its `SwingReplayOverlay` renderer and
+samples it through `render_review`; there is no standalone swing modal,
+duplicate renderer on `Game`, or separate input/playback loop. The geometry and
+rendering tests in `tests/test_swing_replay.py` exercise that embedded path.
 
-A compatibility surface may keep an entry point alive; it may not keep a second
-renderer alive. `_run_swing_replay_loop` costs nothing because it drives the same
-`SwingReplayOverlay` object that `SwingView` wraps. Fielding had no such object —
-`ui/fielding_replay_overlay.py` was a second implementation of the transport, the
-fielding view and the overlay chrome, and is deleted along with
-`Game._run_fielding_replay_loop`. Its `play_label` header moved into
-`FieldingView`'s stats row. Every behaviour its tests pinned is pinned against the
-live stack in `tests/test_review.py`: local deterministic seeking and layout
+Transport and modal behaviour are covered against the live workspace in
+`tests/test_review.py`: local deterministic seeking and layout
 containment (`test_views_seek_deterministically_and_layout_contains_controls`),
 timeline snap and drag clamping (`test_timeline_drag_snaps_to_original_event_and_clamps`),
 the empty clip (`test_live_play_is_gated_and_empty_or_incomplete_record_is_explained`)

@@ -8,8 +8,8 @@ which silently hid every arm before the last two. A game that went to a
 four-reliever bullpen simply had no screen anywhere that could show it.
 
 Palette/fonts come from :mod:`ui.gameday_theme` so the panel matches the rest of
-the GameDay chrome. It owns no pygame_gui elements — it draws itself into a
-caller-supplied rect and consumes raw events, the same contract as
+the GameDay chrome. It draws itself into a caller-supplied rect and consumes
+raw events, the same contract as
 :class:`ui.play_by_play_panel.PlayByPlayPanel`.
 """
 

@@ -23,6 +23,8 @@ and an earned run can never outnumber the runs.
 Outs are passed in, not counted: `Game.currentouts` and
 `GameDayManager.current_outs` already count them, a strikeout never comes
 through here, and a scenario can open the half-inning with two down.
+With `unlimited_outs`, Sandbox's cumulative outs never end the real or
+reconstructed inning; the same advances and error history still apply.
 """
 
 import copy
@@ -38,6 +40,10 @@ class Play(NamedTuple):
     runs: int = 0                 # runners who crossed the plate on it
     rbi: int = 0                  # of those, the batter's (Rule 9.04)
     sacrifice_fly: bool = False   # Rule 9.08(d): no at-bat is charged
+    running_outs: int = 0         # a hit and a later running out can coexist
+    batter_on_throw_base: int | None = None
+    double_play: bool = False
+    fielding_sequence: tuple = ()
 
 
 def _out_advance(outcome, base):
@@ -101,7 +107,10 @@ class Runner:
 # Scorekeeper class
 class ScoreKeeper:
 
-    def __init__(self):
+    def __init__(self, *, unlimited_outs=False):
+        # Session rules survive score resets and review snapshots. Sandbox
+        # tracks outs for stats, but none can end its real or errorless inning.
+        self.unlimited_outs = unlimited_outs
         self.reset()
 
     def reset(self):
@@ -192,7 +201,7 @@ class ScoreKeeper:
         for runner in home:
             if runner in self._home_early:
                 self._home_early.remove(runner)
-            if self._clean_outs(runner.pitcher, outs_after) < 3:
+            if self.unlimited_outs or self._clean_outs(runner.pitcher, outs_after) < 3:
                 self.earned += 1
                 self._charges.setdefault(runner.pitcher, [0, 0])[1] += 1
         return len(scored)
@@ -223,8 +232,8 @@ class ScoreKeeper:
         # Third outs. The reconstruction's can come sooner than the real one,
         # and it is taken off the current pitcher's count, the last to reach
         # three; `_settle` holds every other pitcher to his own.
-        third_out = is_out and outs >= 2
-        clean_third_out = self._clean_outs(self.pitcher, outs) >= 2
+        third_out = not self.unlimited_outs and is_out and outs >= 2
+        clean_third_out = not self.unlimited_outs and self._clean_outs(self.pitcher, outs) >= 2
         rbi = None
 
         if outcome in outcomes.HIT_OUTCOMES:
@@ -251,7 +260,7 @@ class ScoreKeeper:
             # Rule 9.04(a)(3): the batter drives in only the run that would
             # have scored on the out, and only with fewer than two down —
             # with two down the out ends the inning instead.
-            rbi = 0 if outs >= 2 else sum(
+            rbi = 0 if not self.unlimited_outs and outs >= 2 else sum(
                 1 for r in on_base
                 if r.base + _out_advance(clean_outcome, r.base) > 3)
             self.runners.append(
@@ -284,6 +293,88 @@ class ScoreKeeper:
 
         basesFilled = self._rebuild_base_state()
         return (basesFilled, scored)
+
+    def update_running_play(self, result, outs=0):
+        """Apply observed base movements and outs, ordered by event time.
+
+        A tag third out cancels only later runs. A third out on a caught
+        batter or the force at first cancels all runs, even earlier touches.
+        Hit credit does not imply the batter survived on that base.
+        The original runners retain pitcher responsibility and error history.
+        """
+        before = {str(r.base): r for r in self.runners}
+        reconstructed = self._reconstructed()[:]
+        # Official outs only. A runner retired by an appeal after the third
+        # out loses his run but is not a fourth out (OBR 5.09(c)).
+        retired = (sorted(r.time_s for r in result.retirements if r.official) if result.retirements
+                   else sorted(m.out_s for m in result.movements if m.out_s is not None))
+        error = result.outcome == outcomes.REACHED_ON_ERROR
+        clean_third = not self.unlimited_outs and self._clean_outs(self.pitcher, outs) >= 2
+        rbi_allowed = {r for r in self.runners if r.base + _out_advance(result.error_out, r.base) > 3}
+        if error:
+            self.missed_outs += 1
+        # A choice replaces the forced runner for pitcher responsibility
+        # (9.16(g)), including a runner absent from the errorless inning.
+        replacement = next((before[r.runner_id] for r in result.retirements
+            if result.outcome == outcomes.FIELDERS_CHOICE and r.kind == "force"
+            and r.runner_id in before), None)
+        # Earlier scored runners waiting in the reconstruction still respond
+        # to this hit, or to the clean out an error concealed.
+        for r in reconstructed:
+            if r in self._home_early:
+                r.clean_base += (result.hit_bases if not error else
+                                 0 if clean_third else _out_advance(result.error_out, r.clean_base))
+        scoring = []
+        for move in result.movements:
+            if move.runner_id == "B":
+                runner = Runner(max(1, result.hit_bases),
+                    replacement.pitcher if replacement is not None else self.pitcher, reached_on_error=error)
+                if replacement is not None and replacement.clean_base is None:
+                    runner.clean_base = None
+                self.runners.append(runner)
+            else:
+                runner = before[move.runner_id]
+            runner.scored = False
+            # Where the runner ended up, not the furthest bag he touched: a
+            # runner who retraces to retouch his base gains nothing.
+            reached = (move.final_base if move.final_base is not None
+                       else max((base for base, _ in move.touches), default=move.start_base))
+            if runner.clean_base is not None:
+                if move.runner_id == "B" and not error:
+                    # A clean advance on another throw is earned running,
+                    # even when it does not increase the credited hit length.
+                    runner.clean_base = reached if move.touches else runner.clean_base
+                elif move.runner_id != "B":
+                    if error:
+                        runner.clean_base += 0 if clean_third else _out_advance(result.error_out, runner.clean_base)
+                    else:
+                        runner.clean_base += reached - move.start_base
+            if move.out_s is not None:
+                self.runners.remove(runner)
+                runner.onBase = False
+                continue
+            runner.base = move.final_base
+            runner.onBase = move.final_base in (1, 2, 3)
+            crossed = move.scored_s
+            if result.counts_run(move, outs, unlimited_outs=self.unlimited_outs):
+                scoring.append((crossed, runner))
+            elif crossed is not None:
+                # An annulled run cannot remain in a surviving on-base slot.
+                # The half-inning is over.
+                self.runners.remove(runner)
+        scored = rbi = 0
+        for time_s, runner in sorted(scoring, key=lambda item: item[0]):
+            runner.scored = True
+            scored += self._settle(outs + sum(t <= time_s for t in retired))
+            rbi += int(not result.ground_double_play and
+                       (not error or ((self.unlimited_outs or outs < 2) and runner in rbi_allowed)))
+        self._settle(outs + len(retired))
+        sacrifice = ((result.outcome == outcomes.FLYOUT and scored > 0)
+                     or (error and result.error_out == outcomes.FLYOUT and rbi > 0))
+        self.last_play = Play(scored, rbi, sacrifice, result.running_outs, result.batter_on_throw_base,
+                              result.double_play, result.fielding_sequence)
+        self._rebuild_base_state()
+        return self.last_play
 
     def update_walk_event(self, outs=0):
         """Put the batter on first and push along whoever that forces.

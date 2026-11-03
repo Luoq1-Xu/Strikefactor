@@ -46,6 +46,12 @@ class PitchTrajectory:
         z = self.z0 + self.vz0 * t + 0.5 * self.az * t * t
         return x, y, z
 
+    def velocity_at(self, t):
+        """Get 3D velocity at time t (seconds), in ft/s."""
+        return (self.vx0 + self.ax * t,
+                self.vy0 + self.ay * t,
+                self.vz0 + self.az * t)
+
     @property
     def travel_time(self):
         """Time in seconds for ball to reach the plate (y=0)."""
@@ -79,11 +85,12 @@ class PitchTrajectory:
         """When the ball was `y_ft` in front of the plate, in seconds.
 
         `travel_time` is this at `y_ft = 0`; the general form is needed
-        because the bat meets the ball a couple of feet out in front, so
-        "when should the barrel have been there" is a question about a depth
-        the pitch reaches before the plate. Unclamped on purpose — past the
-        plate the model still describes a real ball heading for the mitt, and
-        that extrapolation is exactly what a late swing is.
+        because the bat meets the ball out in front of the plate, or on a
+        pitch away just behind its front edge, so "when should the barrel have
+        been there" is a question about a depth other than zero. Unclamped on
+        purpose, and negative depths are ordinary — past the plate the model
+        still describes a real ball heading for the mitt, which is where a
+        late swing meets it.
 
         Of the two roots the near one is on the way in; the far one is the
         ball being decelerated back out again by the drag term, which is not

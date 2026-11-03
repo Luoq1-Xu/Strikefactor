@@ -33,6 +33,7 @@ produced.
 import math
 
 from strikefactor.gameplay import infield_timing
+from strikefactor.gameplay.base_geometry import BASE_FT
 from strikefactor.gameplay.infield_timing import (
     SIGMA_S,
     THROW_EFFECTIVE_FTS,
@@ -41,11 +42,7 @@ from strikefactor.gameplay.infield_timing import (
 )
 
 # Bases in real feet, home at the origin, +y toward centre field.
-BASE_FT = {
-    1: (63.64, 63.64),
-    2: (0.0, 127.28),
-    3: (-63.64, 63.64),
-}
+# Imported rather than rounded independently from the drawn diamond.
 
 # Leg time for a base the runner reaches with a running start, in seconds.
 # Home-to-first is a standing start with a bat to drop and a swing to
@@ -128,7 +125,9 @@ def defense_to_base_s(base, ball_xy_ft, retrieved_at_s, is_outfielder=True,
 def final_base(ball_xy_ft, retrieved_at_s, is_outfielder=True,
                handedness="R", sprint_fts=27.0, difficulty_offset_s=0.0,
                min_base=1, rng=None, defense=None):
-    """How far the batter-runner gets. Returns (base, margin_s).
+    """Legacy/analysis estimate. Live plays use routes, throws and actual tags.
+
+    Returns (base, margin_s).
 
     The runner advances one base at a time, and stops at the first base
     they cannot reach with `AGGRESSION_MARGIN_S` to spare.

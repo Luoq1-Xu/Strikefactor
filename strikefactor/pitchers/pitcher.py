@@ -1,5 +1,7 @@
 import random
+from contextlib import contextmanager
 from dataclasses import dataclass
+from typing import Optional
 
 from strikefactor import config
 from strikefactor.utils.pitch_physics import DEFAULT_CAMERA
@@ -14,20 +16,25 @@ class PitchIntent:
 
     Recorded on the Pitcher each time get_pitch_target() runs. The gap
     between (intent_x, intent_y) and (exec_x, exec_y) is the command miss.
+
+    A pitch the player aimed (Sandbox's fixed aim, `Pitcher.aimed_at`) rolled
+    no intent and had no command applied, so its intent_kind, miss_kind and
+    command_sigma_in are None, and intent and exec are both the player's spot.
     """
     pitch_type: str
-    intent_kind: str      # zone | edge | chase | waste
+    intent_kind: Optional[str]  # zone | edge | chase | waste; None if player-aimed
     intent_x: float
     intent_y: float
     exec_x: float
     exec_y: float
-    miss_kind: str        # normal | yank | hang | wild
+    miss_kind: Optional[str]    # normal | yank | hang | wild; None if player-aimed
     break_mult: float
-    command_sigma_in: float
+    command_sigma_in: Optional[float]
     archetype: str        # named location archetype, or '' if generic
     batter_hand: str
     platoon: str          # same | opp
     plan: str = ''        # at-bat plan in force, or '' for NO_PLAN
+    aimed_by: str = 'pitcher'   # pitcher | player
 
 # ANSI color codes for terminal output
 class Colors:
@@ -265,6 +272,26 @@ class Pitcher:
     def draw_pitcher(self, start_time, current_time):
         return
 
+    # Set only inside `aimed_at`; see get_pitch_target.
+    _aim_override = None
+
+    @contextmanager
+    def aimed_at(self, target_px):
+        """Aim every pitch thrown inside the block exactly at `target_px`.
+
+        Sandbox's fixed aim. The spot is in screen px at the plate, the frame
+        get_pitch_target returns. Pitchers are shared by every mode, so the
+        override lasts only as long as the block: wrap the one `pitch()` call,
+        which blocks until the pitch is over, and it cannot leak into Arcade
+        or GameDay.
+        """
+        previous = self._aim_override
+        self._aim_override = target_px
+        try:
+            yield
+        finally:
+            self._aim_override = previous
+
     def pitch(self, simulation_func, pitch_name):
         if pitch_name not in self.pitch_arsenal:
             print(f"[WARNING] Unknown pitch '{pitch_name}', falling back to random pitch")
@@ -498,15 +525,23 @@ class Pitcher:
         recorded on `self.last_intent` for PitchSimulation and the pitch DB —
         without that split there is no way to tell a well-executed pitch off
         the corner from one that leaked over the middle.
+
+        Inside `aimed_at` the player has chosen the spot: no intent, sequence
+        bias or command error, and the pitch crosses the plate exactly there.
         """
         pitch_class = self.PITCH_CLASS.get(pitch_type, 'breaking')
         count_state = self._get_count_state()
 
         # game.pitchnumber is reset to 0 when a plate appearance ends, so 0
         # here means the batter has just stepped in: pick this at-bat's plan.
+        # Rolled on a player-aimed pitch too, so switching the aim off
+        # mid-at-bat finds the plan this at-bat would have had.
         game = getattr(self, '_game_ref', None)
         if self.plan is None or getattr(game, 'pitchnumber', 0) == 0:
             self.plan = choose_plan(self.pitcher_key)
+
+        if self._aim_override is not None:
+            return self._player_aimed_target(pitch_type)
 
         intent_kind, intent_x, intent_y = self._choose_intent(
             pitch_type, pitch_class, count_state
@@ -536,6 +571,29 @@ class Pitcher:
             plan=self.plan.name,
         )
         return exec_x, exec_y
+
+    def _player_aimed_target(self, pitch_type):
+        """The override's spot, recorded as an honest PitchIntent."""
+        x, y = self._aim_override
+        self._last_archetype = None
+        batter_hand = self.get_batter_hand()
+        self.last_intent = PitchIntent(
+            pitch_type=pitch_type,
+            intent_kind=None,
+            intent_x=x,
+            intent_y=y,
+            exec_x=x,
+            exec_y=y,
+            miss_kind=None,
+            break_mult=1.0,
+            command_sigma_in=None,
+            archetype='',
+            batter_hand=batter_hand,
+            platoon=self.get_platoon(batter_hand),
+            plan='',
+            aimed_by='player',
+        )
+        return x, y
 
     @staticmethod
     def in_sign(batter_hand):

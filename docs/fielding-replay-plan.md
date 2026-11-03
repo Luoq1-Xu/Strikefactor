@@ -14,7 +14,92 @@ Implementation notes:
 - Event markers use the first observed source frame for exact seeking. Motion holds across event boundaries instead of interpolating through collisions. The record retains the fixed field projection's source surface dimensions.
 - Capture is limited to 7,200 frames (120 seconds at 60 FPS, 60 seconds at 120 FPS). Overflow withholds the clip. A local headless measurement used approximately 16.5 MiB at the limit, about 7 microseconds per presentation snapshot, and 1.4 ms per replay render at 1280×720; these are development measurements, not hardware-independent guarantees.
 - The clip ends at simulation completion. Home-run distance also appears in replay metadata because the live distance annotation can fade in after completion.
-- Saved clips, audio, additional cameras, and runner visualization remain outside this version.
+- The batter and existing runners are recorded around the whole diamond, including rounding, holding, returning, sliding, scoring and retirement. Base contacts, return throws, relay exchanges and tags have exact event frames. Runner interpolation continues across ball possession events.
+- Saved clips, audio, and additional cameras remain outside this version.
+
+First-base resolution now uses `infield_timing.schedule_first_base` and
+`timed_verdict`: the batter is out only when a defender has possession at
+the actual bag before the runner's foot contacts it. Exact ties are safe.
+Coverage delays, bobbles and unassisted carry motion are included before the
+call; the clean schedule for error scoring reuses the same runner and inputs
+with the misplay removed. The former probabilistic first-base verdict remains
+available to analysis callers, but is no longer used for the visible race.
+`runner_motion` supplies the batter's fitted arrival and defenders' analytic
+approaches in real feet and seconds. Presentation pacing scales the whole
+race together.
+
+Live fielding now runs at real-time pacing (`PRESENTATION_TIME_SCALE = 1.0`),
+so a fitted 4.3-second run takes 4.3 seconds on screen. A groundout outside
+the existing 0.15-second close-play band allows key/click continuation once
+possession at the bag has actually occurred. Skipping records the current
+terminal pose and finalizes the result once; it does not fast-forward or
+invent the runner reaching first. Close plays retain both arrivals. Fouls
+keep the blue batter marker stationary in the handedness-appropriate box
+and existing runners visible on their starting bases, including in replay.
+
+Extra-base play uses `CircuitRun` in `runner_motion`: committed route segments
+remain unchanged, and each decision replaces only the unplayed tail. Coaches
+forecast retrieval, coverage and a return throw before sending a runner; a
+hold may be reconsidered while the ball is loose. A released throw keeps its
+destination. Cover goes to the available receiver who can reach the bag
+first. Long returns use a cutoff only when that fielder can meet a timely
+throw; otherwise the return is direct, without waiting for a midpoint to
+be staffed. Every receiver must physically arrive before reception. Beyond first,
+possession alone is insufficient: a glove sweep must reach the approaching
+runner before foot contact. There is no independent safe/out roll or automatic
+double for a wall ball. A runner may retreat to an unoccupied safe base after
+a throw commits. Full rundown chains and throwing errors are not modelled.
+
+Return targets follow active, contestable runners. The defense does not send
+the ball home just because a preceding runner is holding third or has already
+scored; when a lead runner cannot be caught, it protects the batter's next
+base. Each leg commits at its own release. A cutoff which receives the ball
+after the home-plate threat disappears can redirect the unthrown relay while
+preserving the OF throw. Runner forecasts account for that possibility and
+never add a fictitious second transfer when the ball is already going to
+their proposed destination.
+
+With fewer than two outs, clean catches offer each existing runner one tag-up
+advance, starting after a short reaction at the catch. The decision reads the
+actual catch position and current defenders before the return is committed. It does not treat a
+future relay destination as current possession, or permit the runner to
+round another base while that return is in flight. Dropped balls remain live
+and retain ordinary multi-base decisions and error scoring.
+
+With two outs, runners break on fair contact for every ball shape and keep
+rounding while the ball is airborne. Once it lands, ordinary defensive races
+govern further advances; drops preserve the head start. A catch ends the inning
+at its actual time, freezes runner positions and permits immediate continuation
+without scheduling a return throw. Earlier physical base/home contacts remain
+in replay, but no run counts on the caught batter's third out. Fouls keep runners
+on their starting bases regardless of the out count.
+
+`RunningResult` separates the credited hit, actual final occupancy, per-runner
+contacts and running outs. A double followed by a tag at third remains a
+double and adds an out. `ScoreKeeper.update_running_play` applies those
+movements rather than advancing everyone by the credited hit length. Runs
+before a tag third out count; a force or caught-batter third out cancels all runs.
+Pitcher responsibility and error reconstruction remain attached to the original
+runners. GameDay logs and pitcher innings include running outs. Schema v13
+adds nullable running-result JSON, running-out count, batter final base and
+tag margin; historical rows remain unknown.
+
+A successful extra base conceded by a throw to a preceding runner is stored
+in `RunnerMovement.on_throw_bases` and does not increase hit credit. The
+ordinary defense to each base is frozen at pickup for this scoring judgment,
+without another RNG draw. For example, a batter can finish on second after a
+single: the banner and GameDay annotation say `SINGLE · TO 2B ON THROW`, hit
+statistics count one base, and the scorer preserves actual second-base
+occupancy and earned-run position. The existing result JSON includes these
+contacts; older GameDay events default to no on-throw annotation.
+
+Clear settled extra-base plays permit continuation after the return and all
+surviving runners settle, or immediately after a third out. Home-run banners
+appear as the ball clears the yard, with immediate key/click continuation;
+watching the rest of the circuit is optional. Banner delivery and terminal
+clip publication have separate once-only guards. Opening review also settles
+the optional tour and publishes its observed clip before opening. Replay
+ends at the observed pose if skipped, without inventing later contacts.
 
 The original design follows.
 
@@ -79,4 +164,4 @@ Keep only one completed clip plus any current recording in memory. Measure frame
 
 ## Follow-up scope
 
-A ball-following camera, zoom around close plays, optional fielder routes, runner visualization, and a unified pitch/swing/fielding replay browser can follow. The first release should reproduce what the simulation actually showed; runner paths or additional throws not currently animated would be separate features. Audio replay and saved/shareable clips are also deferred.
+A ball-following camera, zoom around close plays and optional fielder routes can follow. Audio replay and saved/shareable clips are also deferred.

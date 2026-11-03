@@ -42,7 +42,7 @@ def game():
         clock=SimpleNamespace(tick_busy_loop=lambda fps: 16, tick=lambda: None),
         flip_display=lambda: None, _translate_mouse_event=lambda e: e,
         pending_challenge={'opened_at': 1500},
-        ui_manager=SimpleNamespace(_pending_banner={'show_time': 2000}),
+        banner=SimpleNamespace(_pending_banner={'show_time': 2000}),
     )
 
 
@@ -166,11 +166,12 @@ def test_completed_play_publishes_all_views_before_continue(game, monkeypatch, c
     sim = snapshot_sim(game)
     sim.hit_animation, sim._fielding_recorder = anim, recorder
     sim._publish_review = lambda: PitchSimulation._publish_review(sim)
+    sim._complete_hit_animation = lambda: PitchSimulation._complete_hit_animation(sim)
     calls = []
     anim.on_complete = lambda: calls.append('finalized')
     sim._finish_pitch = lambda: pytest.fail('Review advanced the pitch')
-    game.ui_manager.update = lambda dt: None
-    game.ui_manager.draw = lambda: None
+    game.banner.update = lambda dt: None
+    game.banner.draw = lambda: None
     game._window_to_internal = lambda x, y: (x, y)
     game.last_swing = make_record(outcome='HOME RUN')  # previous, unrelated pitch
     game.last_fielding_play = None
@@ -398,7 +399,7 @@ def test_modal_restores_clocks_consumes_close_batch_and_does_not_reenter_state(g
     assert state.last_time == 1500 and state._celebration_start == 1700
     assert state.pitch_simulation.hit_animation.start_time == 600
     assert game.pending_challenge['opened_at'] == 2000
-    assert game.ui_manager._pending_banner['show_time'] == 2500
+    assert game.banner._pending_banner['show_time'] == 2500
     assert game._review_returned
     assert game.review_store.get(rec.review_id) is rec
     assert random.getstate() == rng
@@ -558,14 +559,16 @@ def test_main_loop_discards_the_pre_review_input_batch(game, monkeypatch, button
     game.clock.tick = lambda *args: 16
     game._draw_active_hud = lambda screen: None
     game.cleanup = lambda: None
-    game.ui_manager.update = lambda dt: None
-    game.ui_manager.draw = lambda: None
+    game.banner.update = lambda dt: None
+    game.banner.draw = lambda: None
     game._review_returned = False
     sm = game.state_manager
     sm.current_state_name = 'gameplay'
     sm.is_current_state = lambda name: False
     sm.update = lambda dt: None
     sm.render = lambda screen: None
+    sm.render_overlay = lambda screen: None
+    game._render_frame = lambda: Game._render_frame(game)
     calls = []
 
     def handle_key(code):

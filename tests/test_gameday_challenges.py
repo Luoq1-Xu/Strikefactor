@@ -21,7 +21,6 @@ def _resume_stub():
         game_stats=SimpleNamespace(reset_game_stats=lambda: None),
         scoreKeeper=SimpleNamespace(reset=lambda: None),
         state_manager=SimpleNamespace(change_state=transitions.append),
-        ui_manager=SimpleNamespace(update_scouting_panel=lambda pitcher: None),
         _reset_review=lambda: None,
         _begin_session=lambda mode: None,
         _db_resume_game=lambda game_id: None,

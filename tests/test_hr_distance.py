@@ -78,7 +78,6 @@ def _home_run(quality, hand="R", spray_deg=None, launch_deg=None, ev_mph=None):
         _StubGame(hand),
         outcome="HOME RUN",
         on_complete=lambda: None,
-        vertical_offset=3.0,
         quality=quality,
         batted_ball_type=None,
         spray_deg=spray_deg,
@@ -169,7 +168,7 @@ def test_spray_leans_to_the_pull_side():
 
     Measured on the bearings alone, at a sample size this property can actually
     be seen at, rather than off the `sample` fixture. The lean is genuinely
-    small — `conftest.SPRAY_MEAN_DEG` is +1.25 degrees against a spread of 21 —
+    small — `conftest.SPRAY_MEAN_DEG` is +1.8 degrees against a spread of 22 —
     so at the few hundred animations the fixture can afford the standard error
     on the mean is about a degree and the sign of the difference is noise. This
     seed's first 400 come out at -1.6 degrees; its first 5,000 at +1.3.

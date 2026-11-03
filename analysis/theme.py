@@ -100,7 +100,8 @@ BATTED_OUT_OUTCOMES = ("GROUNDOUT", "FLYOUT", "LINEOUT", "POP UP")
 # fall, OBP not rise, and BABIP count it in the denominator only. That is
 # standard scoring convention for a ROE, and it falls out of the grouping
 # rather than needing a special case in metrics.
-REACH_OUTCOMES = ("REACHED ON ERROR",)
+ERROR_OUTCOMES = ("REACHED ON ERROR",)
+REACH_OUTCOMES = ERROR_OUTCOMES + ("FIELDER'S CHOICE",)
 IN_PLAY_OUTCOMES = HIT_OUTCOMES + BATTED_OUT_OUTCOMES + REACH_OUTCOMES
 OUT_OUTCOMES = ("strikeout",) + BATTED_OUT_OUTCOMES
 TERMINAL_OUTCOMES = ("strikeout", "walk") + IN_PLAY_OUTCOMES
@@ -116,6 +117,7 @@ OUTCOME_COLORS = {
     "LINEOUT": "#bdc3c7",
     "POP UP": "#636e72",
     "REACHED ON ERROR": "#d69e2e",
+    "FIELDER'S CHOICE": "#95a5a6",
     "SINGLE": "#2ecc71",
     "DOUBLE": "#27ae60",
     "TRIPLE": "#1abc9c",
@@ -125,7 +127,7 @@ OUTCOME_COLORS = {
 
 OUTCOME_ORDER = [
     "strikeout", "GROUNDOUT", "FLYOUT", "LINEOUT", "POP UP",
-    "REACHED ON ERROR", "SINGLE", "DOUBLE", "TRIPLE", "HOME RUN", "walk",
+    "REACHED ON ERROR", "FIELDER'S CHOICE", "SINGLE", "DOUBLE", "TRIPLE", "HOME RUN", "walk",
 ]
 
 # Short forms for narrow tables — the full names blow past any terminal width.
@@ -133,6 +135,7 @@ OUTCOME_ABBREV = {
     "strikeout": "K", "GROUNDOUT": "GO", "FLYOUT": "FO", "LINEOUT": "LO",
     "POP UP": "PU", "SINGLE": "1B", "DOUBLE": "2B", "TRIPLE": "3B",
     "HOME RUN": "HR", "walk": "BB", "REACHED ON ERROR": "ROE",
+    "FIELDER'S CHOICE": "FC",
 }
 
 
@@ -148,6 +151,7 @@ EVENT_RUN_VALUE = {
     "HOME RUN": 1.39,
     "strikeout": -0.27,
     "GROUNDOUT": -0.26,
+    "FIELDER'S CHOICE": -0.26,
     "FLYOUT": -0.26,
     "LINEOUT": -0.26,
     "POP UP": -0.26,

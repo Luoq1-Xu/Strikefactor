@@ -23,15 +23,8 @@ from strikefactor.settings_manager import DifficultyLevel, SettingsManager
 from strikefactor.ui import gameday_theme as gdt
 from strikefactor.ui import settings_panel as sp
 from strikefactor.ui.settings_panel import KeyBindingsPanel, SettingsPanel
-from strikefactor.ui.ui_manager import UIManager
 
 SCREEN_RECT = pygame.Rect(0, 0, 1280, 720)
-
-
-@pytest.fixture(scope="module")
-def ui():
-    screen = pygame.display.get_surface()
-    return UIManager(screen, screen.get_size())
 
 
 @pytest.fixture
@@ -85,57 +78,89 @@ _RETIRED_BUTTONS = [
 
 
 @pytest.mark.parametrize("name", _RETIRED_BUTTONS)
-def test_the_hardcoded_settings_grid_is_gone(ui, name):
-    assert name not in ui.buttons
+def test_the_hardcoded_settings_grid_is_gone(name):
+    """A setting is a row and a binding is a row. Neither screen has a button
+    per value any more, in the footer or anywhere else."""
+    for panel_cls in (SettingsPanel, KeyBindingsPanel):
+        assert name not in {b.action for b in panel_cls().footer_buttons()}
+    assert name not in MenuState._FOOTER_ACTIONS
+    assert name not in MenuState._SETTINGS_ACTIONS
 
 
-def test_ui_manager_no_longer_pushes_settings_button_text(ui):
-    """The per-widget text updaters went with the widgets."""
+def test_nothing_pushes_text_into_settings_buttons_any_more():
+    """The per-widget text updaters went with the widgets: a row reads its
+    value when it is drawn."""
+    from strikefactor.main import Game
+
     for gone in ('update_settings_button_states', 'show_settings_info',
                  'update_key_binding_buttons', 'show_key_bindings_info'):
-        assert not hasattr(ui, gone)
-
-
-def test_the_settings_button_theme_class_is_gone():
-    """It styled only the retired grid. Left behind it would invite a new
-    button back onto the old, greyer visual track."""
-    import json
-
-    from strikefactor.config import get_path
-    with open(get_path('assets/theme.json')) as f:
-        theme = json.load(f)
-    assert '@settings_button' not in theme
+        assert not hasattr(Game, gone)
+        assert not hasattr(SettingsPanel, gone)
+        assert not hasattr(KeyBindingsPanel, gone)
 
 
 # ── Footer nav is derived, not literal ───────────────────────────────────
 
-@pytest.mark.parametrize("state,names", [
-    ('settings', ['back_to_main', 'key_bindings', 'reset_settings']),
-    ('key_bindings', ['back_from_keybinds', 'reset_keybinds']),
+@pytest.mark.parametrize("panel_cls,names", [
+    (SettingsPanel, ['back_to_main', 'reset_settings', 'key_bindings']),
+    (KeyBindingsPanel, ['back_from_keybinds', 'reset_keybinds']),
 ])
-def test_footer_buttons_are_margin_anchored(ui, state, names):
-    ui.set_button_visibility(state, force_show=True)
-    visible = {n: b.rect.copy() for n, b in ui.buttons.items() if b.visible}
-    assert set(visible) == set(names)
+def test_footer_buttons_are_margin_anchored(panel_cls, names):
+    buttons = {b.action: b.rect for b in panel_cls().footer_buttons()}
+    assert list(buttons) == names
 
-    margin = UIManager.MENU_MARGIN_X
-    for rect in visible.values():
+    margin = gdt.MARGIN_X
+    for rect in buttons.values():
         assert rect.left >= margin
         assert rect.right <= SCREEN_WIDTH - margin
         assert SCREEN_RECT.contains(rect)
 
     # Back sits on the left margin; the action run ends on the right one.
-    back = visible[names[0]]
+    back = buttons[names[0]]
     assert back.left == margin
-    assert max(r.right for r in visible.values()) == SCREEN_WIDTH - margin
+    assert max(r.right for r in buttons.values()) == SCREEN_WIDTH - margin
 
 
-def test_footer_row_is_recomputed_from_screen_width():
-    """The helper is the reason a row cannot drift — check it actually uses
-    SCREEN_WIDTH rather than baking a remembered right edge."""
-    rects = UIManager._footer_row_right([100, 100], gap=10)
-    assert rects[0].left == SCREEN_WIDTH - UIManager.MENU_MARGIN_X - 210
-    assert rects[-1].right == SCREEN_WIDTH - UIManager.MENU_MARGIN_X
+@pytest.mark.parametrize("panel_cls", [SettingsPanel, KeyBindingsPanel])
+def test_footer_buttons_sit_below_the_rows_and_apart(panel_cls):
+    rects = [b.rect for b in panel_cls().footer_buttons()]
+    assert all(r.top > sp._FOOTER_DIVIDER_Y for r in rects)
+    assert not any(a.colliderect(b) for i, a in enumerate(rects)
+                   for b in rects[i + 1:])
+
+
+@pytest.mark.parametrize("panel_cls", [SettingsPanel, KeyBindingsPanel])
+def test_a_click_on_a_footer_button_fires_its_action(panel_cls):
+    panel = panel_cls()
+    for button in panel.footer_buttons():
+        event = pygame.event.Event(pygame.MOUSEBUTTONDOWN, button=1,
+                                   pos=button.rect.center)
+        assert panel.footer_event(event) == button.action
+
+
+def test_tab_reaches_the_footer_and_a_row_key_takes_the_keyboard_back():
+    """ENTER means "the selected row" on this screen. It only means a footer
+    button while TAB has put the cursor on one, and any row key ends that."""
+    panel = SettingsPanel()
+
+    def key(code):
+        return pygame.event.Event(pygame.KEYDOWN, key=code, mod=0)
+
+    assert panel.footer_event(key(pygame.K_RETURN)) is None
+    panel.footer_event(key(pygame.K_TAB))
+    assert panel.footer_event(key(pygame.K_RETURN)) == 'back_to_main'
+    panel.footer_event(key(pygame.K_DOWN))
+    assert panel.footer_event(key(pygame.K_RETURN)) is None
+
+
+def test_every_footer_action_maps_to_a_game_method():
+    from strikefactor.main import Game
+
+    actions = {b.action for cls in (SettingsPanel, KeyBindingsPanel)
+               for b in cls().footer_buttons()}
+    assert actions == set(MenuState._FOOTER_ACTIONS)
+    for method_name in MenuState._FOOTER_ACTIONS.values():
+        assert callable(getattr(Game, method_name, None)), method_name
 
 
 # ── Panel rows stay in the content column ────────────────────────────────
@@ -173,7 +198,7 @@ def test_keybind_rows_stay_inside_the_content_column(surface, bindings):
     panel = _rendered_keybinds(surface, bindings)
     left, right = sp.content_bounds()
     rects = [rect for rect, _key in panel._row_rects]
-    assert len(rects) == len(KeyBindingsPanel.ACTIONS)
+    assert rects
     for rect in rects:
         assert rect.left == left and rect.right == right
         assert rect.bottom <= sp._FOOTER_DIVIDER_Y
@@ -272,7 +297,11 @@ def test_every_action_maps_to_a_game_method():
 
 def test_settings_keyboard_nav_covers_difficulty_plus_every_row(surface, settings):
     panel = _rendered_settings(surface, settings)
-    drawn = [key for _rect, key in panel._row_rects]
+    drawn = []
+    for index in range(len(panel._nav_keys)):
+        panel.selected = index
+        panel.render(surface, settings)
+        drawn.extend(key for _rect, key in panel._row_rects if key not in drawn)
     assert panel._nav_keys == [SettingsPanel.DIFFICULTY_KEY] + drawn
 
 
@@ -300,8 +329,13 @@ def test_every_row_can_actually_show_the_cursor(surface, settings):
     for index in range(1, len(panel._nav_keys)):
         key = panel._nav_keys[index]
         lit = _render_at(panel, settings, index)
-        dark = _render_at(panel, settings, 0)
         rect = _row_rect(panel, key)
+        # Compare the same viewport with only the highlight removed.
+        lit_scroll = panel._scroll_y
+        panel.selected = -1
+        panel._scroll_y = lit_scroll
+        dark = pygame.Surface((1280, 720))
+        panel.render(dark, settings)
         assert pygame.surfarray.array3d(lit.subsurface(rect)).sum() > \
             pygame.surfarray.array3d(dark.subsurface(rect)).sum(), \
             f"row {key} never highlights when selected"

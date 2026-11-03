@@ -8,7 +8,9 @@ import pygame
 import pygame.gfxdraw
 
 from strikefactor import paths
+from strikefactor.ui import gameday_theme as gdt
 from strikefactor.utils.io import atomic_write_json
+from strikefactor.utils.pitch_physics import DEFAULT_CAMERA
 
 # Bucket key sentinel used until the Game tells us which (mode, difficulty)
 # bucket is active. Pitches recorded under this key indicate the bucket
@@ -70,6 +72,10 @@ class FieldRenderer:
         # Averages. Game sets the starting mode from the show_strikezone setting.
         self.strikezonedrawn = self.ZONE_HIDDEN
         self.show_bases = True  # Disabled in minimal HUD mode (the corner widget shows them).
+        # Sandbox's FIXED AIM crosshair, (x, y) screen px at the plate, or
+        # None. Drawn by draw_field, so it shows in the frames a pitch draws
+        # itself too. SandboxGameplayState sets it and clears it on exit.
+        self.aim_marker = None
 
         # Heatmap fonts are reused every frame the heatmap is active; build
         # them once here rather than reallocating a Font object per frame.
@@ -90,8 +96,6 @@ class FieldRenderer:
         # Data file paths (the player's data directory — see strikefactor/paths.py)
         self.data_file = paths.data_path(paths.BATTING_STATS_FILE)
         self.legacy_archive_path = paths.data_path(paths.BATTING_STATS_LEGACY_FILE)
-        self.lap_history_file = paths.data_path(paths.LAP_HISTORY_FILE)
-        self.lap_start_time = datetime.now()
 
         # Load existing data if available
         self.load_data()
@@ -229,6 +233,28 @@ class FieldRenderer:
         self.draw_homeplate()
         if self.show_bases:
             self.draw_bases(bases_status)
+        if self.aim_marker is not None:
+            self.draw_aim_marker(self.aim_marker)
+
+    # The crosshair's ring is the ball's size at the plate, so a pitch on
+    # the spot fills it. Gray, so it reads apart from the white ball and
+    # the white bat cursor.
+    AIM_MARKER_COLOR = gdt.DIM
+    AIM_TICK_GAP_PX = 4        # from the ring to the start of each tick
+    AIM_TICK_LEN_PX = 8
+
+    def draw_aim_marker(self, pos):
+        """A ring the size of the ball with four ticks pointing in at it."""
+        x, y = int(round(pos[0])), int(round(pos[1]))
+        radius = int(round(DEFAULT_CAMERA.project_radius(0.0)))
+        color = self.AIM_MARKER_COLOR
+        pygame.gfxdraw.aacircle(self.screen, x, y, radius, color)
+        near = radius + self.AIM_TICK_GAP_PX
+        far = near + self.AIM_TICK_LEN_PX
+        for dx, dy in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            pygame.draw.line(self.screen, color,
+                             (x + dx * near, y + dy * near),
+                             (x + dx * far, y + dy * far))
 
     def get_zone_segment(self, x, y):
         """
@@ -515,17 +541,6 @@ class FieldRenderer:
             return f"{mode.upper()} / {diff.upper()}"
         return key.upper()
 
-    def reset_heatmap_data(self):
-        """Reset the active bucket's heatmap and counters."""
-        b = self._buckets[self._active_key]
-        b['heatmap_data'][:] = [0] * 9
-        b['heatmap_attempts'][:] = [0] * 9
-        for f in self.BUCKET_INT_FIELDS:
-            b[f] = 0
-        # Refresh instance attrs from the cleared bucket.
-        self._bind_instance_to_active()
-        self.save_data()
-
     # ----------------- Persistence -----------------
 
     def save_data(self):
@@ -683,109 +698,3 @@ class FieldRenderer:
             return f"{value:.3f}"[1:]
 
         return f"{format_stat(avg)}/{format_stat(obp)}/{format_stat(slg)}"
-
-    # ==================== Lap Feature Methods ====================
-
-    def has_stats_to_lap(self) -> bool:
-        """Check if there are any stats to create a lap from."""
-        return (self.total_pitches > 0 or
-                self.total_swings > 0 or
-                sum(self.heatmap_attempts) > 0)
-
-    def create_lap(self) -> dict:
-        """Snapshot active-bucket stats into lap history; reset the bucket."""
-        # Calculate batting average before creating lap
-        batting_avg = self.get_overall_batting_average()
-
-        # Calculate duration since last lap (or session start)
-        lap_end_time = datetime.now()
-        duration = (lap_end_time - self.lap_start_time).total_seconds()
-
-        # Load existing lap history
-        lap_history = self.load_lap_history()
-
-        # One past the newest lap's own number, not the list's length: the
-        # history is trimmed to MAX_LAP_HISTORY, after which a length-based
-        # number stuck at 101 forever.
-        laps = lap_history.get('laps', [])
-        lap_number = (laps[-1].get('lap_number', len(laps)) + 1) if laps else 1
-
-        # Create lap entry — tag with the bucket so per-(mode, difficulty)
-        # laps don't get mixed in side-by-side comparisons.
-        lap_entry = {
-            'lap_number': lap_number,
-            'timestamp': lap_end_time.isoformat(),
-            'bucket_key': self._active_key,
-            'heatmap_data': list(self.heatmap_data),
-            'heatmap_attempts': list(self.heatmap_attempts),
-            'total_swings': self.total_swings,
-            'total_hits': self.total_hits,
-            'total_pitches': self.total_pitches,
-            'total_at_bats': self.total_at_bats,
-            'batting_average': round(batting_avg, 3),
-            'duration_seconds': duration,
-            'triple_slash': self.get_triple_slash_line(),
-            'total_singles': self.total_singles,
-            'total_doubles': self.total_doubles,
-            'total_triples': self.total_triples,
-            'total_home_runs': self.total_home_runs,
-            'total_walks': self.total_walks,
-            'on_base_percentage': round(self.get_on_base_percentage(), 3),
-            'slugging_percentage': round(self.get_slugging_percentage(), 3),
-            'ops': round(self.get_ops(), 3)
-        }
-
-        # Add to history
-        if 'laps' not in lap_history:
-            lap_history['laps'] = []
-            lap_history['version'] = '1.1'
-            lap_history['created_date'] = lap_end_time.isoformat()
-
-        lap_history['laps'].append(lap_entry)
-        lap_history['last_updated'] = lap_end_time.isoformat()
-
-        # Enforce max history limit (100 laps)
-        MAX_LAP_HISTORY = 100
-        if len(lap_history['laps']) > MAX_LAP_HISTORY:
-            lap_history['laps'] = lap_history['laps'][-MAX_LAP_HISTORY:]
-
-        # Save lap history
-        self.save_lap_history(lap_history)
-
-        # Reported before the reset below zeroes the totals it reads.
-        print(f"✓ Lap {lap_number} created [{self._active_key}]: "
-              f"BA {batting_avg:.3f}, {self.total_hits} hits in {self.total_at_bats} ABs")
-
-        # Reset current stats (using existing method)
-        self.reset_heatmap_data()
-
-        # Reset lap timer
-        self.lap_start_time = datetime.now()
-
-        return lap_entry
-
-    def load_lap_history(self) -> dict:
-        """Load lap history from file."""
-        try:
-            if os.path.exists(self.lap_history_file):
-                with open(self.lap_history_file, 'r') as f:
-                    return json.load(f)
-            else:
-                return {
-                    'version': '1.1',
-                    'created_date': datetime.now().isoformat(),
-                    'last_updated': datetime.now().isoformat(),
-                    'laps': []
-                }
-        except Exception as e:
-            print(f"✗ Error loading lap history: {e}")
-            return {'version': '1.1', 'laps': []}
-
-    def save_lap_history(self, lap_history: dict):
-        """Save lap history to file (atomically)."""
-        atomic_write_json(self.lap_history_file, lap_history)
-
-    def get_lap_history(self) -> list:
-        """Get all lap entries."""
-        history = self.load_lap_history()
-        return history.get('laps', [])

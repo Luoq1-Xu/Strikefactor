@@ -45,7 +45,6 @@ def store(tmp_path, monkeypatch):
     payloads = {
         'gameday_history.json': {'version': 3, 'games': [{'id': 1}, {'id': 2}]},
         'gameday_sessions.json': {'version': 1, 'sessions': []},
-        'lap_history.json': {'version': 2, 'laps': [{'lap': 1}]},
         'batting_stats.json': {'version': 4, 'buckets': {'arcade|amateur': {'x': 1}}},
     }
     for name, payload in payloads.items():

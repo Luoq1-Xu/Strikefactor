@@ -1,4 +1,4 @@
-"""The one pause/input boundary for review, including legacy overlay adapters."""
+"""The pause/input boundary for the review workspace."""
 
 import pygame
 
@@ -16,7 +16,7 @@ def can_review(game, simulation=None):
     return True
 
 
-def run_modal(game, overlay, *, simulation=None, background=False):
+def run_modal(game, overlay, *, simulation=None):
     state = game.state_manager.current_state
     sim = active_simulation(game, simulation)
     started = pygame.time.get_ticks()
@@ -41,11 +41,6 @@ def run_modal(game, overlay, *, simulation=None, background=False):
                 else:
                     translate = getattr(game, '_translate_mouse_event', lambda e: e)
                     overlay.handle_event(translate(event))
-            if background:
-                game.screen.fill('black')
-                if state is not None:
-                    state.render(game.screen)
-                game._draw_active_hud(game.screen)
             # Show the opening frame before advancing. The shared clock can
             # include time spent in gameplay before the modal was entered.
             overlay.update(0 if first_frame else dt_ms)
@@ -69,7 +64,7 @@ def run_modal(game, overlay, *, simulation=None, background=False):
         for attr in ('last_time', '_celebration_start'):
             if getattr(state, attr, None) is not None:
                 setattr(state, attr, getattr(state, attr) + paused_ms)
-        pending = getattr(getattr(game, 'ui_manager', None), '_pending_banner', None)
+        pending = getattr(getattr(game, 'banner', None), '_pending_banner', None)
         if pending is not None:
             pending['show_time'] += paused_ms
         game.clock.tick()

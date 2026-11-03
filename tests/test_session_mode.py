@@ -10,6 +10,9 @@ only what they touch.
 
 from types import SimpleNamespace
 
+import pytest
+
+from strikefactor.helpers import Runner, ScoreKeeper
 from strikefactor.main import Game
 
 
@@ -23,10 +26,12 @@ def _game(menu_state='sandbox_menu'):
         pitcher_manager=SimpleNamespace(set_current_pitcher=lambda name: None,
                                         save_all_ai=lambda: None),
         game_stats=SimpleNamespace(reset_game_stats=lambda: None),
-        scoreKeeper=SimpleNamespace(reset=lambda: None),
+        scoreKeeper=ScoreKeeper(),
         challenge_manager=SimpleNamespace(reset_all=lambda: None,
                                           set_unlimited=lambda flag: None),
-        state_manager=SimpleNamespace(change_state=lambda name: None),
+        state_manager=SimpleNamespace(
+            change_state=lambda name: None,
+            states={'sandbox_gameplay': SimpleNamespace(reset_aim=lambda: None)}),
         current_pitcher=SimpleNamespace(clear_fatigue_stats=lambda: None),
         _reset_review=lambda: None,
         _db_start_game=lambda mode, pitcher_name=None: calls.append(('db_start', mode)),
@@ -47,6 +52,18 @@ def test_a_sandbox_session_loads_the_sandbox_profile():
     game._enter_sandbox_gameplay('sale')
     assert ('load', 'sandbox') in calls
     assert game.game_mode == 'sandbox'
+
+
+@pytest.mark.parametrize("next_mode", ["arcade", "gameday"])
+def test_endless_scoring_rules_follow_the_session_across_resets_and_mode_changes(next_mode):
+    game, _ = _game()
+    game._enter_sandbox_gameplay('sale')
+    for mode in ("sandbox", next_mode, "sandbox"):
+        game._begin_session(mode)
+        game.scoreKeeper.reset()
+        game.scoreKeeper.runners = [Runner(3)]
+        game.scoreKeeper.update_hit_event("FLYOUT", outs=2)
+        assert game.scoreKeeper.get_score() == int(mode == "sandbox")
 
 
 def test_leaving_from_the_t_view_saves_into_the_session_bucket():

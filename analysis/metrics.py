@@ -182,7 +182,7 @@ def _outcome_metrics(g):
     # setting has no readout anywhere. Rendered as ROE% beside BABIP in the
     # plate-discipline and slash-line tables, and in the terminal renderer —
     # all three, because a metric with no readout is one nobody checks.
-    roe = sum(counts.get(o, 0) for o in theme.REACH_OUTCOMES)
+    roe = sum(counts.get(o, 0) for o in theme.ERROR_OUTCOMES)
 
     # A sacrifice fly is a plate appearance and not an at-bat, as the game
     # scores it (`data.sac_fly_sql`). It is still a ball in play, so `bip` is
@@ -276,6 +276,11 @@ def pitching_line(ctx):
         if bf == 0:
             continue
         outs = sum(counts.get(o, 0) for o in theme.OUT_OUTCOMES)
+        if "baserunning_outs" in g:
+            # Extra putouts are independent of the batter's outcome: a
+            # groundout can retire two, and a choice can retire one.
+            # Old NULL values remain unknown; add only recorded putouts.
+            outs += int(g.loc[g["is_terminal"], "baserunning_outs"].dropna().sum())
         h = sum(counts.get(o, 0) for o in theme.HIT_OUTCOMES)
         bb = counts.get("walk", 0)
         k = counts.get("strikeout", 0)

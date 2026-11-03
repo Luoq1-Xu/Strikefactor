@@ -104,16 +104,32 @@ EV_CEIL_MPH = 116.0
 # line-drive share of home runs 22% -> 15%, against MLB's ~25-30%. The 105+
 # mph line drive that does leave a real park still leaves this one; there are
 # just fewer of them, which is the fact about MLB the old rows disagreed with.
+#
+# **Re-anchored 2026-10-09 for the square bat and the bat-ball collision**
+# (`tools/calibrate_contact.py --n 52000 --seed 3 --anchors`, 20,353 fair balls
+# in play). Fair contact is squarer than it was, so every observed quantile
+# rose: p10 0.757 / p25 0.798 / p50 0.850 / p75 0.928 / p90 0.967 / p99 0.994,
+# against 0.649 / 0.720 / 0.807 / 0.883 / 0.941 / 0.988. The two rows below
+# p10 moved up in proportion, so a tipped foul sounds as it did.
+#
+# **The top three rows went back up, 99.5 / 103 / 108 -> 101 / 106 / 111**,
+# for the same reason they once came down: they are what holds the home-run
+# rate. The launch angle is read off a real collision now, and a ball lifted
+# into the home-run band has the bat a good half inch further under it than a
+# line drive does, so it scores lower on `Contact.centre_score` than the fit
+# let it. Left on the old rows fly balls were struck 2.4 mph softer and home
+# runs fell to 2.8% of fair contact. These put them at 4.7% (the harness's
+# samplers at n = 300,000), with line drives 27% of them against MLB's 25-30.
 EV_CALIBRATION = (
     (0.000,  52.0),
-    (0.300,  62.0),
-    (0.450,  68.0),
-    (0.649,  74.0),   # observed p10
-    (0.720,  82.0),   # observed p25
-    (0.807,  91.0),   # observed p50
-    (0.883,  99.5),   # observed p75
-    (0.941, 103.0),   # observed p90
-    (0.988, 108.0),   # observed p99
+    (0.350,  62.0),
+    (0.520,  68.0),
+    (0.757,  74.0),   # observed p10
+    (0.798,  82.0),   # observed p25
+    (0.850,  91.0),   # observed p50
+    (0.928, 101.0),   # observed p75
+    (0.967, 106.0),   # observed p90
+    (0.994, 111.0),   # observed p99
     (1.000, EV_CEIL_MPH),
 )
 

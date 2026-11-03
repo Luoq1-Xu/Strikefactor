@@ -1,15 +1,20 @@
 """Which way the ball went.
 
-Before this module the game had four answers to that question and the one it
-used most was `random.uniform(50°, 130°)` — a ball in play had no pull or
+Before `spray` the game had four answers to that question and the one it used
+most was `random.uniform(50°, 130°)` — a ball in play had no pull or
 opposite-field tendency at all, while a home run read the *pitch's* location, a
 ball off the wall flipped a coin, and only a foul consulted the swing. What is
-guarded here is that there is one answer now, that it is read off the bat, and
+guarded here is that there is one answer now, that it comes off the bat, and
 that the two batters are mirror images of each other.
 
-The last of those is the one to watch. A sign error in a spray model mirrors
-the hitter, and this project has already lost a year to exactly that defect
-once (`collision_angled` rotated its circle the wrong way for the life of the
+The answer is the horizontal reading of one collision
+(`bat_ball_collision`, which `tests/test_bat_ball_collision.py` covers on its
+own). These tests ask about it through the whole chain: a real swing against a
+real pitch, and then the animation that flies the result.
+
+The mirror is the one to watch. A sign error in a spray model mirrors the
+hitter, and this project has already lost a year to exactly that defect once
+(`collision_angled` rotated its circle the wrong way for the life of the
 project). Every directional claim below is therefore made for both hands.
 """
 
@@ -24,6 +29,7 @@ from strikefactor.gameplay import bat_path as bp
 from strikefactor.gameplay import spray
 from strikefactor.settings_manager import DIFFICULTY_MULTIPLIERS, DifficultyLevel
 from strikefactor.utils.pitch_physics import DEFAULT_CAMERA, PitchTrajectory
+from tools import calibrate_contact as harness
 
 HANDS = ("R", "L")
 
@@ -33,6 +39,10 @@ HANDS = ("R", "L")
 # residual — same reason and same device as `tests/test_bat_contact.py`.
 TIGHT = dict(timing_window_mult=0.2)
 
+# The strike zone, as locations relative to the batter (inside-positive).
+ZONE_X = (0.7, 0.35, 0.0, -0.35, -0.7)
+ZONE_Z = (1.7, 2.5, 3.3)
+
 
 def pitch(target_x=0.0, target_z=2.5, speed_mph=93.0):
     return PitchTrajectory.from_pitch_params(
@@ -41,28 +51,19 @@ def pitch(target_x=0.0, target_z=2.5, speed_mph=93.0):
         target_x_ft=target_x, target_z_ft=target_z)
 
 
-def squared_up(trajectory, hand="R"):
-    """The swing of a hitter who tracks the ball and puts the bat on it."""
-    aim = (0.0, 2.5)
-    for _ in range(6):
-        swing = bp.swing(aim, hand)
-        ball = trajectory.position_at(
-            trajectory.time_at_depth(swing.contact_depth_ft))
-        px, py, _ = DEFAULT_CAMERA.project(*ball)
-        aim = DEFAULT_CAMERA.screen_to_world_at_plate(px, py)
-    return bp.swing(aim, hand)
+def on_time(hand, x=0.0, z=2.5, timing_ms=0.0, **kw):
+    """The contact a perfectly aimed swing makes, `timing_ms` off.
+
+    The game's own path — cursor on the ball, through `aim_at_pitch` — against
+    a pitch mirrored whole for a left-hander, so both batters are shown the
+    same pitch relative to themselves. `x` is inside-positive for either.
+    """
+    return harness.on_time_swing(hand, x, z, timing_ms=timing_ms, **kw)[1]
 
 
-def swing_at(trajectory, swing, timing_ms, **kw):
-    """Resolve a swing `timing_ms` off. Negative early, positive late."""
-    due = trajectory.time_at_depth(swing.contact_depth_ft)
-    start = due - bp.SWING_DURATION_S + timing_ms / 1000.0
-    return bc.resolve_contact(swing, trajectory, start, **kw)
-
-
-def _mirror(x, hand):
-    """A pitch location as the same location relative to *this* batter."""
-    return x if hand == "R" else -x
+def residual_ms(contact, timing_ms):
+    """The timing error still on the bat after the assist slid the swing."""
+    return timing_ms + contact.shift_s * 1000.0
 
 
 # ---- The bearing is real ---------------------------------------------------
@@ -74,32 +75,61 @@ def test_early_pulls_and_late_goes_the_other_way(hand):
     Nothing states it: the bat turns as the swing runs, so a swing that got
     there early meets the ball with the face further round and the ball leaves
     toward the batter's own field.
+
+    Asked while the ball is still on the barrel. Further early than this it
+    runs off the end of the bat, and a ball off the rounded end goes where the
+    end sends it.
     """
-    tr = pitch()
-    sw = squared_up(tr, hand)
     sprays = []
-    for ms in (-15.0, -10.0, 0.0, 10.0, 20.0):
-        got = swing_at(tr, sw, ms, **TIGHT)
+    for ms in (-12.0, -9.0, 0.0, 11.0, 17.0, 23.0):
+        got = on_time(hand, timing_ms=ms, **TIGHT)
         assert got is not None, f"no contact at {ms:+.0f} ms"
+        assert got.along < 0.99, f"{ms:+.0f} ms is off the end of the bat"
         sprays.append(got.spray_deg)
     assert sprays == sorted(sprays, reverse=True), (
         f"spray should fall monotonically from early to late, got {sprays}")
-    assert sprays[0] - sprays[-1] > 20.0, "timing barely moves the ball"
+    assert sprays[0] - sprays[-1] > 25.0, "timing barely moves the ball"
+
+
+@pytest.mark.parametrize("hand", HANDS)
+def test_the_ball_turns_at_the_rate_a_bat_does(hand):
+    """About a degree and a half per millisecond, **with no gain constant**.
+
+    A bat turns about a degree a millisecond through contact, and the ball
+    leaves about 1.6 times as far round as the bat faces
+    (`bat_ball_collision`). This used to be 0.63 deg/ms of model multiplied by
+    a `TIMING_GAIN` of 2.4 to reach the same place. Measured as a rate over
+    the residual timing, on the barrel.
+    """
+    pts = []
+    for ms in range(-12, 21, 2):
+        got = on_time(hand, timing_ms=float(ms), **TIGHT)
+        if got is not None and got.along < 0.99:
+            pts.append((residual_ms(got, ms), got.spray_deg))
+    assert len(pts) >= 10
+    assert max(t for t, _ in pts) - min(t for t, _ in pts) > 15.0
+    mean_t = sum(t for t, _ in pts) / len(pts)
+    mean_s = sum(d for _, d in pts) / len(pts)
+    rate = -(sum((t - mean_t) * (d - mean_s) for t, d in pts)
+             / sum((t - mean_t) ** 2 for t, _ in pts))
+    assert 1.3 < rate < 1.9, f"{rate:.2f} deg of spray per ms of timing"
+    assert not hasattr(spray, "TIMING_GAIN")
 
 
 @pytest.mark.parametrize("hand", HANDS)
 def test_an_inside_pitch_is_pulled_and_one_away_is_not(hand):
-    """The other half of the model, and it is not a rule either: an inside
-    pitch has to be met further out in front, which is a bat further round."""
-    sprays = []
-    for x in (0.6, 0.2, -0.2, -0.6):
-        tr = pitch(target_x=_mirror(x, hand))
-        sw = squared_up(tr, hand)
-        got = swing_at(tr, sw, 0.0)
-        assert got is not None
-        sprays.append(got.spray_deg)
-    assert sprays == sorted(sprays, reverse=True), (
-        f"inside should be pulled more than away, got {sprays}")
+    """The other half of the model, and it is not a rule either: the bat is
+    further round when it meets a pitch inside, and behind square on one
+    away."""
+    for z in ZONE_Z:
+        sprays = []
+        for x in ZONE_X:
+            got = on_time(hand, x, z)
+            assert got is not None
+            sprays.append(got.spray_deg)
+        assert sprays == sorted(sprays, reverse=True), (
+            f"inside should be pulled more than away, got {sprays}")
+        assert sprays[0] > 15.0 > -5.0 > sprays[-1]
 
 
 def test_the_two_batters_are_mirror_images():
@@ -109,21 +139,22 @@ def test_the_two_batters_are_mirror_images():
     same pitch relative to themselves and swinging identically, must send the
     ball to mirrored places on the field — never to the same place, which is
     what signing the face normal instead of the angle produces.
+
+    Exact, because the pitch is mirrored whole (release point and break as
+    well as location) and nothing in the chain draws a random number.
     """
     for x in (0.5, 0.0, -0.5):
-        for ms in (-15.0, 0.0, 15.0):
+        for ms in (-12.0, 0.0, 15.0):
             fields = {}
             for hand in HANDS:
-                tr = pitch(target_x=_mirror(x, hand))
-                got = swing_at(tr, squared_up(tr, hand), ms, **TIGHT)
+                got = on_time(hand, x, timing_ms=ms, **TIGHT)
                 assert got is not None
                 fields[hand] = spray.field_angle_deg(
                     got.spray_deg, spray.spin_for(hand))
-            # Mirrored about centre field, to within the couple of degrees the
-            # pitch's own break puts between the two mirrored trajectories.
-            assert fields["R"] + fields["L"] == pytest.approx(180.0, abs=6.0), (
+            assert fields["R"] + fields["L"] == pytest.approx(180.0, abs=1e-6), (
                 f"x={x} ms={ms}: R->{fields['R']:.1f} L->{fields['L']:.1f} "
                 "are not mirror images")
+            assert abs(fields["R"] - 90.0) > 1.0, "nothing to mirror at centre"
 
 
 def test_a_right_hander_pulls_toward_left_field():
@@ -137,110 +168,60 @@ def test_a_right_hander_pulls_toward_left_field():
     assert spray.field_angle_deg(0.0, spray.spin_for("R")) == 90.0
     assert spray.field_angle_deg(45.0, spray.spin_for("R")) == pytest.approx(135.0)
     assert spray.field_angle_deg(45.0, spray.spin_for("L")) == pytest.approx(45.0)
+    # And the same claim about the frame the collision's vector is stamped in:
+    # world +x is the third-base side, a right-hander's pull field.
+    assert spray.pull_frame((1.0, 2.0, 3.0), spray.spin_for("R")) == (1.0, 2.0, 3.0)
+    assert spray.pull_frame((1.0, 2.0, 3.0), spray.spin_for("L")) == (-1.0, 2.0, 3.0)
 
 
 # ---- The geometry underneath ------------------------------------------------
 
-def _pose_curve(hand, z=2.5, lo=-1.85, hi=1.60, step=0.05):
-    """`(aim_x, attack angle)` across the plate, in the *batter's* frame.
+def test_the_spray_remap_is_gone():
+    """`spray_angle_deg` read the ball's direction off a bat that was 49
+    degrees past square, by subtracting the 49, rescaling the location
+    response and multiplying the timing response by 2.4. The bat is near
+    square now and one collision gives the direction, so there is no reference
+    angle and no gain between the bat and the ball. The three that described
+    the location response moved to `bat_path` as statements about the bat."""
+    for name in ("spray_angle_deg", "SQUARE_REF_DEG", "LOCATION_GAIN",
+                 "LOCATION_SPAN_DEG", "TIMING_GAIN", "LEAGUE_MEAN_DEG"):
+        assert not hasattr(spray, name), name
+    assert bp.POSE_SPAN_DEG > 0.0 and bp.POSE_GAIN_DEG_PER_FT > 0.0
 
-    Positive x is inside to this batter, negative is away, for both hands.
+
+@pytest.mark.parametrize("hand", HANDS)
+def test_the_ball_leaves_further_round_than_the_bat_faces(hand):
+    """What the retired gain was standing in for, through the real chain.
+
+    On a middle pitch struck on time the bat is a few degrees past square and
+    the ball leaves further round than that. Not the 49 degrees apart the two
+    used to be drawn at.
     """
-    spin = spray.spin_for(hand)
-    n = int(round((hi - lo) / step))
-    xs = [lo + step * i for i in range(n + 1)]
-    return [(x, spray.attack_direction_deg(
-        bp.swing((_mirror(x, hand), z), hand).contact_axis, spin)) for x in xs]
-
-
-def _reaches(x, hand, z=2.5):
-    """True when the bat cannot span the ball from where the hands are."""
-    hands, _ = bp._contact_pose((_mirror(x, hand), z), hand)
-    return math.dist(hands, bp.hands_anchor_ft(hand)) > 1e-9
+    swing, got = harness.on_time_swing(hand, 0.0, 2.5)
+    bat = spray.attack_direction_deg(swing.contact_axis, swing.spin)
+    assert got.attack_deg == pytest.approx(bat, abs=0.2)
+    assert 0.0 < bat < got.spray_deg < bat + 10.0
 
 
 @pytest.mark.parametrize("hand", HANDS)
-def test_the_attack_angle_is_monotone_in_the_aim(hand):
-    """Further inside points the bat further round, with no reversals."""
-    angles = [a for _, a in _pose_curve(hand)]
-    assert angles == sorted(angles), "not monotone in the aim"
+def test_a_ball_the_hitter_has_to_reach_for_goes_the_other_way_and_fair(hand):
+    """A pitch off the plate away, reached and struck on time.
 
-
-@pytest.mark.parametrize("hand", HANDS)
-def test_the_bat_answers_the_aim_wherever_it_can_reach_the_ball(hand):
-    """The response must not go slack on the reachable side of the plate.
-
-    **This is the test that replaced a tautology, and the story is worth
-    keeping.** The predecessor asserted monotonicity and that no two aims
-    produced a bit-identical angle. Neither can fail: a step is monotone, and
-    two floats out of a trig chain essentially never compare equal. It was
-    written to guard against `bat_path._reach` flattening the pose onto one
-    bearing, and it sat green over exactly that defect for the life of the
-    module — the pose response past the reach boundary had collapsed to
-    1.9 deg/ft against 27-136 on the reachable side, and 43% of recorded
-    right-handed contact was landing in a **1.5 deg wide band**, all of it
-    foul.
-
-    So this measures the rate instead of counting repeats.
-    """
-    curve = [(x, a) for x, a in _pose_curve(hand) if not _reaches(x, hand)]
-    assert len(curve) > 20, "the reachable span has itself collapsed"
-    rates = [(a1 - a0) / (x1 - x0)
-             for (x0, a0), (x1, a1) in zip(curve, curve[1:])]
-    assert min(rates) > 20.0, (
-        f"the bat stops answering the aim at {min(rates):.1f} deg/ft — "
-        "a flat spot inside the bat's own reach")
-
-
-@pytest.mark.parametrize("hand", HANDS)
-def test_a_ball_the_hitter_has_to_reach_for_still_lands_fair(hand):
-    """The invariant that the saturating location term exists to create.
-
-    Past the reach boundary the pose *does* still go flat — the hands are
-    pinned at the stance anchor and `_reach` slides them along the bat's own
-    axis, which by construction cannot rotate it, so the bearing converges on
-    the perpendicular to a near-constant camera ray. That limit is pose ~ 0:
-    the bat square across, its face normal at dead centre field. Which is a
-    perfectly good inside-out reach, and harmless.
-
-    What was not harmless was reading it through a straight line. At a gain of
-    1.30 about a 49 deg reference, pose 0 came out at -55.7 deg — thirteen
-    degrees **foul** — so every ball the hitter stretched for was an automatic
-    foul, struck well, hooking deep past the same pole every single time.
-    `spray.LOCATION_SPAN_DEG` saturates the term instead, and the limit lands
-    in fair territory where it belongs.
+    The bat's bearing saturates smoothly out there (`bat_path.POSE_SPAN_DEG`)
+    instead of running on, so the ball goes to the opposite field and stays
+    inside the line with room for some timing error. Read through a straight
+    line this used to come out thirteen degrees foul: every ball the hitter
+    stretched for hooked past the same pole.
 
     Asserted against `FOUL_LINE_DEG` rather than a literal, so it still asks
     the right question if the park changes.
     """
-    far = _mirror(-40.0, hand)
-    pose = spray.attack_direction_deg(
-        bp.swing((far, 2.5), hand).contact_axis, spray.spin_for(hand))
-    deg = spray.spray_angle_deg(pose, pose)
-    assert not spray.is_foul(deg), (
-        f"a maximally reached ball sprays to {deg:.1f} deg, past the line")
-    assert spray.FOUL_LINE_DEG - abs(deg) > 5.0, (
-        f"{spray.FOUL_LINE_DEG - abs(deg):.1f} deg of margin is too little to "
-        "absorb any residual timing")
-    assert deg < 0.0, "a ball reached for should go the other way, not pulled"
-
-
-@pytest.mark.parametrize("hand", HANDS)
-def test_the_flat_spot_starts_where_the_bat_runs_out_of_reach(hand):
-    """Pins the known dead zone so it cannot silently widen.
-
-    It is not fixed, only made harmless — see the test above. Closing it means
-    letting the hands come off the stance anchor laterally, which is a
-    `bat_path` change that would need both of `spray`'s gains re-derived. This
-    records where the edge currently is so that work has a baseline, and so a
-    regression that pushes the flat spot further into the plate fails here.
-
-    At the belt it starts about 0.87 ft off centre, just outside the strike
-    zone. It is worst at the knees, where it reaches 0.37 ft — well inside.
-    """
-    assert not _reaches(-0.80, hand), "flat spot has reached the belt-high zone"
-    assert _reaches(-0.95, hand), "the reach boundary has moved unexpectedly far"
-    assert not _reaches(-0.30, hand, z=1.45), "flat spot has swallowed the knees"
+    for x in (-0.9, -1.1, -1.3):
+        got = on_time(hand, x)
+        assert got is not None, f"an on-time swing cannot reach x={x}"
+        assert got.spray_deg < 0.0, "a ball reached for should go the other way"
+        assert spray.FOUL_LINE_DEG - abs(got.spray_deg) > 5.0, (
+            f"x={x}: {got.spray_deg:+.1f} deg leaves too little room")
 
 
 def test_the_field_conversion_agrees_with_the_projection():
@@ -261,48 +242,67 @@ def test_the_field_conversion_agrees_with_the_projection():
 
 # ---- Fair and foul ----------------------------------------------------------
 
-def test_direction_is_only_part_of_the_foul_verdict():
-    """Both halves have to reach it, and each has to be able to act alone.
+def _leaving(spray_deg):
+    """A level exit direction at `spray_deg`, pull-positive."""
+    rad = math.radians(spray_deg)
+    return (math.sin(rad), math.cos(rad), 0.0)
 
-    Measured before it was written: direction alone caps near 25% of contact
-    against a real ~50%, and quality alone cannot see which way the ball went.
-    """
+
+def test_direction_is_only_part_of_the_foul_verdict():
+    """Both halves have to reach it, and each has to be able to act alone."""
     q_foul = bc.Contact(swing_t_s=0.15, pitch_t_s=0.4, ball_ft=(0, 0, 2.5),
                         axis_point_ft=(0, 0, 2.5), along=0.5, gap_ft=-0.01,
                         vertical_offset_ft=0.0, bat_speed_mph=70.0,
-                        attack_deg=49.0, pose_attack_deg=49.0)
-    assert q_foul.spray_deg == pytest.approx(spray.LEAGUE_MEAN_DEG)
+                        exit_direction=_leaving(8.0))
+    assert q_foul.spray_deg == pytest.approx(8.0)
     assert not spray.is_foul(q_foul.spray_deg), "this one is fair by direction"
     assert q_foul.is_foul(0.95), "but foul on quality"
     assert not q_foul.is_foul(0.01), "and fair when quality is not the problem"
 
     hooked = bc.Contact(swing_t_s=0.15, pitch_t_s=0.4, ball_ft=(0, 0, 2.5),
-                        axis_point_ft=(0, 0, 2.5), along=bp.SWEET_SPOT_FRAC,
-                        gap_ft=-0.05, vertical_offset_ft=0.0,
-                        bat_speed_mph=70.0, attack_deg=95.0, pose_attack_deg=95.0)
-    assert hooked.quality > 0.9, "struck cleanly"
+                        axis_point_ft=(0, 0, 2.5),
+                        along=bp.CONTACT_SWEET_SPOT_FRAC, gap_ft=-0.05,
+                        vertical_offset_ft=0.0,
+                        bat_speed_mph=70.0, exit_direction=_leaving(55.0))
+    assert hooked.quality > 0.99, "struck cleanly"
     assert spray.is_foul(hooked.spray_deg), "and still foul, by direction"
     assert hooked.is_foul(0.01), "which the verdict has to see"
 
 
-@pytest.mark.parametrize("hand", HANDS)
-def test_a_flawless_swing_can_be_fair_anywhere_in_the_zone(hand):
-    """The constraint that sets `LOCATION_GAIN`, and the reason spray is not
-    calibrated as a single scale over the raw angle.
+def test_a_contact_built_without_a_collision_goes_straight_up_the_middle():
+    """The default exit direction, for a `Contact` assembled by hand: level
+    and dead centre. A real one is stamped by `resolve_contact`."""
+    bare = bc.Contact(swing_t_s=0.15, pitch_t_s=0.4, ball_ft=(0, 0, 2.5),
+                      axis_point_ft=(0, 0, 2.5), along=0.9, gap_ft=-0.01,
+                      vertical_offset_ft=0.0, bat_speed_mph=70.0)
+    assert bare.spray_deg == 0.0
+    assert bare.launch_deg == 0.0
 
-    The raw geometry swings the bat's angle 79 degrees across a two-foot plate
-    — `bat_path._contact_pose` is pinned to a screen-space aiming pivot, so on
-    an inside pitch the bat points nearly at the pitcher. Passed through at
-    full strength that makes a perfect swing on an inside or outside strike an
-    automatic foul, which is not a thing that happens in baseball.
+
+@pytest.mark.parametrize("hand", HANDS)
+def test_an_on_time_swing_is_fair_anywhere_in_the_zone(hand):
+    """The constraint that bounds `bat_path.POSE_GAIN_DEG_PER_FT`.
+
+    A perfectly aimed, perfectly timed swing on a strike has to be able to
+    stay fair, at every location in the zone, with some degrees to spare for
+    the timing nobody has. Pass the location response through any harder and
+    a strike on the inside corner is an automatic foul, which is not a thing
+    that happens in baseball.
+
+    The high inside corner is the tight one: the bat is barrel-up there, and
+    on a barrel-up bat getting under the ball also pulls it.
     """
-    for x in (0.8, 0.4, 0.0, -0.4, -0.8):
-        tr = pitch(target_x=_mirror(x, hand))
-        got = swing_at(tr, squared_up(tr, hand), 0.0)
-        assert got is not None, f"no contact at x={x}"
-        assert not spray.is_foul(got.spray_deg), (
-            f"a flawless swing at x={x:+.1f} sprays foul "
-            f"({got.spray_deg:+.1f} deg)")
+    tightest = None
+    for z in ZONE_Z:
+        for x in ZONE_X:
+            got = on_time(hand, x, z)
+            assert got is not None, f"no contact at x={x}, z={z}"
+            margin = spray.FOUL_LINE_DEG - abs(got.spray_deg)
+            assert margin >= 4.0, (
+                f"an on-time swing at x={x:+.2f}, z={z} leaves at "
+                f"{got.spray_deg:+.1f} deg, {margin:.1f} inside the line")
+            tightest = margin if tightest is None else min(tightest, margin)
+    assert tightest < 12.0, "the response has gone slack: no corner is close"
 
 
 # ---- The distribution -------------------------------------------------------
@@ -357,18 +357,19 @@ def test_the_fair_population_looks_like_a_real_spray_chart():
     centre = sum(1 for s in fair if -15.0 <= s <= 15.0) / len(fair)
     oppo = sum(1 for s in fair if s < -15.0) / len(fair)
     # MLB is 40/35/25. This model is flatter — half of all contact has
-    # near-zero residual timing once the assist has run, and a term that is
-    # zero cannot be spread — so the band is wide on purpose. What it is
-    # actually pinning is that all three fields get used.
-    assert 0.22 <= pull <= 0.45, f"pull share {pull:.0%}"
-    assert 0.38 <= centre <= 0.60, f"centre share {centre:.0%}"
-    assert 0.10 <= oppo <= 0.30, f"oppo share {oppo:.0%}"
+    # near-zero residual timing once the assist has run, so its direction is
+    # the pitch's location alone, and the location response cannot be made
+    # steeper without fouling the corners — so the band is wide on purpose.
+    # What it is actually pinning is that all three fields get used.
+    assert 0.22 <= pull <= 0.42, f"pull share {pull:.0%}"
+    assert 0.34 <= centre <= 0.54, f"centre share {centre:.0%}"
+    assert 0.15 <= oppo <= 0.33, f"oppo share {oppo:.0%}"
 
 
 def test_direction_fouls_a_believable_share_of_contact():
     contacts = _population(DifficultyLevel.AMATEUR)
     share = sum(1 for c in contacts if spray.is_foul(c.spray_deg)) / len(contacts)
-    assert 0.15 <= share <= 0.32, f"direction fouled {share:.0%} of contact"
+    assert 0.10 <= share <= 0.26, f"direction fouled {share:.0%} of contact"
 
 
 def test_no_pile_up_on_the_foul_lines():

@@ -241,6 +241,9 @@ class SwingRecord:
                     hi = mid
         gap, along, state, ball = sample(lo)
         axis_point, _ = bat_path.bat_solid_point(state, along)
+        # `replace` carries everything else over, the exit direction included.
+        # That is the collision's answer for this swing and is stamped once;
+        # this frame is an earlier look at the same contact, not a second one.
         return replace(contact, swing_t_s=lo, pitch_t_s=start + lo,
                        ball_ft=ball, axis_point_ft=axis_point, along=along,
                        gap_ft=gap, vertical_offset_ft=ball[2] - axis_point[2],
@@ -312,9 +315,10 @@ class SwingRecord:
         `aim_assist` and the two multipliers beside it. Those have to be
         carried because the replay *rebuilds* the swing and re-sweeps it, so a
         player who changed difficulty in between would be shown a bat nobody
-        swung. This is not rebuilt from anything — `spray` is difficulty-free,
-        and the `Contact` on this record is the same object the verdict was
-        reached from. None when nothing was struck.
+        swung. This is not rebuilt from anything — the exit direction was
+        stamped on the `Contact` by the one collision that decided it, and the
+        `Contact` on this record is the same object the verdict was reached
+        from. None when nothing was struck.
         """
         if self.contact is None:
             return None
@@ -324,13 +328,12 @@ class SwingRecord:
     def departure_or_spray_deg(self):
         """Where the ball went — the number anything *drawn* has to use.
 
-        `spray_deg` above is where the bat pointed, which is the swing model's
-        output and what the DB records. They differ on exactly one kind of
-        contact, and it is the common one: a foul. A tipped or topped ball
-        keeps a perfectly fair-looking bearing while the ball itself deflects
-        into foul ground, and drawing the first under a FOUL banner is the
-        defect this pair exists to separate — measured at a median of 40.7
-        degrees apart, with 45% of fouls drawn as fair.
+        `spray_deg` above is the bearing the collision gave the ball, which
+        is what the DB records. They differ on exactly one kind of contact: a
+        foul. A ball fouled on quality can keep a fair-looking bearing while
+        the ball itself deflects into foul ground, and drawing the first under
+        a FOUL banner is the defect this pair exists to separate — measured at
+        a median of 40.7 degrees apart, with 45% of fouls drawn as fair.
         """
         if self.departure_deg is not None:
             return self.departure_deg
@@ -378,11 +381,11 @@ class SwingRecord:
         that was here had drifted into fiction.
 
         Two things it shows that a symmetric pair of constants cannot. The
-        windows are **strongly asymmetric** — about -42..+81 ms at AMATEUR,
-        because a late bat still catches the ball on the handle while an early
-        one runs out of barrel — and they are a property of **this swing**, so
-        a pitch the player was never on top of draws a narrower band than one
-        they were.
+        windows are **asymmetric** — contact at about -45..+72 ms at AMATEUR
+        and fair at -39..+51, because a late bat still catches the ball on the
+        handle while an early one runs out of barrel — and they are a property
+        of **this swing**, so a pitch the player was never on top of draws a
+        narrower band than one they were.
 
         Bisected rather than swept: 33 `resolve_contact` calls at about 1.6 ms,
         once, cached. Both predicates are contiguous in the offset (a test pins
@@ -486,11 +489,11 @@ class SwingRecord:
         """Feet in front of the plate where the *barrel* was when it arrived.
 
         A property of the swing, not of the pitch: it follows from where the
-        player aimed, because how far the aim point sits from the hands is how
-        much the bat is foreshortened (see `bat_path._contact_pose`). Runs
-        from about 0.4 ft on a ball low and away — met at the plate,
-        inside-out — to 2.7 ft on one aimed inside, which is pulled and met
-        well out in front. Compare it against `contact_depth_ft` to see the
+        player aimed, because the aim sets how far round the bat is when it
+        arrives (see `bat_path._contact_pose`). Runs from a couple of inches
+        *behind* the plate's front edge on a ball on the outside corner to
+        over a foot in front on one aimed inside, which is pulled. Negative
+        is a real answer. Compare it against `contact_depth_ft` to see the
         timing error as a distance.
         """
         return self._nominal_swing().contact_depth_ft
@@ -511,9 +514,9 @@ class SwingRecord:
 
         `aim_ft` is the raw cursor at the plate, which is what the player
         pointed at; `bat_contact.aim_at_pitch` is what the engine turned that
-        into before building the bat, because the barrel meets the ball a
-        couple of feet out in front and the ball is not where the plate says
-        it is out there.
+        into before building the bat, because the barrel meets the ball in
+        front of the plate (or just behind its front edge) and the ball is not
+        where the plate says it is there.
 
         **It is the value the engine resolved, when there is one.**
         `resolved_aim_ft` is stamped on the record at commit and preferred;

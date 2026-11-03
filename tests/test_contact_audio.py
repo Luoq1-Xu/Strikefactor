@@ -71,7 +71,7 @@ def test_none_quality_is_treated_as_worst_contact():
 def test_calibration_reproduces_mlb_exit_velocity_quantiles():
     """The whole point of the calibration table.
 
-    The game's contact_quality is heavily skewed high (median 0.81 over the
+    The game's contact_quality is heavily skewed high (median 0.85 over the
     contact the `bat_contact` sweep actually puts in play) because it is only
     computed for swings that squared the ball up. Feeding the observed quality
     quantiles in must yield roughly the MLB exit-velocity quantiles out — if
@@ -85,8 +85,8 @@ def test_calibration_reproduces_mlb_exit_velocity_quantiles():
     uniform sweep of quality: see the warning over EV_CALIBRATION.
     """
     # (observed quality quantile, expected MLB EV, tolerance)
-    expected_mph = {0.10: 74.0, 0.25: 82.0, 0.50: 91.0, 0.75: 99.5,
-                    0.90: 103.0}
+    expected_mph = {0.10: 74.0, 0.25: 82.0, 0.50: 91.0, 0.75: 101.0,
+                    0.90: 106.0}
     checks = [(quality, expected_mph[p], 4.0)
               for p, quality in conftest.QUALITY_QUANTILES]
     for quality, expected, tol in checks:
@@ -102,10 +102,10 @@ def test_median_contact_does_not_sound_like_a_barrel():
     With a naive uniform mapping the median contact modelled 111 mph and drew
     the crushed sample about half the time. The median moves whenever the
     contact geometry does — 0.886 for the rectangle, 0.81 for the anisotropic
-    bat, 0.763 now — and this test has to move with it or it stops asking
-    about the median at all.
+    bat, 0.763 and then 0.807 for the slid one, 0.850 for the square bat — and
+    this test has to move with it or it stops asking about the median at all.
     """
-    picks = [contact_sound_for(0.763, "contact", ALL_SAMPLES, rng=_fixed_rng(s))[0]
+    picks = [contact_sound_for(0.850, "contact", ALL_SAMPLES, rng=_fixed_rng(s))[0]
              for s in range(400)]
     crushed_share = picks.count("contact_crushed") / len(picks)
     assert crushed_share < 0.02, f"median contact drew the crushed sample {crushed_share:.0%} of the time"

@@ -125,6 +125,13 @@ class ERAI():
         total = sum(known.values())
         self._usage_prior = {a: known[a] / total for a in self.actions}
 
+    def usage_prior(self):
+        """The baseline mix this AI is anchored to: pitch type -> share, summing to 1.
+
+        Public for the pitcher card, which shows it as the arsenal's usage.
+        """
+        return dict(self._get_usage_prior())
+
     def _get_usage_prior(self):
         """Base usage prior, or a uniform mix when none was attached."""
         prior = getattr(self, '_usage_prior', None)

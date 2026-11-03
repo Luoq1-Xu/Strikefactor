@@ -29,17 +29,17 @@ def _game(settings):
     screen = pygame.display.get_surface() or pygame.display.set_mode((1280, 720))
     game = SimpleNamespace(settings_manager=settings, batter=Batter(screen),
                            field_renderer=SimpleNamespace(strikezonedrawn=None))
-    for name in ('toggle_ump_sound', 'toggle_umpire_sound_setting',
+    for name in ('toggle_umpire_sound_setting',
                  'toggle_batter_handedness', 'toggle_strikezone_setting',
                  '_apply_strikezone_setting'):
         setattr(game, name, getattr(Game, name).__get__(game))
     return game
 
 
-def test_the_sound_button_and_the_settings_row_are_one_switch(settings):
+def test_the_sound_key_and_the_settings_row_are_one_switch(settings):
     game = _game(settings)
     assert Game.umpsound.fget(game) is True
-    game.toggle_ump_sound()
+    game.toggle_umpire_sound_setting()
     assert settings.get_setting("umpire_sound") is False
     assert Game.umpsound.fget(game) is False
 

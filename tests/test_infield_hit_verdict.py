@@ -66,13 +66,9 @@ def _play(seed, quality, hand="R", modifier=1.0, spray_deg=0.0):
 # 7.6% infield-hit rate where the real distribution gave 3.8%, which is how
 # the model came to be calibrated against a batter who does not exist.
 #
-# Re-derived most recently when the location term in `spray` was made to
-# saturate: p10 0.643 / p25 0.689 / p50 0.763 / p75 0.871 / p90 0.937, against
-# 0.580 / 0.653 / 0.743 / 0.858 / 0.932 immediately before it. The bottom tail
-# lifted and the top barely moved, because the balls the straight-line term was
-# sending foul at -59 deg were *well struck* — an inside-out reach on an
-# outside pitch — so releasing them back into fair territory adds solid contact
-# at the bottom of the distribution.
+# Re-derived most recently for the square bat and the bat-ball collision
+# (`tools/calibrate_contact.py --anchors`): fair contact is squarer than it
+# was, so every quantile rose. It was 0.649 / 0.720 / 0.807 / 0.883 / 0.941.
 # These must stay in step with EV_CALIBRATION, which is anchored to the same
 # quantiles — move one without the other and this file silently starts
 # describing a different batter from the one the exit-velocity model does.
@@ -80,7 +76,7 @@ def _play(seed, quality, hand="R", modifier=1.0, spray_deg=0.0):
 # Approximated here by its quantiles rather than read from the DB: a test
 # that needs strikefactor.db is a test that breaks on a fresh checkout.
 _QUALITY_QUANTILES = (
-    (0.10, 0.649), (0.25, 0.720), (0.50, 0.807), (0.75, 0.883), (0.90, 0.941),
+    (0.10, 0.757), (0.25, 0.798), (0.50, 0.850), (0.75, 0.928), (0.90, 0.967),
 )
 
 # **And spray is not uniform either.** This is the same trap one axis over, and
@@ -91,12 +87,9 @@ _QUALITY_QUANTILES = (
 # was drawn from `random.uniform(50°, 130°)` inside the animation, so tests got
 # a spread for free; now the swing supplies it and the harness has to.
 #
-# Measured over the fair balls a plausible player produces at AMATEUR: mean
-# +1.8°, sd 19.9°. Pull-positive, so a right-handed batter's positive is
-# toward third. The mean came in from +4.4° when the location term in `spray`
-# was made to saturate — the opposite-field tail used to be fouled off past
-# the line, so the surviving fair population sat too far to the pull side.
-_SPRAY_MEAN_DEG, _SPRAY_SD_DEG = 1.25, 21.2
+# Measured over the fair balls a plausible player produces at AMATEUR.
+# Pull-positive, so a right-handed batter's positive is toward third.
+_SPRAY_MEAN_DEG, _SPRAY_SD_DEG = 1.81, 21.5
 
 
 # Both samplers now live in conftest, because test_defense.py draws from the

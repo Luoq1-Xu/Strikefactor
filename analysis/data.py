@@ -71,7 +71,7 @@ def sac_fly_sql(columns):
     if "runs_scored_on_pitch" in columns:
         clauses.append("(outcome = 'FLYOUT' AND runs_scored_on_pitch > 0)")
     if {"batted_ball_type", "runner_3b", "outs_before"} <= set(columns):
-        reach = ", ".join(f"'{o}'" for o in theme.REACH_OUTCOMES)
+        reach = ", ".join(f"'{o}'" for o in theme.ERROR_OUTCOMES)
         clauses.append(f"(outcome IN ({reach}) AND batted_ball_type = 'FLY' "
                        f"AND runner_3b = 1 AND outs_before < 2)")
     return f"({' OR '.join(clauses)})" if clauses else "0"

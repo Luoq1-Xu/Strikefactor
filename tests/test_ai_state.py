@@ -49,6 +49,7 @@ def test_the_first_sandbox_pitch_trains_on_the_real_state():
     seen = []
     pitcher = SimpleNamespace(pitch=lambda simulate, name: seen.append(name))
     game = SimpleNamespace(
+        field_renderer=SimpleNamespace(aim_marker=None),
         first_pitch_thrown=False, current_pitcher=pitcher, pitch_chosen=None,
         current_state='placeholder', currentouts=1, currentstrikes=2,
         currentballs=3, pitchnumber=0, last_pitch_type_thrown=None,

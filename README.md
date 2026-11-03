@@ -36,7 +36,7 @@ directory it is using at startup. Data saved by older versions inside
 originals are left where they were.
 
 ### How to Play
-1. **Choose your mode** - Select Arcade or Sandbox from the main menu
+1. **Choose your mode** - Select Arcade, GameDay or Sandbox from the main menu
 2. **Choose your opponent** - Select which pitcher you want to face
 3. **Watch the pitch** - Follow the ball as it flies toward home plate
 4. **Time your swing** - Move your mouse cursor to where you think the ball will be
@@ -49,7 +49,7 @@ Contact quality is scored on a continuous 0.0–1.0 scale using timing accuracy 
 ## 🎯 Game Modes
 
 ### Arcade Mode
-Face a single inning of continuous at-bats against your selected pitcher. Access settings, key bindings, and pitcher selection from the arcade menu.
+Face a single inning of continuous at-bats against your selected pitcher, or start a Random Scenario from the same screen. Settings and key bindings are on the main menu.
 
 ### GameDay Mode
 Full 9-inning baseball simulation featuring:
@@ -64,6 +64,7 @@ Full 9-inning baseball simulation featuring:
 
 ### Sandbox Mode
 Practice mode for honing your skills against specific pitches:
+- Endless play with unlimited outs; runners use normal advances and tag-ups throughout
 - Manually select which pitch type to face via on-screen buttons
 - Press **Q** to trigger each pitch on demand
 - Live triple slash line (BA/OBP/SLG) displayed in the scoreboard
@@ -107,11 +108,16 @@ Each pitcher has a pre-trained Q-learning AI model that adapts pitch selection b
 | **T** | Review — gameplay-camera pitch flight |
 | **R** | Review — latest swing, side/overhead analysis |
 | **F** | Review — latest recorded ball/fielding play |
+| **G** | Send the highlighted runner one more base (Manual baserunning) |
+| **D** | Retreat the highlighted runner or cancel a queued advance |
+| **TAB** | Select the next runner (Manual baserunning) |
 | **ESC** | Return to Main Menu |
 
 All key bindings (except swing controls) can be customized in the settings menu.
+Play is keyboard-driven: there are no on-screen buttons during an at-bat, apart
+from Sandbox's pitcher and pitch selectors.
 
-**Unified Review:** click **REVIEW**, or use V/T/R/F to enter the same workspace
+**Unified Review:** use V/T/R/F to enter the same workspace
 at a specific view. It is available between pitches, on completed-play screens,
 and from inning/game results. Escape closes it without advancing the game.
 
@@ -159,7 +165,21 @@ See [docs/unified-review.md](docs/unified-review.md) for the data and playback c
 ### Gameplay Options
 - Strikezone visibility toggle
 - Batter handedness (Right/Left)
-- Scouting report display
+- **Baserunning**: Auto (default) or Manual. In Manual, runners take at most one
+  automatic base; every further base needs **G**. The field shows the current
+  destination and the exact next base a Send will add. Press **D** to return a
+  moving runner to their last touched base, or cancel a queued advance while
+  keeping a required leg. Controls remain available during running and for
+  **2.5 seconds after runners and the ball settle**. Use **Tab** to select a
+  different runner. You can send runners while liners, flies and popups are
+  airborne. If caught, **NEEDS TAG AT** marks runners who left early; press
+  **D** to return through the required bags. The defense can appeal at the
+  original bag even after the runner reaches another base or crosses home.
+  Forced runners must reach their required base. The
+  **D HOLD** prompt confirms a settled play without waiting for the timer. The
+  defense can redirect unreleased throws and make a play at the return base.
+  All three running keys are remappable. Use Up/Down or the mouse wheel to scroll settings
+  and key bindings.
 
 ## 📊 Analytics & Visualization
 
@@ -177,21 +197,6 @@ Visual replay and analysis of thrown pitches:
 - Pitch location visualization on strikezone grid
 - Real-time pitch velocity display
 - Color-coded outcome indicators (strikes, balls, hits, outs)
-
-### Scouting Report Panel
-In-game overlay showing:
-- Current pitcher stats (K/9, BB/9, Strike%, WHIP)
-- Pitch arsenal with velocity ranges
-- Pitch count tracking
-- Color-coded performance indicators
-
-### Lap System
-Snapshot and track your batting performance over time:
-- Press the **LAP** button to save a snapshot of your current session stats
-- Each lap records: batting average, hits, at-bats, pitch count, swing count, triple slash (BA/OBP/SLG), and hit breakdown (1B/2B/3B/HR/BB)
-- **View Laps** panel shows a scrollable history of all saved laps (most recent first)
-- Lap history persists across sessions in `lap_history.json`
-- Great for tracking improvement over multiple practice sessions
 
 ### Pitch Database
 Every pitch is recorded to a SQLite database (`strikefactor.db`) with:
@@ -262,13 +267,21 @@ Possible results based on timing, swing type, and contact location:
 - **Single**, **Double**, **Triple**, **Home Run**
 - **Foul Ball**
 - **Flyout**, **Groundout**, **Lineout**
+- **Fielder's Choice** when the defense plays on a preceding runner
+- **Double Play**, including 6–4–3, 4–6–3, and 5–4–3 ground-ball turns
+
+With a runner on first, the defense compares taking the out at first with
+forcing the runner at second and relaying to first. Coverage, transfers,
+throw speed, bobbles, and actual runner arrivals determine each out. Beating
+the relay produces a fielder's choice with no hit credited. Auto and Manual
+use the same defense and force rules; Fielding Review records both putouts.
 
 Power swings increase extra-base hit potential but require more precise timing. Contact swings are more forgiving but produce weaker outcomes.
 
 ## 🔧 Requirements
 
 - Python 3.12+ (uv installs it for you)
-- Runtime: pygame-ce, pygame_gui, numpy, pandas, matplotlib, scikit-learn, rich.
+- Runtime: pygame-ce, numpy, pandas, matplotlib, scikit-learn, rich.
   They are declared in `pyproject.toml` and locked in `uv.lock`.
 
 For development, `uv sync` also installs the dev tools (pytest, pytest-xdist, ruff):

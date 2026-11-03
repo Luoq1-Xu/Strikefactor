@@ -145,6 +145,9 @@ class FieldingView:
         # session. Pitcher, pitch, speed and outcome are in `ReviewOverlay`'s
         # title bar, so this row stays the *batted ball's* measurements.
         stats = [self.record.play_label]
+        running = self.record.running_result
+        if running is not None and (running.double_play or running.outcome == outcomes.FIELDERS_CHOICE):
+            stats.append(running.display_name)
         for label, value, unit in [("EXIT", self.record.exit_velocity_mph, "MPH"),
                                    ("LAUNCH", self.record.launch_angle_deg, "DEG"),
                                    ("DISTANCE", self.record.hr_distance_ft, "FT")]:

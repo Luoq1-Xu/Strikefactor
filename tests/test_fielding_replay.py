@@ -80,8 +80,44 @@ def test_interpolation_holds_at_collisions_and_clamps_endpoints():
     assert rec.sample(-100) == a
     assert rec.sample(10000) == b
     rec = replace(rec, events=(FieldingEvent(100, "BALL SECURED"),))
-    assert rec.sample(99) == a
+    assert rec.sample(99).ball == a.ball
+    assert rec.sample(99).fielders == a.fielders
     assert rec.sample(100) == b
+
+
+def test_runner_keeps_moving_across_ball_possession_events():
+    _, recorder = play()
+    record = recorder.record
+    a = record.frames[0]
+    b = replace(a, time_ms=100, ball=(700, 500),
+                runner=replace(a.runner, pos=(a.runner.pos[0] + 10, a.runner.pos[1] - 5)))
+    record = replace(record, frames=(a, b), events=(FieldingEvent(100, "THROW RELEASE"),))
+    frame = record.sample(50)
+    assert frame.ball == a.ball
+    assert frame.runner.pos[0] == pytest.approx(a.runner.pos[0] + 5)
+    assert frame.runner.pos[1] == pytest.approx(a.runner.pos[1] - 2.5)
+    assert not frame.runner.reached_first
+
+
+def test_a_base_touch_does_not_freeze_an_unrelated_throw_in_replay():
+    _, recorder = play()
+    record = recorder.record
+    a = record.frames[0]
+    b = replace(a, time_ms=100, ball=(a.ball[0] + 100, a.ball[1]))
+    record = replace(record, frames=(a, b), events=(FieldingEvent(100, "BASE TOUCHED 2B", runner_id="B", base=2),))
+    assert record.sample(50).ball[0] == pytest.approx(a.ball[0] + 50)
+
+
+def test_uncontested_runner_arrival_is_seekable_without_changing_live_physics():
+    anim, recorder = play(shape="FLY", outcome="HOME RUN")
+    record = recorder.record
+    event = next(e for e in record.events if e.label == "RUNNER AT FIRST")
+    assert event.time_ms == anim._anim_ms(anim.runner_first_s)
+    frame = record.sample(event.time_ms)
+    from strikefactor.gameplay.hit_animation import BASES
+    assert frame.runner.pos == pytest.approx(BASES["1B"])
+    assert frame.runner.reached_first
+    assert frame.first_base_call is None
 
 
 def test_overflow_withholds_the_incomplete_recording():
@@ -118,7 +154,7 @@ def _continue_screen(monkeypatch, event):
     game.screen = pygame.Surface((1280, 720))
     game._fielding_play_number = 0
     game.last_fielding_play = None
-    game.ui_manager = SimpleNamespace(update=lambda dt: None, draw=lambda: None)
+    game.banner = SimpleNamespace(update=lambda dt: None, draw=lambda: None)
     game.flip_display = lambda: None
     game.request_fielding_replay = lambda **kw: calls.append("replay")
     game._window_to_internal = lambda x, y: (x, y)
@@ -224,7 +260,7 @@ def test_the_cursor_is_hidden_over_the_play_and_back_when_the_pitch_ends(monkeyp
     game.screen = pygame.Surface((1280, 720))
     game._fielding_play_number = 0
     game.last_fielding_play = None
-    game.ui_manager = SimpleNamespace(update=lambda dt: None, draw=lambda: None,
+    game.banner = SimpleNamespace(update=lambda dt: None, draw=lambda: None,
                                       hide_banner=lambda: None,
                                       set_button_visibility=lambda state: None)
     game.flip_display = lambda: None

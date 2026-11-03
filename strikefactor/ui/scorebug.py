@@ -221,10 +221,12 @@ class Scorebug:
         label = self.label_font.render("ABS", True, self.LABEL_COLOR)
         screen.blit(label, (x, y_center - 17))
 
-        # Unlimited mode (sandbox): draw a single infinity symbol instead of pips.
+        # Unlimited mode (sandbox): an infinity sign instead of pips, drawn as
+        # two loops at pip size. The pixel font has no "∞" glyph.
         if cm.is_unlimited():
-            inf_surf = self.font.render("∞", True, ABS_PINK)
-            screen.blit(inf_surf, (x + 4, y_center - 8))
+            cy = y_center + 4
+            for cx in (x + 6, x + 13):
+                pygame.draw.circle(screen, ABS_PINK, (cx, cy), 4, 2)
             return
 
         remaining = cm.remaining(side)

@@ -3,19 +3,22 @@ Game state classes for StrikeFactor baseball simulator.
 Each state handles its own rendering, input processing, and state transitions.
 """
 
+import contextlib
 from abc import ABC, abstractmethod
 from datetime import datetime
 
 import pygame
 import pygame.gfxdraw
-import pygame_gui
 
 from strikefactor import outcomes, paths
 from strikefactor.gameplay.gameday_manager import GameDayManager, get_pitcher_attrs
 from strikefactor.ui import gameday_theme as gdt
+from strikefactor.ui.pitcher_select import PitcherSelect
 from strikefactor.ui.pitching_box_panel import PitchingBoxPanel, PitchingSide
 from strikefactor.ui.play_by_play_panel import PlayByPlayPanel
 from strikefactor.ui.settings_panel import KeyBindingsPanel, SettingsPanel
+from strikefactor.ui.widgets import Button, ButtonGroup
+from strikefactor.utils.pitch_physics import DEFAULT_CAMERA
 
 
 class GameState(ABC):
@@ -49,93 +52,112 @@ class GameState(ABC):
         """Render the state."""
         pass
 
+    def render_overlay(self, screen):
+        """Draw what belongs above the HUD. Most states have nothing to.
+
+        The frame is state, then HUD, then this, then the banner. A state's
+        own buttons normally go in `render`; the two that share the screen
+        with a HUD (inning end's CONTINUE, Sandbox's sidebar) go here, so the
+        HUD does not paint over them. Modal loops redraw the state and the
+        HUD underneath themselves and never call this, which keeps buttons
+        off the top of a modal.
+        """
+
 
 class ModeSelectState(GameState):
-    """Top-level mode selection menu (Arcade/Sandbox)."""
+    """The main menu: the three modes, and the way into settings."""
+
+    # (action id, title, one line on what the mode is)
+    MODES = [
+        ('arcade_mode', "ARCADE",
+         "ONE INNING AGAINST THE PITCHER YOU PICK"),
+        ('gameday', "GAMEDAY",
+         "A FULL NINE-INNING GAME AGAINST A PITCHING STAFF"),
+        ('sandbox_mode', "SANDBOX",
+         "CHOOSE THE PITCHES YOU SEE · NO LIMIT ON OUTS"),
+    ]
+    _ACTIONS = {
+        'arcade_mode': 'enter_arcade_mode',
+        'gameday': 'enter_gameday_mode',
+        'sandbox_mode': 'enter_sandbox_mode',
+        'settings': 'enter_settings_menu',
+    }
+
+    _ROW_TOP = 210
+    _ROW_H = 84
+    _ROW_STRIDE = 100
+    _HINT = "UP / DOWN  MOVE      ENTER  SELECT"
 
     def __init__(self, game):
         super().__init__(game)
-        self.messages = ["StrikeFactor", "A Baseball At-Bat Simulator"]
-        self.active_message = 0
-        self.counter = 0
-        self.textoffset = 0
-        self.messages_finished = 0
-        self.done = False
-        self.running = True
+        self._buttons = ButtonGroup(arrows=True)
+
+    def buttons(self):
+        """A row per mode down the content column, SETTINGS in the footer."""
+        width = gdt.SCREEN_W - 2 * gdt.MARGIN_X
+        out = [
+            Button(action, title,
+                   pygame.Rect(gdt.MARGIN_X,
+                               self._ROW_TOP + index * self._ROW_STRIDE,
+                               width, self._ROW_H),
+                   style='row', detail=detail)
+            for index, (action, title, detail) in enumerate(self.MODES)
+        ]
+        out.append(Button('settings', "SETTINGS",
+                          gdt.footer_row_right([150])[0]))
+        return out
 
     def enter(self):
         """Initialize mode select state."""
-        self.game.ui_manager.hide_banner()
-        self.game.ui_manager.set_button_visibility('mode_select')
-        # Reset typing effect
-        self.active_message = 0
-        self.counter = 0
-        self.textoffset = 0
-        self.messages_finished = 0
-        self.done = False
-        self.running = True
-        self._message_pause_until = 0
+        self.game.banner.hide_banner()
+        # Start with the keyboard cursor on the first mode, so the screen
+        # shows what ENTER will do before any key is pressed.
+        self._buttons.set(self.buttons())
+        self._buttons.clear_focus()
+        self._buttons.move_focus(1)
 
     def exit(self):
         """Clean up mode select state."""
         pass
 
     def update(self, time_delta: float):
-        """Update typing effect."""
-        if not self.running:
-            return
-
-        message = self.messages[self.active_message]
-
-        # Update typing effect
-        if self.counter < self.game.speed * len(message):
-            self.counter += 1
-        elif self.counter >= self.game.speed * len(message):
-            self.done = True
-
-        # Handle message progression (non-blocking 500ms pause between messages)
-        if (self.active_message < len(self.messages) - 1) and self.done:
-            now = pygame.time.get_ticks()
-            if getattr(self, '_message_pause_until', 0) == 0:
-                self._message_pause_until = now + 500
-            elif now >= self._message_pause_until:
-                self.active_message += 1
-                self.done = False
-                self.textoffset += 100
-                self.counter = 0
-                self.messages_finished += 1
-                self._message_pause_until = 0
+        pass
 
     def handle_event(self, event):
         """Handle mode select events."""
-        self.game.ui_manager.process_events(event)
         if event.type == pygame.QUIT:
             return False
+        self._buttons.set(self.buttons())
+        action = self._buttons.handle_event(event)
+        if action is not None:
+            getattr(self.game, self._ACTIONS[action])()
         return True
 
     def render(self, screen):
         """Render the mode select screen."""
-        screen.fill("black")
-
-        # Draw completed messages
-        if self.messages_finished > 0:
-            offset = 0
-            for i in range(self.messages_finished):
-                self.game.ui_manager.draw_completed_message(
-                    self.messages[i], (150, 170 + offset), use_big_font=True
-                )
-                offset += 100
-
-        # Draw current message with typing effect
-        message = self.messages[self.active_message]
-        self.game.ui_manager.draw_typing_effect(
-            message, self.counter, self.game.speed,
-            (150, 170 + self.textoffset), use_big_font=True
-        )
+        fonts = gdt.load_fonts()
+        screen.fill(gdt.BG)
+        gdt.draw_page_header(screen, fonts, "=== MAIN MENU ===",
+                             "A BASEBALL AT-BAT SIMULATOR", "STRIKEFACTOR.")
+        self._buttons.set(self.buttons())
+        self._buttons.draw(screen, fonts)
+        gdt.blit_text(screen, self._HINT, fonts['micro'],
+                      (gdt.SCREEN_W // 2, gdt.SCREEN_H - 64),
+                      gdt.DIM_SOFT, align='center')
 
 
 class MenuState(GameState):
-    """Main menu state with pitcher selection and typing effect."""
+    """The Arcade menu: pick the pitcher to face, or a random scenario."""
+
+    # What `Game.menu_state` is called while facing each pitcher in Arcade.
+    # `GameplayState` copies it into `current_gamemode`.
+    ARCADE_MODE_NAMES = {
+        'sale': 'Sale',
+        'degrom': 'Degrom',
+        'yamamoto': 'Yamamoto',
+        'sasaki': 'Sasaki',
+        'mcclanahan': 'Experimental',
+    }
 
     # Settings / key bindings are sub-modes of the menu rather than states of
     # their own. Their bodies are drawn by ui/settings_panel.py — see that
@@ -145,6 +167,7 @@ class MenuState(GameState):
         'toggle_abs': 'toggle_abs_setting',
         'toggle_foul_animation': 'toggle_foul_animation_setting',
         'cycle_defense_strength': 'cycle_defense_strength',
+        'cycle_baserunning_mode': 'cycle_baserunning_mode',
         'cycle_hud_mode': 'toggle_hud_mode',
         'toggle_umpire_sound': 'toggle_umpire_sound_setting',
         'cycle_display_fps': 'cycle_display_fps',
@@ -152,86 +175,77 @@ class MenuState(GameState):
         'set_difficulty': 'set_difficulty',
     }
 
+    # The footer buttons of the two panels, by action id.
+    _FOOTER_ACTIONS = {
+        'back_to_main': 'exit_settings_menu',
+        'key_bindings': 'enter_key_bindings_menu',
+        'reset_settings': 'reset_settings',
+        'back_from_keybinds': 'exit_key_bindings_menu',
+        'reset_keybinds': 'reset_key_bindings',
+    }
+
     def __init__(self, game):
         super().__init__(game)
-        self.messages = ["StrikeFactor", "A Baseball At-Bat Simulator"]
-        self.active_message = 0
-        self.counter = 0
-        self.textoffset = 0
-        self.messages_finished = 0
-        self.done = False
-        self.running = True
+        self.select = PitcherSelect(
+            self.game.pitcher_manager,
+            header="=== ARCADE ===",
+            subtitle="ONE INNING · CHOOSE YOUR OPPONENT",
+            extras=lambda: [('random_scenario', "RANDOM SCENARIO")],
+            default='sale',
+        )
         self._settings_panel = SettingsPanel()
         self._keybinds_panel = KeyBindingsPanel()
 
+    def buttons(self):
+        """The Arcade menu's buttons (the sub-screens list their own)."""
+        return self.select.buttons()
+
     def enter(self):
         """Initialize menu state."""
-        self.game.ui_manager.hide_banner()
+        self.game.banner.hide_banner()
         self.game.scoreKeeper.reset()
         self.game.pitch_trajectories = []
         self.game.last_pitch_information = []
 
-        # Set button visibility based on current menu state
         if self.game.menu_state == 'settings':
-            self.game.ui_manager.set_button_visibility('settings')
             self._settings_panel.reset_cursor()
         elif self.game.menu_state == 'key_bindings':
-            self.game.ui_manager.set_button_visibility('key_bindings')
             self._keybinds_panel.reset_cursor()
         else:
-            self.game.ui_manager.set_button_visibility('main_menu')
+            # The carousel stays on the last pitcher faced: coming back from
+            # an inning, the likeliest next choice is the same one.
+            self.select.reset()
 
-            # Reset typing effect only for main menu
-            self.active_message = 0
-            self.counter = 0
-            self.textoffset = 0
-            self.messages_finished = 0
-            self.done = False
-            self.running = True
-            self._message_pause_until = 0
-        
     def exit(self):
         """Clean up menu state."""
         pass
-        
+
     def update(self, time_delta: float):
-        """Update typing effect and menu logic."""
-        if not self.running:
-            return
+        pass
 
-        # Only run typing effect for main menu, not settings or key bindings
-        if self.game.menu_state not in ['settings', 'key_bindings']:
-            message = self.messages[self.active_message]
-
-            # Update typing effect
-            if self.counter < self.game.speed * len(message):
-                self.counter += 1
-            elif self.counter >= self.game.speed * len(message):
-                self.done = True
-
-            # Handle message progression (non-blocking 500ms pause between messages)
-            if (self.active_message < len(self.messages) - 1) and self.done:
-                now = pygame.time.get_ticks()
-                if getattr(self, '_message_pause_until', 0) == 0:
-                    self._message_pause_until = now + 500
-                elif now >= self._message_pause_until:
-                    self.active_message += 1
-                    self.done = False
-                    self.textoffset += 100
-                    self.counter = 0
-                    self.messages_finished += 1
-                    self._message_pause_until = 0
-            
     def handle_event(self, event):
         """Handle menu events."""
-        self.game.ui_manager.process_events(event)
         if event.type == pygame.QUIT:
             return False
         if self.game.menu_state == 'settings':
             self._handle_settings_event(event)
         elif self.game.menu_state == 'key_bindings':
             self._handle_keybinds_event(event)
+        else:
+            self._handle_arcade_event(event)
         return True
+
+    # --- arcade pitcher pick --------------------------------------------
+
+    def _handle_arcade_event(self, event):
+        action = self.select.handle_event(event)
+        if action == 'confirm':
+            pitcher = self.select.selected()
+            self.game.enter_gamemode(self.ARCADE_MODE_NAMES[pitcher], pitcher)
+        elif action == 'random_scenario':
+            self.game.enter_random_scenario()
+        elif action == 'back':
+            self.game.return_to_mode_select()
 
     # --- settings sub-screen -------------------------------------------
 
@@ -248,9 +262,24 @@ class MenuState(GameState):
         method = getattr(self.game, self._SETTINGS_ACTIONS[action_id])
         method(payload) if payload is not None else method()
 
+    def _footer_event(self, panel, event):
+        """Run whichever footer button ``event`` fired. True if one did."""
+        action = panel.footer_event(event)
+        if action is None:
+            return False
+        getattr(self.game, self._FOOTER_ACTIONS[action])()
+        return True
+
     def _handle_settings_event(self, event):
         panel = self._settings_panel
         settings = self.game.settings_manager
+
+        if self._footer_event(panel, event):
+            return
+
+        if event.type == pygame.MOUSEWHEEL:
+            panel.move(-event.y)
+            return
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             key = panel.hit_test(event.pos)
@@ -273,6 +302,13 @@ class MenuState(GameState):
 
     def _handle_keybinds_event(self, event):
         panel = self._keybinds_panel
+
+        if self._footer_event(panel, event):
+            return
+
+        if event.type == pygame.MOUSEWHEEL:
+            panel.move(-event.y)
+            return
 
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             action = panel.hit_test(event.pos)
@@ -305,22 +341,7 @@ class MenuState(GameState):
                 error=getattr(self.game, 'key_rebind_error', None))
             return
 
-        screen.fill("black")
-        # Draw completed messages
-        if self.messages_finished > 0:
-            offset = 0
-            for i in range(self.messages_finished):
-                self.game.ui_manager.draw_completed_message(
-                    self.messages[i], (100, 170 + offset), use_big_font=True
-                )
-                offset += 100
-
-        # Draw current message with typing effect
-        message = self.messages[self.active_message]
-        self.game.ui_manager.draw_typing_effect(
-            message, self.counter, self.game.speed,
-            (100, 170 + self.textoffset), use_big_font=True
-        )
+        self.select.render(screen)
 
 
 class GameplayState(GameState):
@@ -332,7 +353,6 @@ class GameplayState(GameState):
         
     def enter(self):
         """Initialize gameplay state."""
-        self.game.ui_manager.set_button_visibility('in_game')
         self._refresh_display()
         
     def exit(self):
@@ -341,7 +361,7 @@ class GameplayState(GameState):
         
     def _refresh_display(self):
         """Refresh the game display - scorebug handles stats rendering."""
-        self.game.ui_manager.hide_banner()
+        self.game.banner.hide_banner()
         self.game.current_gamemode = self.game.menu_state
 
     def update(self, time_delta: float):
@@ -351,7 +371,6 @@ class GameplayState(GameState):
 
         if self.pitch_simulation and not self.pitch_simulation.running:
             self.pitch_simulation = None
-            self.game.ui_manager.set_button_visibility('in_game')
                 
     def handle_event(self, event):
         """Handle gameplay events."""
@@ -362,7 +381,6 @@ class GameplayState(GameState):
             if event.key == pygame.K_q and not self.pitch_simulation:
                 self._initiate_pitch()
                 
-        self.game.ui_manager.process_events(event)
         return True
         
     def _initiate_pitch(self):
@@ -417,9 +435,8 @@ class GameplayState(GameState):
         # Show HOT STREAK indicator in gameday mode
         if (self.game.in_gameday_mode and self.game.gameday_manager
                 and self.game.gameday_manager.is_player_hot()):
-            self.game.ui_manager.draw_completed_message(
-                "HOT STREAK", (550, 10), use_big_font=False
-            )
+            gdt.blit_text(screen, "HOT STREAK", gdt.load_fonts()['title'],
+                          (550, 10), (255, 255, 255))
 
         # ABS challenge prompt while the window is open after a taken pitch
         if self.game._challenge_window_active() and not self.game.abs_overlay.is_active():
@@ -449,56 +466,58 @@ class GameplayState(GameState):
 
 
 class SummaryState(GameState):
-    """End of inning summary state."""
-    
+    """Arcade's end-of-inning summary."""
+
+    _GRID_W = 620
+
     def __init__(self, game):
         super().__init__(game)
-        self.messages = []
-        self.active_message = 0
-        self.counter = 0
-        self.textoffset = 0
-        self.messages_finished = 0
-        self.done = False
-        self.running = True
+        # What the inning came to, captured on entry: the scorekeeper is
+        # reset straight after, so nothing here can be read live.
+        self.runs = 0
+        self.cells = []            # [(label, value)] for the stat grid
+        self.batting_line = ""
+        self.pitcher_name = ""
         self.stats_updated = False
-        
+        # ENTER plays another inning; ESC goes back to the main menu.
+        self._buttons = ButtonGroup(default='play_again')
+
+    def buttons(self):
+        return [
+            Button('back_to_main_menu', "<  MAIN MENU",
+                   gdt.footer_back_rect()),
+            Button('play_again', "PLAY AGAIN  >",
+                   gdt.footer_row_right([220])[0], style='primary'),
+        ]
+
     def enter(self):
         """Initialize summary state."""
-        self._generate_summary_messages()
+        self._collect_summary()
         if not self.stats_updated:
             self._update_pitcher_stats()
             self.stats_updated = True
-        self.game.ui_manager.set_button_visibility('summary')
+        self.game.banner.hide_banner()
         self.game.scoreKeeper.reset()
-        
-        # Reset typing effect
-        self.active_message = 0
-        self.counter = 0
-        self.textoffset = 0
-        self.messages_finished = 0
-        self.done = False
-        self.running = True
-        self._message_pause_until = 0
-        
+        self._buttons.clear_focus()
+
     def exit(self):
         """Clean up summary state."""
         # Reset the flag so stats can be updated again for next inning
         self.stats_updated = False
-        
-    def _generate_summary_messages(self):
-        """Generate summary messages based on game stats."""
-        runs_scored = self.game.scoreKeeper.get_score()
-        triple_slash = self.game.field_renderer.get_triple_slash_line()
 
-        self.messages = [
-            "INNING OVER",
-            f"HITS : {self.game.hits}",
-            f"BATTING : {triple_slash}",  # Added triple slash line
-            f"WALKS: {self.game.currentwalks}",
-            f"STRIKEOUTS : {self.game.currentstrikeouts}",
-            f"RUNS SCORED : {runs_scored}"
+    def _collect_summary(self):
+        """Read the inning off the game before the scorekeeper is reset."""
+        # Runs are the big number on the right; the grid is the rest.
+        self.runs = self.game.scoreKeeper.get_score()
+        self.cells = [
+            ("HITS", str(self.game.hits)),
+            ("WALKS", str(self.game.currentwalks)),
+            ("STRIKEOUTS", str(self.game.currentstrikeouts)),
         ]
-        
+        self.batting_line = self.game.field_renderer.get_triple_slash_line()
+        pitcher = self.game.current_pitcher
+        self.pitcher_name = getattr(pitcher, 'name', '') or ''
+
     def _update_pitcher_stats(self):
         """Update pitcher statistics."""
         stats_update = {
@@ -528,58 +547,59 @@ class SummaryState(GameState):
         self.game.current_pitcher.print_formatted_stats()
         
     def update(self, time_delta: float):
-        """Update summary typing effect."""
-        if not self.running or self.active_message >= len(self.messages):
-            return
-            
-        message = self.messages[self.active_message]
-        
-        # Update typing effect
-        if self.counter < self.game.speed * len(message):
-            self.counter += 1
-        elif self.counter >= self.game.speed * len(message):
-            self.done = True
-            
-        # Handle message progression (non-blocking 500ms pause between messages)
-        if (self.active_message < len(self.messages) - 1) and self.done:
-            now = pygame.time.get_ticks()
-            if getattr(self, '_message_pause_until', 0) == 0:
-                self._message_pause_until = now + 500
-            elif now >= self._message_pause_until:
-                self.active_message += 1
-                self.done = False
-                self.textoffset += 70
-                self.counter = 0
-                self.messages_finished += 1
-                self._message_pause_until = 0
-            
+        pass
+
     def handle_event(self, event):
         """Handle summary events."""
-        self.game.ui_manager.process_events(event)
         if event.type == pygame.QUIT:
             return False
+        self._buttons.set(self.buttons())
+        action = self._buttons.handle_event(event)
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            action = 'back_to_main_menu'
+        if action == 'play_again':
+            self.game.set_menu_state(0)         # the Arcade pitcher pick
+        elif action == 'back_to_main_menu':
+            self.game.return_to_mode_select()
         return True
-            
+
+    def _hint(self):
+        """The keys this screen answers to, review keys as actually bound."""
+        from strikefactor.ui.review_overlay import VIEW_ACTIONS
+        bindings = self.game.key_binding_manager
+        review = " / ".join(
+            bindings.get_key_name(bindings.get_key_for_action(action)).upper()
+            for action in VIEW_ACTIONS)
+        return (f"ENTER  PLAY AGAIN      ESC  MAIN MENU      "
+                f"{review}  REVIEW")
+
     def render(self, screen):
         """Render the summary screen."""
-        screen.fill("black")
-        
-        # Draw completed messages
-        if self.messages_finished > 0:
-            offset = 0
-            for i in range(self.messages_finished):
-                self.game.ui_manager.draw_completed_message(
-                    self.messages[i], (350, 100 + offset), use_big_font=False
-                )
-                offset += 70
-                
-        # Draw current message with typing effect
-        if self.active_message < len(self.messages):
-            message = self.messages[self.active_message]
-            self.game.ui_manager.draw_typing_effect(
-                message, self.counter, self.game.speed,
-                (350, 100 + self.textoffset), use_big_font=False
-            )
+        fonts = gdt.load_fonts()
+        screen.fill(gdt.BG)
+        subtitle = f"VS {self.pitcher_name.upper()}" if self.pitcher_name else ""
+        gdt.draw_page_header(screen, fonts, "=== INNING OVER · ARCADE ===",
+                             subtitle, "INNING OVER.")
+
+        # Runs, big, where the GameDay screens put the score.
+        right = gdt.SCREEN_W - gdt.MARGIN_X
+        gdt.blit_text(screen, "RUNS", fonts['micro'], (right, 56), gdt.DIM,
+                      align='right')
+        gdt.blit_text(screen, str(self.runs), fonts['mega'], (right, 76),
+                      gdt.FG, align='right')
+
+        bottom = gdt.draw_stat_grid(screen, fonts, "THIS INNING", self.cells,
+                                    gdt.MARGIN_X, 200, self._GRID_W)
+        gdt.blit_text(screen, "BATTING LINE  ·  AVG / OBP / SLG",
+                      fonts['micro'], (gdt.MARGIN_X, bottom + 28), gdt.DIM)
+        gdt.blit_text(screen, self.batting_line, fonts['big'],
+                      (gdt.MARGIN_X, bottom + 50), gdt.FG)
+
+        gdt.blit_text(screen, self._hint(), fonts['micro'],
+                      (gdt.SCREEN_W // 2, gdt.SCREEN_H - 64),
+                      gdt.DIM_SOFT, align='center')
+        self._buttons.set(self.buttons())
+        self._buttons.draw(screen, fonts)
 
 
 class VisualizationState(GameState):
@@ -593,7 +613,6 @@ class VisualizationState(GameState):
         
     def enter(self):
         """Initialize visualization state."""
-        self.game.ui_manager.set_button_visibility('visualise')
         self.current_frame = 0
         self.last_time = pygame.time.get_ticks()
         self.running = True
@@ -626,7 +645,6 @@ class VisualizationState(GameState):
         """Handle visualization events."""
         if event.type == pygame.QUIT:
             return False
-        self.game.ui_manager.process_events(event)
         return True
         
     def render(self, screen):
@@ -705,8 +723,13 @@ class InningEndState(GameState):
         (630, 672),   # home plate
     ]
 
+    _CONTINUE_RECT = (540, 630, 200, 50)
+
     def __init__(self, game):
         super().__init__(game)
+        # ENTER continues as well as the click. It reaches this state only
+        # when no hotkey is bound to it: bound keys are consumed upstream.
+        self._buttons = ButtonGroup(default='continue_to_summary')
         self._celebration_active = False
         self._celebration_start = 0
         self._banner_swapped = False
@@ -714,9 +737,21 @@ class InningEndState(GameState):
         # Pre-built full-screen flash surface (lazy on first walkoff).
         self._flash_surface = None
 
+    def buttons(self):
+        """CONTINUE, once any walk-off celebration has finished.
+
+        Left out during the celebration so the player can't skip past the
+        banner reveal with a stray click. It is not chrome: the H toggle
+        hides the HUD, never the one way off this screen.
+        """
+        if not self._continue_revealed:
+            return []
+        return [Button('continue_to_summary', "CONTINUE",
+                       pygame.Rect(self._CONTINUE_RECT), style='primary')]
+
     def enter(self):
         """Initialize inning end state."""
-        self.game.ui_manager.set_button_visibility('inning_end')
+        self._buttons.clear_focus()
 
         # Kick off the celebration sequence on the FIRST entry to inning_end
         # for a walk-off. Returning here from pitchviz must not re-fire it.
@@ -748,13 +783,8 @@ class InningEndState(GameState):
         self._celebration_active = True
         self._celebration_start = pygame.time.get_ticks()
         self._banner_swapped = False
+        # `buttons()` lists CONTINUE only once this is set again.
         self._continue_revealed = False
-
-        # Hide CONTINUE during the celebration so the player can't skip past
-        # the banner reveal accidentally with a stray click.
-        cont_btn = self.game.ui_manager.buttons.get('continue_to_summary')
-        if cont_btn is not None:
-            cont_btn.hide()
 
         # Lazily build the flash overlay surface at screen size.
         if self._flash_surface is None:
@@ -764,11 +794,6 @@ class InningEndState(GameState):
             )
 
     def _reveal_continue_button(self):
-        if self._continue_revealed:
-            return
-        cont_btn = self.game.ui_manager.buttons.get('continue_to_summary')
-        if cont_btn is not None:
-            cont_btn.show()
         self._continue_revealed = True
 
     def _celebration_t(self) -> int:
@@ -787,8 +812,8 @@ class InningEndState(GameState):
 
         # Phase 2 — swap the leading hit/walk banner for "WALK-OFF WIN!"
         if not self._banner_swapped and t >= self._CELEBRATION_BANNER_SWAP_END:
-            self.game.ui_manager.hide_banner()
-            self.game.ui_manager.show_banner(
+            self.game.banner.hide_banner()
+            self.game.banner.show_banner(
                 "WALK-OFF WIN!", typing_speed=0.05
             )
             self._banner_swapped = True
@@ -800,7 +825,6 @@ class InningEndState(GameState):
 
     def handle_event(self, event):
         """Handle inning end events."""
-        self.game.ui_manager.process_events(event)
         if event.type == pygame.QUIT:
             return False
         if event.type == pygame.KEYDOWN:
@@ -814,6 +838,10 @@ class InningEndState(GameState):
                 self._celebration_start = (
                     pygame.time.get_ticks() - self._CELEBRATION_END - 1
                 )
+                return True
+        self._buttons.set(self.buttons())
+        if self._buttons.handle_event(event) == 'continue_to_summary':
+            self.game.continue_to_summary()
         return True
 
     def render(self, screen):
@@ -837,6 +865,11 @@ class InningEndState(GameState):
             # top so the flash crests during the very first beat.
             self._render_bases_pulse(screen, t)
             self._render_flash_overlay(screen, t)
+
+    def render_overlay(self, screen):
+        """CONTINUE goes above the HUD: it overlaps the legacy scorebug."""
+        self._buttons.set(self.buttons())
+        self._buttons.draw(screen)
 
     # ------------------------------------------------------------------
     # Celebration overlays
@@ -893,101 +926,131 @@ class InningEndState(GameState):
 
 
 class SandboxMenuState(GameState):
-    """Sandbox mode menu with pitcher selection and typing effect."""
+    """The Sandbox menu: pick the pitcher to start against."""
 
     def __init__(self, game):
         super().__init__(game)
-        self.messages = ["Sandbox Mode", "Select A Pitcher"]
-        self.active_message = 0
-        self.counter = 0
-        self.textoffset = 0
-        self.messages_finished = 0
-        self.done = False
-        self.running = True
+        self.select = PitcherSelect(
+            self.game.pitcher_manager,
+            header="=== SANDBOX ===",
+            subtitle="NO OUTS LIMIT · CHOOSE A PITCHER TO START WITH",
+            default='sale',
+        )
+
+    def buttons(self):
+        return self.select.buttons()
 
     def enter(self):
         """Initialize sandbox menu state."""
-        self.game.ui_manager.hide_banner()
-        self.game.ui_manager.set_button_visibility('sandbox_menu')
-        # Reset typing effect
-        self.active_message = 0
-        self.counter = 0
-        self.textoffset = 0
-        self.messages_finished = 0
-        self.done = False
-        self.running = True
-        self._message_pause_until = 0
+        self.game.banner.hide_banner()
+        self.select.reset()
 
     def exit(self):
         """Clean up sandbox menu state."""
         pass
 
     def update(self, time_delta: float):
-        """Update typing effect."""
-        if not self.running:
-            return
-
-        message = self.messages[self.active_message]
-
-        # Update typing effect
-        if self.counter < self.game.speed * len(message):
-            self.counter += 1
-        elif self.counter >= self.game.speed * len(message):
-            self.done = True
-
-        # Handle message progression (non-blocking 500ms pause between messages)
-        if (self.active_message < len(self.messages) - 1) and self.done:
-            now = pygame.time.get_ticks()
-            if getattr(self, '_message_pause_until', 0) == 0:
-                self._message_pause_until = now + 500
-            elif now >= self._message_pause_until:
-                self.active_message += 1
-                self.done = False
-                self.textoffset += 100
-                self.counter = 0
-                self.messages_finished += 1
-                self._message_pause_until = 0
+        pass
 
     def handle_event(self, event):
         """Handle sandbox menu events."""
-        self.game.ui_manager.process_events(event)
         if event.type == pygame.QUIT:
             return False
+        action = self.select.handle_event(event)
+        if action == 'confirm':
+            self.game._enter_sandbox_gameplay(self.select.selected())
+        elif action == 'back':
+            self.game.return_to_mode_select()
         return True
 
     def render(self, screen):
-        """Render the sandbox menu with typing effect."""
-        screen.fill("black")
-
-        # Draw completed messages
-        if self.messages_finished > 0:
-            offset = 0
-            for i in range(self.messages_finished):
-                self.game.ui_manager.draw_completed_message(
-                    self.messages[i], (100, 170 + offset), use_big_font=True
-                )
-                offset += 100
-
-        # Draw current message with typing effect
-        message = self.messages[self.active_message]
-        self.game.ui_manager.draw_typing_effect(
-            message, self.counter, self.game.speed,
-            (100, 170 + self.textoffset), use_big_font=True
-        )
+        """Render the sandbox menu."""
+        self.select.render(screen)
 
 
 class SandboxGameplayState(GameState):
     """Sandbox gameplay state with user-controlled pitch selection."""
 
+    # ── Left sidebar ─────────────────────────────────────────────────────
+    # The one sidebar in the game: the pitcher switch, the pitch toggles and
+    # FIXED AIM, which are selections and have no key. Everything else that used to sit
+    # in this column (ZONE, BATTER, REVIEW, SOUND, MENU, EXIT) is a key
+    # binding, so Arcade and GameDay show no buttons at all during play.
+    SIDEBAR_X = 6
+    SIDEBAR_W = 120
+    SIDEBAR_TOP = 188
+    SIDEBAR_STEP = 28          # slot pitch
+    SIDEBAR_H = 26             # drawn height: 2px of air between slots,
+    SIDEBAR_COL_GAP = 4        # so two selected neighbours stay two blocks
+    PITCH_COLUMNS = 2
+
+    # ── Fixed aim ────────────────────────────────────────────────────────
+    # FIXED AIM pins every pitch to one spot the player places. The spot is
+    # in feet at the plate (world frame, +x toward third), so it stays put
+    # when the batter switches sides. The area runs 1.5 ft past each edge of
+    # the 17 in plate and from the dirt to well over the zone (1.5-3.5 ft),
+    # which covers the chase and waste spots as well as the zone.
+    AIM_X_LIMIT_FT = 0.708 + 1.5
+    AIM_Z_RANGE_FT = (0.5, 5.0)
+    AIM_DEFAULT_FT = (0.0, 2.5)    # the middle of the zone
+
+    # Class-level so a state built without __init__ (tests) still pitches.
+    aim_on = False
+    aim_ft = AIM_DEFAULT_FT
+    _dragging_aim = False
+
     def __init__(self, game):
         super().__init__(game)
         self.pitch_simulation = None
         self.active_pitches = set()  # Set of toggled-on pitch types
+        self._buttons = ButtonGroup()
+
+    def buttons(self):
+        """The sidebar as specs: one slot per pitcher, a gap, the current
+        pitcher's arsenal in a grid that grows with it, a gap, FIXED AIM.
+
+        The pitcher on the mound, the pitches switched on and a fixed aim are
+        drawn *selected*, which is the whole display of the sandbox's state.
+        """
+        manager = self.game.pitcher_manager
+        current = self.game.current_pitcher
+        out = []
+        for slot, name in enumerate(manager.pitchers):
+            out.append(Button(
+                ('pitcher', name), name.upper(),
+                pygame.Rect(self.SIDEBAR_X,
+                            self.SIDEBAR_TOP + self.SIDEBAR_STEP * slot,
+                            self.SIDEBAR_W, self.SIDEBAR_H),
+                selected=manager.pitchers[name] is current))
+        if current is None:
+            return out
+        first_row = len(manager.pitchers) + 1          # one empty slot between
+        col_w = ((self.SIDEBAR_W - self.SIDEBAR_COL_GAP * (self.PITCH_COLUMNS - 1))
+                 // self.PITCH_COLUMNS)
+        pitches = current.get_pitch_names()
+        for index, pitch in enumerate(pitches):
+            row, col = divmod(index, self.PITCH_COLUMNS)
+            out.append(Button(
+                ('pitch', pitch), pitch,
+                pygame.Rect(self.SIDEBAR_X + col * (col_w + self.SIDEBAR_COL_GAP),
+                            self.SIDEBAR_TOP + self.SIDEBAR_STEP * (first_row + row),
+                            col_w, self.SIDEBAR_H),
+                selected=pitch in self.active_pitches))
+        pitch_rows = -(-len(pitches) // self.PITCH_COLUMNS)
+        aim_row = first_row + pitch_rows + 1           # one empty slot between
+        out.append(Button(
+            ('aim', 'fixed'), 'FIXED AIM',
+            pygame.Rect(self.SIDEBAR_X, self.SIDEBAR_TOP + self.SIDEBAR_STEP * aim_row,
+                        self.SIDEBAR_W, self.SIDEBAR_H),
+            selected=self.aim_on))
+        return out
+
+    def _sidebar_shown(self):
+        """H hides the sidebar with the HUD; a hidden button takes no click."""
+        return self.game.key_binding_manager.is_ui_visible()
 
     def enter(self):
         """Initialize sandbox gameplay state."""
-        self.game.ui_manager.set_button_visibility('sandbox_gameplay')
-        self._update_pitch_buttons()
         self._refresh_display()
 
         # Enable all pitches by default if none active or pitcher changed
@@ -995,22 +1058,58 @@ class SandboxGameplayState(GameState):
             pitch_names = self.game.current_pitcher.get_pitch_names()
             if not self.active_pitches or not self.active_pitches.issubset(set(pitch_names)):
                 self.active_pitches = set(pitch_names)
-                self._update_pitch_buttons()
                 self._refresh_display()
 
     def exit(self):
         """Clean up sandbox gameplay state."""
         self.pitch_simulation = None
+        self._dragging_aim = False
+        # The field renderer is shared with Arcade and GameDay.
+        self.game.field_renderer.aim_marker = None
+
+    # ── Fixed aim ────────────────────────────────────────────────────────
+
+    def toggle_aim(self):
+        self.aim_on = not self.aim_on
+        self._dragging_aim = False
+
+    def reset_aim(self):
+        """A new Sandbox session starts with the aim off, at the default spot."""
+        self.aim_on = False
+        self.aim_ft = self.AIM_DEFAULT_FT
+        self._dragging_aim = False
+
+    def _clamp_aim_ft(self, x_ft, z_ft):
+        z_lo, z_hi = self.AIM_Z_RANGE_FT
+        return (max(-self.AIM_X_LIMIT_FT, min(self.AIM_X_LIMIT_FT, x_ft)),
+                max(z_lo, min(z_hi, z_ft)))
+
+    def _in_aim_area(self, pos_px):
+        x_ft, z_ft = DEFAULT_CAMERA.screen_to_world_at_plate(*pos_px)
+        return self._clamp_aim_ft(x_ft, z_ft) == (x_ft, z_ft)
+
+    def _place_aim(self, pos_px):
+        self.aim_ft = self._clamp_aim_ft(*DEFAULT_CAMERA.screen_to_world_at_plate(*pos_px))
+
+    def _aim_px(self):
+        """The aim in screen px. Exact at the plate: the pitch's own
+        conversion back to feet (PitchSimulation) is the inverse of this."""
+        x_ft, z_ft = self.aim_ft
+        screen_x, screen_y, _depth = DEFAULT_CAMERA.project(x_ft, 0.0, z_ft)
+        return screen_x, screen_y
+
+    def _visible_aim_px(self):
+        """Where to draw the crosshair, or None. H hides it with the sidebar."""
+        return self._aim_px() if self.aim_on and self._sidebar_shown() else None
+
+    def _sync_aim_marker(self):
+        """Hand the crosshair to the field renderer, whose draw_field draws it
+        here and in every frame a pitch draws itself."""
+        self.game.field_renderer.aim_marker = self._visible_aim_px()
 
     def _refresh_display(self):
         """Refresh the game display - scorebug handles stats rendering."""
-        self.game.ui_manager.hide_banner()
-
-    def _update_pitch_buttons(self):
-        """Update pitch type buttons for current pitcher."""
-        if self.game.current_pitcher:
-            pitch_names = self.game.current_pitcher.get_pitch_names()
-            self.game.ui_manager.update_sandbox_pitch_buttons(pitch_names, self.active_pitches)
+        self.game.banner.hide_banner()
 
     def switch_pitcher(self, pitcher_name: str):
         """Switch to a different pitcher."""
@@ -1020,7 +1119,6 @@ class SandboxGameplayState(GameState):
         pitch_names = self.game.current_pitcher.get_pitch_names()
         self.active_pitches = set(pitch_names) if pitch_names else set()
 
-        self._update_pitch_buttons()
         self._refresh_display()
 
     def toggle_pitch(self, pitch_name: str):
@@ -1032,7 +1130,6 @@ class SandboxGameplayState(GameState):
                     self.active_pitches.discard(pitch_name)
             else:
                 self.active_pitches.add(pitch_name)
-            self._update_pitch_buttons()
             self._refresh_display()
 
     def update(self, time_delta: float):
@@ -1042,8 +1139,10 @@ class SandboxGameplayState(GameState):
 
         if self.pitch_simulation and not self.pitch_simulation.running:
             self.pitch_simulation = None
-            self.game.ui_manager.set_button_visibility('sandbox_gameplay')
-            self._update_pitch_buttons()
+            # Sandbox clears the result once the play is over (Arcade leaves
+            # it up until the next pitch). A call scheduled for the umpire's
+            # voice still arrives after this.
+            self.game.banner.hide_banner()
 
     def handle_event(self, event):
         """Handle sandbox gameplay events."""
@@ -1054,7 +1153,33 @@ class SandboxGameplayState(GameState):
             if event.key == pygame.K_q and not self.pitch_simulation:
                 self._initiate_pitch()
 
-        self.game.ui_manager.process_events(event)
+        # Mouse only: the keys here belong to the at-bat, so the sidebar
+        # takes no keyboard cursor.
+        if event.type == pygame.MOUSEBUTTONDOWN and self._sidebar_shown():
+            self._buttons.set(self.buttons())
+            action = self._buttons.handle_event(event)
+            if action is not None:
+                kind, name = action
+                if kind == 'pitcher':
+                    self.switch_pitcher(name)
+                elif kind == 'pitch':
+                    self.toggle_pitch(name)
+                elif kind == 'aim':
+                    self.toggle_aim()
+            elif self.aim_on and event.button == 1 and self._in_aim_area(event.pos):
+                # A press places the crosshair; holding it drags.
+                self._place_aim(event.pos)
+                self._dragging_aim = True
+
+        if event.type == pygame.MOUSEMOTION and self._dragging_aim:
+            if self.aim_on and event.buttons[0] and self._sidebar_shown():
+                self._place_aim(event.pos)   # clamped to the area's edge
+            else:
+                self._dragging_aim = False
+
+        if event.type == pygame.MOUSEBUTTONUP and event.button == 1:
+            self._dragging_aim = False
+
         return True
 
     def _initiate_pitch(self):
@@ -1072,8 +1197,19 @@ class SandboxGameplayState(GameState):
         self.game.current_state = self.game.build_ai_state()
         self.game.pitch_chosen = chosen_pitch
 
-        # Randomly select from active pitches
-        self.game.current_pitcher.pitch(self._create_pitch_simulation, chosen_pitch)
+        # FIXED AIM: the pitcher throws at the player's spot for this one
+        # pitch. `pitch()` blocks until the pitch is over.
+        self._dragging_aim = False
+        self._sync_aim_marker()   # the aim may have changed since the last frame
+        pitcher = self.game.current_pitcher
+        aim = (pitcher.aimed_at(self._aim_px()) if self.aim_on
+               else contextlib.nullcontext())
+        with aim:
+            pitcher.pitch(self._create_pitch_simulation, chosen_pitch)
+        if self.aim_on:
+            # A click queued during the follow-through would land on the
+            # next frame and move the crosshair the player didn't touch.
+            pygame.event.clear(pygame.MOUSEBUTTONDOWN)
 
     def _create_pitch_simulation(self, release_point, pitchername, speed_mph, pfx_x, pfx_z, target_x, target_y, pitchtype):
         """Create and start a pitch simulation."""
@@ -1087,6 +1223,7 @@ class SandboxGameplayState(GameState):
         """Render the sandbox gameplay state."""
         screen.fill("black")
         self.game.current_pitcher.draw_pitcher(0, 0)
+        self._sync_aim_marker()
         self.game.field_renderer.draw_strikezone()
         self.game.field_renderer.draw_field(self.game.scoreKeeper.get_bases())
         self.game.batter.draw_stance(1)
@@ -1102,27 +1239,49 @@ class SandboxGameplayState(GameState):
         if self.game._challenge_window_active() and not self.game.abs_overlay.is_active():
             GameplayState._draw_abs_challenge_prompt(self, screen)
 
+    def render_overlay(self, screen):
+        """The sidebar goes above the HUD, as the widgets it replaces did."""
+        if self._sidebar_shown():
+            self._buttons.set(self.buttons())
+            self._buttons.draw(screen)
+
 
 class GameDayState(GameState):
     """Entry screen for GameDay mode - a full 9-inning simulated game."""
 
-    CARD_RECT = pygame.Rect(310, 220, 660, 280)
-
     def __init__(self, game):
         super().__init__(game)
-        from strikefactor.ui.pitcher_carousel import PitcherCarousel
-        self.carousel = PitcherCarousel(
+        self._has_resume = False
+        self.select = PitcherSelect(
             self.game.pitcher_manager,
-            self.game.ui_manager,
-            default='yamamoto',
+            header="=== GAMEDAY · SETUP ===",
+            subtitle="9 INN · CHOOSE YOUR OPPONENT",
+            extras=self._extra_buttons,
+            show_record=True,
         )
-        self._gd_fonts = None
+        self.carousel = self.select.carousel
+
+    def _extra_buttons(self):
+        """RESUME only appears when there's an in-progress game to resume."""
+        extras = [('gameday_past_games', "PAST GAMES")]
+        if self._has_resume:
+            extras.insert(0, ('gameday_resume', "RESUME"))
+        return extras
+
+    def buttons(self):
+        return self.select.buttons()
 
     def enter(self):
         """Show the gameday entry screen."""
         # Reset carousel to the default starter each time the screen opens.
-        self.carousel.reset('yamamoto')
-        self.game.ui_manager.set_visibility_state('gameday_start')
+        self.select.reset('yamamoto')
+        # Read once per visit, not per frame: it opens the sessions file.
+        try:
+            from strikefactor.data import gameday_sessions
+            self._has_resume = bool(gameday_sessions.load_sessions())
+        except Exception as e:
+            self._has_resume = False
+            print(f"[gameday] resume-button visibility check failed: {e}")
 
     def exit(self):
         """Clean up gameday state."""
@@ -1134,80 +1293,35 @@ class GameDayState(GameState):
 
     def handle_event(self, event):
         """Handle events - carousel navigation, start, keyboard shortcuts."""
-        self.game.ui_manager.process_events(event)
 
         if event.type == pygame.QUIT:
             return False
 
-        if event.type == pygame.KEYDOWN:
-            if event.key == pygame.K_LEFT:
-                self.carousel.prev()
-            elif event.key == pygame.K_RIGHT:
-                self.carousel.next()
-            elif event.key in (pygame.K_RETURN, pygame.K_KP_ENTER):
-                self._confirm_selection()
-
-        if event.type == pygame_gui.UI_BUTTON_PRESSED:
-            buttons = self.game.ui_manager.buttons
-            if event.ui_element == buttons.get('start_gameday'):
-                self._confirm_selection()
-            elif event.ui_element == buttons.get('gameday_prev_pitcher'):
-                self.carousel.prev()
-            elif event.ui_element == buttons.get('gameday_next_pitcher'):
-                self.carousel.next()
-            elif event.ui_element == buttons.get('gameday_resume'):
-                self.game.enter_gameday_resume()
-            elif event.ui_element == buttons.get('gameday_past_games'):
-                self.game.enter_gameday_history()
+        action = self.select.handle_event(event)
+        if action == 'confirm':
+            self._confirm_selection()
+        elif action == 'back':
+            self.game.return_to_mode_select()
+        elif action == 'gameday_resume':
+            self.game.enter_gameday_resume()
+        elif action == 'gameday_past_games':
+            self.game.enter_gameday_history()
         return True
 
     def _confirm_selection(self):
         """Commit the chosen starter and advance into the game."""
-        starter = self.carousel.get_selected()
+        starter = self.select.selected()
         self.game.inning_ended = False
         self.game.start_gameday_with_starter(starter)
 
-    def _ensure_fonts(self):
-        """Lazily build the shared GameDay pixel font set."""
-        if not hasattr(self, '_gd_fonts') or self._gd_fonts is None:
-            self._gd_fonts = gdt.load_fonts()
-        return self._gd_fonts
-
     def render(self, screen):
         """Render the gameday entry screen."""
-        screen.fill((0, 0, 0))
-        f = self._ensure_fonts()
-        margin_x = 40
-        screen_w = 1280
-        FG = (240, 240, 240)
-        DIM = (140, 140, 140)
-        DIVIDER = (60, 60, 60)
-
-        # --- Header chrome ---
-        header = f['micro'].render("=== GAMEDAY · SETUP ===", True, FG)
-        screen.blit(header, (margin_x, 20))
-        brand = f['micro'].render("StrikeFactor 0.1", True, DIM)
-        screen.blit(brand, (screen_w - margin_x - brand.get_width(), 20))
-        pygame.draw.line(screen, DIVIDER,
-                         (margin_x, 44), (screen_w - margin_x, 44), 1)
-
-        # Subhead + headline
-        sub = f['micro'].render("9 INN · CHOOSE YOUR OPPONENT", True, DIM)
-        screen.blit(sub, (margin_x, 64))
-        head = f['huge'].render("STEP IN.", True, FG)
-        screen.blit(head, (margin_x, 84))
-
         # Career record (top-right under brand) — only show when present.
         record = GameDayManager.get_career_record()
+        note = ""
         if record['total'] > 0:
-            record_text = (f"RECORD  {record['wins']}W · "
-                           f"{record['losses']}L")
-            rec_surf = f['small'].render(record_text, True, FG)
-            screen.blit(rec_surf,
-                        (screen_w - margin_x - rec_surf.get_width(), 92))
-
-        # Pitcher carousel card
-        self.carousel.render(screen, self.CARD_RECT)
+            note = f"RECORD  {record['wins']}W · {record['losses']}L"
+        self.select.render(screen, note=note)
 
 
 class GameDayTransitionState(GameState):
@@ -1217,12 +1331,26 @@ class GameDayTransitionState(GameState):
     _BTN_PRIMARY_RECT = (780, 600, 440, 44)   # NEXT INNING / STEP IN / NEXT GAME
     _BTN_SECONDARY_RECT = (780, 650, 210, 32)  # GAME LOG
 
+    # The primary button is the phase: (action id, label).
+    _PRIMARY = {
+        "SHOW_SCORE": ('next_inning', "NEXT INNING  >"),
+        "SIMULATING": ('start_batting', "STEP IN  >"),
+        "FINAL": ('final_menu', "NEXT GAME  >"),
+    }
+    _BUTTON_ACTIONS = {
+        'next_inning': '_handle_next_inning',
+        'start_batting': '_start_player_batting',
+        'final_menu': '_return_to_menu',
+        'view_game_log': '_show_game_log',
+        'gameday_main_menu': '_abandon_to_menu',
+    }
+
     def __init__(self, game):
         super().__init__(game)
         self.phase = "SHOW_SCORE"  # Phases: SHOW_SCORE, SIMULATING, FINAL
         self.simulation_complete = False
         self.opponent_events = []
-        self._labels = []  # Track UILabels for cleanup
+        self._buttons = ButtonGroup()
         self._gd_fonts = None  # Lazy-init layout fonts
         self._pbp = None       # PlayByPlayPanel for the GAME LOG overlay
         self._pitching_box = None  # PitchingBoxPanel for the GAME LOG overlay
@@ -1230,45 +1358,35 @@ class GameDayTransitionState(GameState):
         self._log_tab = 0          # index into _LOG_TABS
         self._log_tab_rects = []   # [(rect, index)] for tab click hit-testing
 
-    def _place_button(self, btn, rect):
-        btn.set_relative_position(rect[:2])
-        btn.set_dimensions(rect[2:])
+    def buttons(self):
+        """The buttons this phase has. The game is over on the final screen,
+        so there is nothing left there to walk away from."""
+        action, label = self._PRIMARY[self.phase]
+        out = [
+            Button(action, label, pygame.Rect(self._BTN_PRIMARY_RECT),
+                   style='primary'),
+            Button('view_game_log', "GAME LOG",
+                   pygame.Rect(self._BTN_SECONDARY_RECT)),
+        ]
+        if self.phase != "FINAL":
+            out.append(Button('gameday_main_menu', "MAIN MENU",
+                              gdt.footer_back_rect()))
+        return out
 
-    def _setup_phase_ui(self):
-        """Position buttons and set visibility based on current phase."""
-        ui = self.game.ui_manager
-        primary = self._BTN_PRIMARY_RECT
-        secondary = self._BTN_SECONDARY_RECT
+    def _sync_buttons(self):
+        buttons = self.buttons()
+        self._buttons.default = buttons[0].action    # ENTER is the primary
+        self._buttons.set(buttons)
 
-        if self.phase == "FINAL":
-            ui.set_visibility_state('gameday_final')
-            self._place_button(ui.buttons['final_menu'], primary)
-            self._place_button(ui.buttons['view_game_log'], secondary)
-        elif self.phase == "SIMULATING":
-            ui.set_visibility_state('gameday_simulation')
-            self._place_button(ui.buttons['start_batting'], primary)
-            self._place_button(ui.buttons['view_game_log'], secondary)
-        else:
-            # SHOW_SCORE phase
-            ui.set_visibility_state('gameday_transition')
-            self._place_button(ui.buttons['next_inning'], primary)
-            self._place_button(ui.buttons['view_game_log'], secondary)
-
-    def _clear_labels(self):
-        """Kill all dynamic UILabels."""
-        for label in self._labels:
-            label.kill()
-        self._labels.clear()
+    def _abandon_to_menu(self):
+        """MAIN MENU mid-game. The half-inning autosave makes it resumable."""
+        self.game.return_to_mode_select()
 
     def enter(self):
         """Called when entering transition state."""
-        # Hide any lingering banners and panels
-        self.game.ui_manager.hide_banner()
-        self.game.ui_manager.hide_scouting_panel()
-        self.game.ui_manager.hide_lap_log_panel()
-
-        # Clean up labels from previous entry
-        self._clear_labels()
+        # Hide any lingering banner
+        self.game.banner.hide_banner()
+        self._buttons.clear_focus()
 
         # Determine what phase we're in
         gameday_mgr = self.game.gameday_manager
@@ -1311,9 +1429,6 @@ class GameDayTransitionState(GameState):
                     if new_pitcher:
                         self._load_and_switch_pitcher(new_pitcher)
 
-        # Position buttons and set visibility for current phase
-        self._setup_phase_ui()
-
         # Persist (or clear) the resumable session at this half-inning boundary.
         # FINAL games move to history (and clear their active session in
         # _save_result_once); every other boundary is a clean resume point.
@@ -1324,7 +1439,6 @@ class GameDayTransitionState(GameState):
 
     def exit(self):
         """Called when exiting this state."""
-        self._clear_labels()
         self._log_open = False
 
     def update(self, time_delta: float):
@@ -1372,7 +1486,6 @@ class GameDayTransitionState(GameState):
 
     def handle_event(self, event):
         """Handle events - button clicks for continuing."""
-        self.game.ui_manager.process_events(event)
 
         if event.type == pygame.QUIT:
             return False
@@ -1403,15 +1516,10 @@ class GameDayTransitionState(GameState):
                 self._close_game_log()
             return True
 
-        if event.type == pygame_gui.UI_BUTTON_PRESSED:
-            if event.ui_element == self.game.ui_manager.buttons.get('next_inning'):
-                self._handle_next_inning()
-            elif event.ui_element == self.game.ui_manager.buttons.get('start_batting'):
-                self._start_player_batting()
-            elif event.ui_element == self.game.ui_manager.buttons.get('view_game_log'):
-                self._show_game_log()
-            elif event.ui_element == self.game.ui_manager.buttons.get('final_menu'):
-                self._return_to_menu()
+        self._sync_buttons()
+        action = self._buttons.handle_event(event)
+        if action is not None:
+            getattr(self, self._BUTTON_ACTIONS[action])()
         return True
 
     def _simulate_opponent_half_inning(self):
@@ -1440,7 +1548,6 @@ class GameDayTransitionState(GameState):
         if gameday_mgr.game_over:
             self.phase = "FINAL"
             self._save_result_once()
-            self.game.ui_manager.set_visibility_state('gameday_final')
         else:
             # Between-inning relief check (lower threshold — clean break)
             if gameday_mgr.should_consider_player_relief_pitcher(between_innings=True):
@@ -1489,7 +1596,6 @@ class GameDayTransitionState(GameState):
         if self.game.gameday_manager.game_over:
             self.phase = "FINAL"
             self._save_result_once()
-            self._setup_phase_ui()
             return
 
         # Check if we need to simulate opponent or start player batting
@@ -1497,7 +1603,6 @@ class GameDayTransitionState(GameState):
             # Top of new inning - simulate opponent first
             self.phase = "SIMULATING"
             self._simulate_opponent_half_inning()
-            self._setup_phase_ui()
         else:
             # Bottom of inning - player bats
             self._start_player_batting()
@@ -1544,13 +1649,12 @@ class GameDayTransitionState(GameState):
             self._pitching_box = PitchingBoxPanel(f)
         self._pitching_box.set_sides(self._pitching_sides(),
                                      live=not gameday_mgr.game_over)
+        # Modal by construction: `handle_event` returns before it reaches the
+        # phase buttons while this is set, and the veil is drawn over them.
         self._log_open = True
-        # Modal: hide the phase buttons so they can't be clicked through the veil.
-        self.game.ui_manager.set_visibility_state('pitching')
 
     def _close_game_log(self):
         self._log_open = False
-        self._setup_phase_ui()
 
     def _pitching_sides(self):
         """Build both staffs for the pitching box, opponent first (the order the
@@ -1621,11 +1725,10 @@ class GameDayTransitionState(GameState):
                         gdt.DIM_SOFT, align='center')
 
     def _return_to_menu(self):
-        """Return to main menu."""
+        """NEXT GAME: close this one out and go back to GameDay's setup."""
         self.game.current_pitcher.clear_fatigue_stats()
-        self.game.in_gameday_mode = False
-        self.game.gameday_manager = None
-        self.game.set_menu_state(0)
+        self.game._teardown_active_session()
+        self.game.enter_gameday_mode()
 
     # ============================================================
     # Refreshed GameDay layout — monochrome retro/CRT aesthetic.
@@ -1641,7 +1744,6 @@ class GameDayTransitionState(GameState):
     _FG = gdt.FG
     _DIM = gdt.DIM
     _DIM_SOFT = gdt.DIM_SOFT
-    _DIVIDER = gdt.DIVIDER
 
     # Hit / out classification reused across screens. Composed from
     # `strikefactor.outcomes` so a new outcome joins one group there rather
@@ -1752,39 +1854,12 @@ class GameDayTransitionState(GameState):
 
     def _draw_player_statline(self, screen, x, y, width):
         """Draw the AB / R / H / HR / RBI / BB / SO / AVG grid."""
-        f = self._ensure_fonts()
         stats = self._player_batting_stats()
-
-        # Section label
-        self._blit_text(screen, "YOUR LINE", f['micro'], (x, y), self._DIM)
-
-        cell_h = 60
-        cell_y = y + 22
-        n = len(self._STATLINE_COLS)
-        cell_w = width // n
-
-        # Outer border
-        pygame.draw.rect(screen, self._DIVIDER,
-                         pygame.Rect(x, cell_y, cell_w * n, cell_h), 1)
-
-        for i, col in enumerate(self._STATLINE_COLS):
-            cx = x + i * cell_w
-            # Vertical separator (except first column)
-            if i > 0:
-                pygame.draw.line(screen, self._DIVIDER,
-                                 (cx, cell_y), (cx, cell_y + cell_h), 1)
-            # Header (column label)
-            self._blit_text(screen, col, f['tiny'],
-                            (cx + cell_w // 2, cell_y + 6),
-                            self._DIM, align='center')
-            # Value
-            value = stats[col]
-            text = f"{value:.3f}".lstrip('0') if col == 'AVG' else str(value)
-            self._blit_text(screen, text, f['big'],
-                            (cx + cell_w // 2, cell_y + 24),
-                            self._FG, align='center')
-
-        return cell_y + cell_h
+        cells = [(col, f"{stats[col]:.3f}".lstrip('0') if col == 'AVG'
+                  else str(stats[col]))
+                 for col in self._STATLINE_COLS]
+        return gdt.draw_stat_grid(screen, self._ensure_fonts(), "YOUR LINE",
+                                  cells, x, y, width)
 
     # ---- Notable plays list -------------------------------------
 
@@ -2049,7 +2124,12 @@ class GameDayTransitionState(GameState):
             self._render_active(screen)
 
         if self._log_open:
+            # The phase buttons are left out rather than dimmed: the log's
+            # own key hints are drawn where they sit.
             self._render_game_log_overlay(screen)
+        else:
+            self._sync_buttons()
+            self._buttons.draw(screen, self._ensure_fonts())
 
 
 def _fmt_iso(iso, fmt):
@@ -2066,9 +2146,9 @@ class _GameDayListState(GameState):
 
     Owns fonts, paging, layout, hover/click hit-testing and the shared retro
     chrome. Subclasses supply the items, header/empty text, a per-row content
-    renderer, and the activation handler. Page nav + back are pygame_gui
-    buttons (``gd_page_prev`` / ``gd_page_next`` / ``gd_list_back``) plus
-    Left/Right/Esc keyboard fallbacks; rows are clicked directly.
+    renderer, and the activation handler. Page nav + back are footer buttons
+    (``gd_page_prev`` / ``gd_page_next`` / ``gd_list_back``) with
+    Left/Right/Esc as their keys; rows are clicked directly.
     """
 
     PAGE_SIZE = 7
@@ -2082,7 +2162,6 @@ class _GameDayListState(GameState):
     SUBTITLE = ""
     EMPTY_TEXT = "NOTHING HERE YET"
     ACTION_LABEL = "OPEN ›"
-    VISIBILITY_STATE = 'gameday_history'
 
     def __init__(self, game):
         super().__init__(game)
@@ -2090,12 +2169,43 @@ class _GameDayListState(GameState):
         self.items = []
         self.page = 0
         self._row_rects = []  # list of (pygame.Rect, item) for hit-testing
+        self._buttons = ButtonGroup()
 
     # --- fonts ---
     def _f(self):
         if self._fonts is None:
             self._fonts = gdt.load_fonts()
         return self._fonts
+
+    # --- buttons ---
+    def buttons(self):
+        """BACK on the left margin, the pager on the right. A pager button
+        with nowhere to go is drawn disabled rather than removed, so the row
+        does not reflow between pages."""
+        prev_rect, next_rect = gdt.footer_row_right([150, 150])
+        return [
+            Button('gd_list_back', "<  BACK", gdt.footer_back_rect()),
+            Button('gd_page_prev', "<  PREV", prev_rect,
+                   enabled=self.page > 0),
+            Button('gd_page_next', "NEXT  >", next_rect,
+                   enabled=self.page < self._page_count() - 1),
+        ]
+
+    def _button_event(self, event):
+        """Run whichever footer button ``event`` fired. True if one did."""
+        self._buttons.set(self.buttons())
+        action = self._buttons.handle_event(event)
+        if action == 'gd_page_prev':
+            self.prev_page()
+        elif action == 'gd_page_next':
+            self.next_page()
+        elif action == 'gd_list_back':
+            self._on_back()
+        return action is not None
+
+    def _draw_buttons(self, screen):
+        self._buttons.set(self.buttons())
+        self._buttons.draw(screen, self._f())
 
     # --- hooks for subclasses ---
     def _load_items(self):
@@ -2116,7 +2226,7 @@ class _GameDayListState(GameState):
     def enter(self):
         self.items = self._load_items()
         self.page = 0
-        self.game.ui_manager.set_visibility_state(self.VISIBILITY_STATE)
+        self._buttons.clear_focus()
 
     def exit(self):
         pass
@@ -2144,7 +2254,6 @@ class _GameDayListState(GameState):
 
     # --- events ---
     def handle_event(self, event):
-        self.game.ui_manager.process_events(event)
         if event.type == pygame.QUIT:
             return False
 
@@ -2156,20 +2265,14 @@ class _GameDayListState(GameState):
             elif event.key == pygame.K_ESCAPE:
                 self._on_back()
 
+        if self._button_event(event):
+            return True
+
         if event.type == pygame.MOUSEBUTTONDOWN and event.button == 1:
             for rect, item in self._row_rects:
                 if rect.collidepoint(event.pos):
                     self._on_activate(item)
                     break
-
-        if event.type == pygame_gui.UI_BUTTON_PRESSED:
-            buttons = self.game.ui_manager.buttons
-            if event.ui_element == buttons.get('gd_page_prev'):
-                self.prev_page()
-            elif event.ui_element == buttons.get('gd_page_next'):
-                self.next_page()
-            elif event.ui_element == buttons.get('gd_list_back'):
-                self._on_back()
         return True
 
     # --- render ---
@@ -2187,6 +2290,7 @@ class _GameDayListState(GameState):
             gdt.blit_text(screen, self.EMPTY_TEXT, f['big'],
                           (gdt.SCREEN_W // 2, 320), gdt.DIM, align='center')
             self._render_footer(screen, f)
+            self._draw_buttons(screen)
             return
 
         mouse = self.game.get_mouse_pos()
@@ -2196,7 +2300,7 @@ class _GameDayListState(GameState):
             hover = rect.collidepoint(mouse)
             # Row frame — hover gets a faint fill + bright border + action hint.
             if hover:
-                pygame.draw.rect(screen, (18, 18, 18), rect)
+                pygame.draw.rect(screen, gdt.HOVER_BG, rect)
             pygame.draw.rect(screen, gdt.FG if hover else gdt.DIVIDER, rect, 1)
             self._render_row_content(screen, item, rect, f,
                                      gdt.FG if hover else gdt.DIM)
@@ -2208,6 +2312,7 @@ class _GameDayListState(GameState):
             y += self._ROW_STRIDE
 
         self._render_footer(screen, f)
+        self._draw_buttons(screen)
 
     def _render_footer(self, screen, f):
         page_txt = f"PAGE {self.page + 1} / {self._page_count()}"
@@ -2227,7 +2332,6 @@ class GameDayResumeState(_GameDayListState):
     SUBTITLE = "PICK UP WHERE YOU LEFT OFF"
     EMPTY_TEXT = "NO SAVED GAMES"
     ACTION_LABEL = "RESUME ›"
-    VISIBILITY_STATE = 'gameday_resume'
 
     def _load_items(self):
         from strikefactor.data import gameday_sessions
@@ -2268,7 +2372,6 @@ class GameDayHistoryState(_GameDayListState):
     SUBTITLE = "YOUR COMPLETED GAMES"
     EMPTY_TEXT = "NO GAMES YET"
     ACTION_LABEL = "VIEW ›"
-    VISIBILITY_STATE = 'gameday_history'
 
     # Detail-view layout: the play-by-play panel fills the space between the
     # linescore and the BACK button (which lives at y=640).
@@ -2442,7 +2545,6 @@ class GameDayHistoryState(_GameDayListState):
         self._detail_plays = self._play_log_from_game(item)
         self._detail_hits = self._history_hit_totals(item)
         self._panel().set_plays(self._detail_plays)
-        self.game.ui_manager.set_visibility_state('gameday_history_detail')
 
     # --- result chip + row ---
     @staticmethod
@@ -2487,25 +2589,35 @@ class GameDayHistoryState(_GameDayListState):
 
         # Detail view: the play-by-play panel owns scroll/filter input; the
         # only other action is "back" (returns to the list).
-        self.game.ui_manager.process_events(event)
         if event.type == pygame.QUIT:
             return False
         if self._panel().handle_event(event):
             return True
-        back = (event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE)
-        if event.type == pygame_gui.UI_BUTTON_PRESSED:
-            back = back or (event.ui_element ==
-                            self.game.ui_manager.buttons.get('gd_list_back'))
-        if back:
-            self.selected = None
-            self.game.ui_manager.set_visibility_state('gameday_history')
+        if event.type == pygame.KEYDOWN and event.key == pygame.K_ESCAPE:
+            self._on_back()
+        else:
+            self._button_event(event)
         return True
+
+    def buttons(self):
+        """The detail view has one way out; the list keeps its pager."""
+        if self.selected is None:
+            return super().buttons()
+        return [Button('gd_list_back', "<  BACK", gdt.footer_back_rect())]
+
+    def _on_back(self):
+        """Back out one level: detail to the list, the list to setup."""
+        if self.selected is None:
+            super()._on_back()
+        else:
+            self.selected = None
 
     def render(self, screen):
         if self.selected is None:
             super().render(screen)
         else:
             self._render_detail(screen, self.selected)
+            self._draw_buttons(screen)
 
     def _render_detail(self, screen, game):
         screen.fill(gdt.BG)

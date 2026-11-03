@@ -353,3 +353,18 @@ def test_the_error_amber_has_one_definition():
 def test_a_hit_and_the_bases_it_is_worth_cannot_disagree():
     assert set(outcomes.HIT_BASES) == set(outcomes.HIT_OUTCOMES)
     assert sorted(outcomes.HIT_BASES.values()) == [1, 2, 3, 4]
+
+
+def test_every_outcome_label_is_drawable_in_the_game_font():
+    # A character the pixel font lacks is drawn as an empty box. The double
+    # play label once joined its fielders with an en dash and showed one.
+    from fontTools.ttLib import TTFont
+
+    from strikefactor.config import get_path
+    cmap = TTFont(get_path("ui/font/8bitoperator_jve.ttf")).getBestCmap()
+    every_fielder = ("P", "C", "1B", "2B", "3B", "SS", "LF", "CF", "RF")
+    labels = {outcomes.display_name(o) for o in outcomes.TERMINAL_OUTCOMES}
+    labels.add(outcomes.play_display_name(outcomes.GROUNDOUT, True, every_fielder))
+    missing = {(label, f"U+{ord(ch):04X}") for label in labels for ch in label
+               if ord(ch) not in cmap}
+    assert not missing

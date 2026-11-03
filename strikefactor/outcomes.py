@@ -46,6 +46,7 @@ POP_UP = "POP UP"
 # every PA/AB/BIP denominator and in none of the numerators. That falls out of
 # the grouping below rather than needing a special case anywhere.
 REACHED_ON_ERROR = "REACHED ON ERROR"
+FIELDERS_CHOICE = "FIELDER'S CHOICE"
 
 STRIKEOUT = "strikeout"
 WALK = "walk"
@@ -58,7 +59,8 @@ WALK = "walk"
 
 HIT_OUTCOMES = (SINGLE, DOUBLE, TRIPLE, HOME_RUN)
 BATTED_OUT_OUTCOMES = (GROUNDOUT, FLYOUT, LINEOUT, POP_UP)
-REACH_OUTCOMES = (REACHED_ON_ERROR,)
+ERROR_OUTCOMES = (REACHED_ON_ERROR,)
+REACH_OUTCOMES = ERROR_OUTCOMES + (FIELDERS_CHOICE,)
 
 IN_PLAY_OUTCOMES = HIT_OUTCOMES + BATTED_OUT_OUTCOMES + REACH_OUTCOMES
 OUT_OUTCOMES = (STRIKEOUT,) + BATTED_OUT_OUTCOMES
@@ -103,6 +105,17 @@ def display_name(outcome):
     return DISPLAY_NAMES.get(outcome, (outcome or "").upper())
 
 
+def play_display_name(outcome, double_play=False, fielding_sequence=()):
+    if not double_play:
+        return display_name(outcome)
+    numbers = {"P": "1", "C": "2", "1B": "3", "2B": "4", "3B": "5",
+               "SS": "6", "LF": "7", "CF": "8", "RF": "9"}
+    # A plain hyphen, as a scorebook writes it (6-4-3). The game's pixel font
+    # has no en dash and would draw a missing-glyph box in its place.
+    sequence = "-".join(numbers[role] for role in fielding_sequence)
+    return "DOUBLE PLAY" + (f" · {sequence}" if sequence else "")
+
+
 # ---- What colour it is ------------------------------------------------------
 #
 # The amber was written out as a literal in four separate files, and the
@@ -124,6 +137,7 @@ COLORS = {
     LINEOUT: (198, 169, 251),              # Purple
     POP_UP: (198, 169, 251),               # Purple
     REACHED_ON_ERROR: (214, 158, 46),      # Amber — reached, but not earned
+    FIELDERS_CHOICE: (198, 169, 251),
 }
 
 # The three trail-dot colours `_finalize_batted_ball` picks between. Named
