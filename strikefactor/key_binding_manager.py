@@ -58,6 +58,11 @@ class KeyBindingManager:
         try:
             with open(self.settings_file, 'r') as f:
                 bindings = json.load(f)
+                if not isinstance(bindings, dict):
+                    # Valid JSON that is not an object would crash startup.
+                    print(f"Warning: key bindings file {self.settings_file} does "
+                          f"not hold an object; falling back to defaults.")
+                    return self.default_bindings.copy()
                 for key, value in self.default_bindings.items():
                     if key not in bindings:
                         if key in (KeyAction.SEND_RUNNER.value, KeyAction.RETREAT_RUNNER.value,

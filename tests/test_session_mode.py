@@ -22,7 +22,8 @@ def _game(menu_state='sandbox_menu'):
         game_mode=None, menu_state=menu_state, in_gameday_mode=False,
         current_gamemode=0, inning_ended=False, gameday_manager=None,
         settings_manager=SimpleNamespace(
-            get_difficulty=lambda: SimpleNamespace(value='amateur')),
+            get_difficulty=lambda: SimpleNamespace(value='amateur'),
+            set_session_difficulty=lambda value: calls.append(('session_difficulty', value))),
         pitcher_manager=SimpleNamespace(set_current_pitcher=lambda name: None,
                                         save_all_ai=lambda: None),
         game_stats=SimpleNamespace(reset_game_stats=lambda: None),
@@ -91,3 +92,49 @@ def test_closing_the_window_between_sessions_writes_no_profile():
     game, calls = _game()
     game.cleanup()
     assert calls == [('db_end',)]
+
+
+# ---- An ABS challenge belongs to the session (and half) it was opened in ----
+
+def test_a_challenge_left_open_does_not_follow_the_player_into_a_new_session():
+    """A challenge holds a snapshot of the game at its pitch. Pressing C in a
+    new session within the window used to restore the old one over it."""
+    game, _ = _game()
+    game.pending_challenge = {'snapshot': 'the last session at its last pitch'}
+    game._teardown_active_session()
+    assert game.pending_challenge is None
+
+    game.pending_challenge = {'snapshot': 'still open somehow'}
+    game._begin_session('arcade')
+    assert game.pending_challenge is None
+
+
+def test_a_challenge_left_open_does_not_follow_the_player_into_the_next_half():
+    from strikefactor.gameplay.game_states import GameDayTransitionState
+
+    state = object.__new__(GameDayTransitionState)
+    state._buttons = SimpleNamespace(clear_focus=lambda: None)
+    state.game = SimpleNamespace(
+        banner=SimpleNamespace(hide_banner=lambda: None),
+        pending_challenge={'snapshot': 'the third out of the half just ended'},
+        _resuming_gameday_phase=None,
+        autosave_gameday_session=lambda phase: None,
+        gameday_manager=SimpleNamespace(
+            game_over=False, is_walkoff=False, is_top_inning=False,
+            current_inning=3, player_inning_scores=[0, 0], player_score=0,
+            opponent_score=0, session_uuid='s',
+            should_consider_relief_pitcher=lambda: False),
+    )
+    state.enter()
+    assert state.phase == "SHOW_SCORE"
+    assert state.game.pending_challenge is None
+
+
+def test_leaving_ends_a_session_difficulty_after_saving_under_it():
+    """A resumed GameDay game plays at its own difficulty; its profile is filed
+    under that one, and the player's own setting is back once they leave."""
+    game, calls = _game()
+    game._enter_sandbox_gameplay('sale')
+    calls.clear()
+    game._teardown_active_session()
+    assert calls.index(('save', 'sandbox')) < calls.index(('session_difficulty', None))

@@ -8,6 +8,7 @@ import pygame.gfxdraw
 from strikefactor import outcomes
 from strikefactor.engine import contact_audio
 from strikefactor.gameplay import bat_contact, bat_path, defense, spray
+from strikefactor.pitchers.pitcher import count_state as pitch_count_state
 from strikefactor.utils.physics import collision
 from strikefactor.utils.pitch_physics import DEFAULT_CAMERA, PitchTrajectory, UmpireCamera
 
@@ -169,6 +170,8 @@ class PitchSimulation:
         # New pitch started → previous-pitch challenge window closes.
         if hasattr(self.game, 'clear_pending_challenge'):
             self.game.clear_pending_challenge()
+
+        self._count_gameday_pitch()
 
         # Initialize ball at projected release position
         proj = self.camera.project(*release_pos_3d)
@@ -355,6 +358,22 @@ class PitchSimulation:
 
         # Get engine FPS setting for physics calculations
         self.engine_fps = self.game.settings_manager.get_engine_fps()
+
+    def _count_gameday_pitch(self):
+        """Count this pitch against GameDay's opposing pitcher, as it is thrown.
+
+        Its speed and movement were already set from his fatigue before this
+        one, so the next pitch is the first to feel it. The row records the
+        count and fatigue entering this pitch. The count used to grow only
+        when an at-bat ended, so fatigue and the recorded count stood still
+        through every at-bat.
+        """
+        self.pitcher_pitch_count = self.pitcher_fatigue = None
+        manager = getattr(self.game, 'gameday_manager', None)
+        if getattr(self.game, 'in_gameday_mode', False) and manager is not None:
+            stats = manager.get_active_pitcher_stats()
+            self.pitcher_pitch_count, self.pitcher_fatigue = stats.pitch_count, stats.fatigue
+            stats.record_pitch()
 
     def _player_aimed(self):
         """True for a pitch thrown at the player's spot (Pitcher.aimed_at)."""
@@ -884,7 +903,7 @@ class PitchSimulation:
             if self.game.in_gameday_mode:
                 runs_scored = self.game.scoreKeeper.get_score() - score_before
                 self.game.gameday_manager.record_player_at_bat(
-                    hit_string, runs_scored=runs_scored, pitches_thrown=self.game.pitchnumber,
+                    hit_string, runs_scored=runs_scored,
                     play=self.game.scoreKeeper.last_play,
                     charges=self.game.scoreKeeper.take_charges(),
                 )
@@ -895,7 +914,6 @@ class PitchSimulation:
             # _finalize_batted_ball sets them based on the animation's
             # resolution.
             self._pending_hit_score_before = score_before
-            self._pending_hit_pitchnumber = self.game.pitchnumber
             # Placeholder; replaced with the classified outcome at finalize.
             self.outcome = hit_string
             self.new_entry['isHit'] = hit_string
@@ -918,7 +936,6 @@ class PitchSimulation:
         # ended without resolving — shouldn't happen, but treat as SINGLE).
         classified = getattr(self.hit_animation, 'classified_outcome', None) or "SINGLE"
         score_before = getattr(self, '_pending_hit_score_before', 0)
-        pitches_thrown = getattr(self, '_pending_hit_pitchnumber', 0)
 
         # Mirror the animation's fielding record for the DB (schema v7). The
         # margin stays None unless a race actually decided the play, which is
@@ -1017,10 +1034,13 @@ class PitchSimulation:
         if self.game.in_gameday_mode:
             runs_scored = self.game.scoreKeeper.get_score() - score_before
             self.game.gameday_manager.record_player_at_bat(
-                classified, runs_scored=runs_scored, pitches_thrown=pitches_thrown,
+                classified, runs_scored=runs_scored,
                 play=play, charges=self.game.scoreKeeper.take_charges(),
             )
-            if not is_out or (running_result is not None and play.runs > 0):
+            # Any play that scores can win it — a sacrifice fly or an RBI
+            # groundout included — whether its runners were played live
+            # (`running_result`) or moved by the classified outcome.
+            if not is_out or play.runs > 0:
                 self._check_walkoff()
 
         # No sound here — the contact sound already played at impact via
@@ -1176,7 +1196,7 @@ class PitchSimulation:
             # Record in gameday mode
             if self.game.in_gameday_mode:
                 self.game.gameday_manager.record_player_at_bat(
-                    'WALK', runs_scored=runs_scored, pitches_thrown=self.game.pitchnumber,
+                    'WALK', runs_scored=runs_scored,
                     play=self.game.scoreKeeper.last_play,
                     charges=self.game.scoreKeeper.take_charges(),
                 )
@@ -1232,7 +1252,7 @@ class PitchSimulation:
 
             # Record in gameday mode
             if self.game.in_gameday_mode:
-                self.game.gameday_manager.record_player_at_bat('STRIKEOUT', runs_scored=0, pitches_thrown=self.game.pitchnumber)
+                self.game.gameday_manager.record_player_at_bat('STRIKEOUT', runs_scored=0)
 
             self.game.pitchnumber = 0
             self.game.currentstrikes = 0
@@ -1617,7 +1637,11 @@ class PitchSimulation:
         did_swing = self.game.swing_started > 0
         is_first_pitch = (self.game.pitchnumber <= 1 and
                           self.previous_state[1] == 0 and self.previous_state[2] == 0)
-        count_state = self.game.current_pitcher._get_count_state()
+        # The count the pitch was thrown in. The live count has already moved
+        # on (or reset, when the pitch ended the at-bat), so reading it here
+        # filed a strikeout at 1-2 under 'first_pitch'.
+        count_state = pitch_count_state(self.new_data_entry['Balls'],
+                                        self.new_data_entry['Strikes'])
         self.game.batter_profile.record_pitch(
             ball_x=self.game.ball[0],
             ball_y=self.game.ball[1],

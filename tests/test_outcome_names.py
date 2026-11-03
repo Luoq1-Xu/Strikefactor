@@ -286,7 +286,7 @@ def _gameday_at_bat(outcome, streak=2):
     gm.player_consecutive_hits = streak
     stats = gm.get_active_pitcher_stats()
     stats.consecutive_hits = 3
-    gm.record_player_at_bat(outcome, runs_scored=0, pitches_thrown=4)
+    gm.record_player_at_bat(outcome, runs_scored=0)
     return gm, stats
 
 

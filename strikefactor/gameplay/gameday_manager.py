@@ -859,14 +859,18 @@ class GameDayManager:
         return outcome, runs_scored
 
     def record_player_at_bat(self, outcome: str, runs_scored: int = 0,
-                             pitches_thrown: int = 0, play=None, charges=None):
+                             play=None, charges=None):
         """
         Record a player's at-bat result.
+
+        The at-bat's pitches are not counted here. Each one is counted as it
+        is thrown (`PitchSimulation.__init__`), so the pitcher's fatigue and
+        each pitch's recorded count are current within the at-bat, not only
+        once it ends.
 
         Args:
             outcome: The result (e.g., "SINGLE", "STRIKEOUT", etc.)
             runs_scored: Number of runs scored on this play
-            pitches_thrown: Number of pitches thrown during this at-bat
             play: The scorer's ruling on the play (`ScoreKeeper.last_play`):
                 runs batted in, and whether it was a sacrifice fly. None when
                 the play never reached the scorekeeper, as a strikeout does
@@ -877,11 +881,6 @@ class GameDayManager:
         """
         # Update opponent pitcher stats (player is batting against opponent pitcher)
         pitcher_stats = self.get_active_pitcher_stats()
-
-        # Record pitches thrown
-        for _ in range(pitches_thrown):
-            pitcher_stats.record_pitch()
-
         pitcher_stats.record_outcome(outcome)
         running_outs = getattr(play, "running_outs", 0) if play is not None else 0
         pitcher_stats.outs_recorded += running_outs

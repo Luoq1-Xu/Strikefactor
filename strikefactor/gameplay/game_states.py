@@ -1387,6 +1387,9 @@ class GameDayTransitionState(GameState):
         # Hide any lingering banner
         self.game.banner.hide_banner()
         self._buttons.clear_focus()
+        # The half-inning is over. A challenge still open on its last pitch
+        # would otherwise roll the game back to that pitch from the next half.
+        self.game.pending_challenge = None
 
         # Determine what phase we're in
         gameday_mgr = self.game.gameday_manager

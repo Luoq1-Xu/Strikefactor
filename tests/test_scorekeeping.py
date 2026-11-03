@@ -383,10 +383,10 @@ def test_an_unearned_run_is_on_the_pitchers_r_and_not_his_er():
     sk.set_pitcher(gm.current_pitcher_name)
 
     sk.update_hit_event(ERROR, outs=2, clean_outcome="GROUNDOUT")
-    gm.record_player_at_bat("REACHED ON ERROR", runs_scored=0, pitches_thrown=3,
+    gm.record_player_at_bat("REACHED ON ERROR", runs_scored=0,
                             play=sk.last_play, charges=sk.take_charges())
     sk.update_hit_event("HOME RUN", outs=2)
-    gm.record_player_at_bat("HOME RUN", runs_scored=2, pitches_thrown=2,
+    gm.record_player_at_bat("HOME RUN", runs_scored=2,
                             play=sk.last_play, charges=sk.take_charges())
 
     stats = gm.get_active_pitcher_stats()
@@ -400,20 +400,20 @@ def test_a_run_ruled_earned_later_reaches_the_line_on_the_later_play():
     gm = _gameday()
     sk = _inning(("pitcher", gm.current_pitcher_name), ("SINGLE", 0),
                  _error(0, out="FLYOUT", bases=2), ("FLYOUT", 0))
-    gm.record_player_at_bat("FLYOUT", runs_scored=1, pitches_thrown=1,
+    gm.record_player_at_bat("FLYOUT", runs_scored=1,
                             play=sk.last_play, charges=sk.take_charges())
     stats = gm.get_active_pitcher_stats()
     assert (stats.runs_allowed, stats.earned_runs) == (1, 0)
 
     sk.update_hit_event("HOME RUN", outs=1)
-    gm.record_player_at_bat("HOME RUN", runs_scored=2, pitches_thrown=1,
+    gm.record_player_at_bat("HOME RUN", runs_scored=2,
                             play=sk.last_play, charges=sk.take_charges())
     assert (stats.runs_allowed, stats.earned_runs) == (3, 2)
 
 
 def test_recording_an_at_bat_without_the_scorer_charges_every_run_as_earned():
     gm = _gameday()
-    gm.record_player_at_bat("HOME RUN", runs_scored=1, pitches_thrown=1)
+    gm.record_player_at_bat("HOME RUN", runs_scored=1)
     stats = gm.get_active_pitcher_stats()
     assert (stats.runs_allowed, stats.earned_runs) == (1, 1)
     assert gm.event_log[-1].rbi == 1
