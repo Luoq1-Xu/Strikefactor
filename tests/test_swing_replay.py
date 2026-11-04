@@ -772,6 +772,12 @@ def overlay():
 
 
 def _run(overlay, record, ms=4000, step=16):
+    """Play the review for up to `ms`, rendering every frame.
+
+    Stops at the end of the clip: playback pauses there and every later frame
+    is the same frozen picture, which used to be a third to a half of the
+    frames these tests rendered.
+    """
     surface = pygame.Surface(SCREEN)
     overlay.trigger(record=record)
     playback = Playback(overlay.review_duration_ms(), speed=1 / 12)
@@ -781,6 +787,8 @@ def _run(overlay, record, ms=4000, step=16):
         surface.fill((0, 0, 0))
         overlay.render_review(surface, REVIEW_RECT, playback.time_ms)
         elapsed += step
+        if playback.paused:
+            break
     return surface
 
 

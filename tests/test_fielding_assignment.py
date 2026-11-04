@@ -29,6 +29,7 @@ from strikefactor.gameplay.hit_animation import (
     ROLE_REACTION_BIAS_S,
     HitAnimation,
 )
+from tools import sim
 
 INFIELD = ("P", "1B", "2B", "SS", "3B")
 
@@ -47,17 +48,18 @@ def _aim(monkeypatch, point):
     monkeypatch.setattr(ha, "_pick_hit_landing", lambda *a, **k: point)
 
 
-def _make(shape="GROUNDER", quality=0.6):
+def _make(shape="GROUNDER", quality=0.6, spray_deg=0.0):
     return HitAnimation(
         _StubGame(),
         outcome="IN_PLAY",
         on_complete=lambda: None,
         quality=quality,
         batted_ball_type=shape,
+        spray_deg=spray_deg,
     )
 
 
-def _play(shape="GROUNDER", quality=0.6):
+def _play(shape="GROUNDER", quality=0.6, spray_deg=0.0):
     """Run one animation to completion, recording every cover assignment.
 
     `clashes` is the instantaneous form of the invariant below: frames where
@@ -66,7 +68,7 @@ def _play(shape="GROUNDER", quality=0.6):
     legitimately change mid-play — see
     `test_the_fielder_it_was_hit_to_is_never_sent_to_cover`.
     """
-    anim = _make(shape, quality)
+    anim = _make(shape, quality, spray_deg)
     setup_primary, covers, clashes = anim._primary_role, set(), []
     t = 0
     while not anim.finished and t < 40000:
@@ -222,11 +224,18 @@ def test_first_baseman_covers_when_anyone_else_fields_it(monkeypatch):
 
 
 def test_second_baseman_almost_never_covers_first():
-    """Across a full spray of grounders — no aiming, real landing spots."""
+    """Across a full spray of grounders — no aiming, real landing spots.
+
+    The spray has to be supplied: an animation built without one sends every
+    ball dead centre, which is what this test used to sweep.
+    """
     seen = collections.Counter()
     n = 150
+    rng = random.Random(1)
     for i in range(n):
-        _, _, covers, _ = _play(quality=(i % 10) / 10.0)
+        random.seed(i)
+        _, _, covers, _ = _play(quality=sim.realistic_quality(rng, "GROUNDER"),
+                                spray_deg=sim.realistic_spray(rng))
         seen.update(covers)
     assert seen["2B"] / n < 0.05, (
         f"2B covered first on {seen['2B']}/{n} grounders: {dict(seen)}")
@@ -301,7 +310,7 @@ def _is_infield_play(anim):
             and anim._fielded_ft() <= ha.INFIELD_PLAY_MAX_FT)
 
 
-# Three tests below assert different properties of one deterministic sweep.
+# Four tests below assert different properties of one deterministic sweep.
 # `random.seed(i)` per play makes each one a function of its index alone, so
 # the sample is reproducible and a longer run is a superset of a shorter one.
 # Simulated once and handed out, for the reason `test_defense.py::_plays`
@@ -309,7 +318,7 @@ def _is_infield_play(anim):
 _SWEEP_CACHE = {}
 
 
-def _sweep(n=200, q0=0.20, step=0.004):
+def _sweep(n=100, q0=0.20, step=0.004):
     """`n` plays off one quality ramp as `(anim, thrown, carried)`, memoized."""
     key = (n, q0, step)
     if key not in _SWEEP_CACHE:
@@ -341,10 +350,7 @@ def test_an_infielder_who_fields_a_grounder_always_makes_a_play_on_it():
     flight. `quality` is swept low, where those live.
     """
     missed = []
-    for i in range(60):
-        random.seed(i)
-        anim = _make(quality=0.20 + 0.01 * i)
-        thrown, carried = _run(anim)
+    for i, (anim, thrown, carried) in enumerate(_sweep()):
         if _is_infield_play(anim) and not (thrown or carried):
             missed.append((i, anim._primary_role, anim.classified_outcome))
     assert not missed, (

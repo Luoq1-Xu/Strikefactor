@@ -71,9 +71,18 @@ def _early_send(anim):
     assert not anim.send_runner()
 
 
-@pytest.mark.parametrize("step", [8, 16, 50, 250])
-@pytest.mark.parametrize("period", [16, 160, 400, 800])
-@pytest.mark.parametrize("level", ["sandlot", "minors", "league", "gold_glove"])
+_LEVELS = ["sandlot", "minors", "league", "gold_glove"]
+
+# Every (frame step, command period) pair, each run at one defense level picked
+# by a Latin square, so every level still meets every step and every period
+# exactly once. The full 4 x 4 x 4 grid was 64 runs and the slowest single
+# function in the suite; this keeps every pairwise interaction in 16.
+_EXCHANGE_CASES = [(step, period, _LEVELS[(i + j) % 4])
+                   for i, step in enumerate([8, 16, 50, 250])
+                   for j, period in enumerate([16, 160, 400, 800])]
+
+
+@pytest.mark.parametrize("step,period,level", _EXCHANGE_CASES)
 def test_alternating_send_and_retreat_cannot_sustain_an_endless_throw_exchange(step, period, level):
     anim = _animation(level=level)
     _early_send(anim)
@@ -235,10 +244,17 @@ def test_retreat_cannot_run_into_a_base_reserved_by_another_runner():
 
 
 
-@pytest.mark.parametrize("shape", ["LINER", "FLY", "POP_UP"])
-@pytest.mark.parametrize("bases,outs", [((), 0), ((1, 2, 3), 0), ((1, 2), 2)])
-@pytest.mark.parametrize("level", ["sandlot", "minors", "league", "gold_glove"])
-@pytest.mark.parametrize("hand", ["R", "L"])
+_SITUATIONS = [((), 0), ((1, 2, 3), 0), ((1, 2), 2)]
+
+# Every shape at every defense level, with the base/out situation and the hand
+# rotated through them so that every pair of values (shape x situation
+# included) still appears. The full product was 72 runs; this is 12.
+_NO_INPUT_CASES = [(shape, *_SITUATIONS[(i + j) % 3], level, "RL"[(i + j) % 2])
+                   for i, level in enumerate(_LEVELS)
+                   for j, shape in enumerate(["LINER", "FLY", "POP_UP"])]
+
+
+@pytest.mark.parametrize("shape,bases,outs,level,hand", _NO_INPUT_CASES)
 def test_manual_without_input_never_advances_more_than_one_base(shape, bases, outs, level, hand):
     anim = _animation("manual", shape=shape, bases=bases, outs=outs, level=level, hand=hand)
     anim.update(0)

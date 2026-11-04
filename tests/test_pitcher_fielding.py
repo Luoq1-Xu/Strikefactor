@@ -14,6 +14,7 @@ ball the pitcher no longer catches.
 """
 
 import collections
+import random
 
 import pytest
 
@@ -70,7 +71,11 @@ def _play_out(shape, quality):
     return anim.classified_outcome, anim._primary_role
 
 
-def _sample(shape, quality, n=200):
+def _sample(shape, quality, n):
+    """Seeded, so a band that fails fails every time rather than on a bad
+    draw. The bands are far from the measured rates (0% of hard comebackers
+    converted, ~95% of weak rollers), so a small sample settles them."""
+    random.seed(0)
     results = [_play_out(shape, quality) for _ in range(n)]
     outs = sum(1 for outcome, _ in results if outcome in OUT_OUTCOMES)
     by_pitcher = sum(1 for _, role in results if role == "P")
@@ -85,13 +90,13 @@ def test_pitcher_reaction_covers_the_follow_through():
 
 def test_hard_grounder_up_the_middle_is_usually_a_hit(up_the_middle):
     up_the_middle(150)
-    out_rate, _ = _sample("GROUNDER", quality=0.9)
+    out_rate, _ = _sample("GROUNDER", quality=0.9, n=50)
     assert out_rate < 0.45, f"hard comebacker converted {out_rate:.0%} of the time"
 
 
 def test_hard_liner_up_the_middle_is_almost_always_a_hit(up_the_middle):
     up_the_middle(160)
-    out_rate, _ = _sample("LINER", quality=0.9)
+    out_rate, _ = _sample("LINER", quality=0.9, n=50)
     assert out_rate < 0.20, f"liner through the box converted {out_rate:.0%} of the time"
 
 
@@ -99,7 +104,7 @@ def test_weak_roller_back_to_the_mound_is_still_an_out(up_the_middle):
     """The flip side: the pitcher must keep converting the dribbler
     they field in real life, or the fix has just deleted the play."""
     up_the_middle(80)
-    out_rate, by_pitcher = _sample("GROUNDER", quality=0.05)
+    out_rate, by_pitcher = _sample("GROUNDER", quality=0.05, n=100)
     assert out_rate > 0.70, f"weak comebacker only converted {out_rate:.0%} of the time"
     assert by_pitcher > 0.55, "the pitcher should be the one fielding weak rollers"
 

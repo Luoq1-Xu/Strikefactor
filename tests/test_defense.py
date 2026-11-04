@@ -502,9 +502,12 @@ _ball_in_play = sim.ball_in_play
 #
 # `tools.sim.sweep` owns the memoization and explains it. What matters here is
 # that the tests below deliberately assert *different* properties of the same
-# sample — four ask for `_misplayed(worst, 300, shape="GROUNDER")` verbatim and
-# three for `_sweep(worst, 200, seed=808)` — because a merged test that failed
-# would name six possible causes instead of one. One run, separate assertions.
+# sample — five read `_plays(worst, 300, 31, "GROUNDER")` and ten the
+# seed-808 sweeps — because a merged test that failed would name six possible
+# causes instead of one. One run, separate assertions. A test that only needs
+# *some* balls in play against a defense takes the seed-808 sweep for that
+# level rather than a seed of its own: every extra seed is another few hundred
+# full plays to simulate.
 #
 # It is the same sweep the calibration harness runs, which is the point of it
 # living outside this file: a band asserted here and a number quoted in
@@ -595,7 +598,7 @@ def test_a_misplay_is_rolled_once_and_latched():
     ball two frames later — the reasoning `_roll_pitcher_clean_field` gives
     for its own once-per-ball roll."""
     worst = d.profile_for(d.DefenseLevel.SANDLOT)
-    for anim in _misplayed(worst, 120)[:10]:
+    for anim in _misplayed(worst, 400, seed=808)[:10]:
         assert anim._misplay_rolled
         assert anim._misplay_kind in ("BOBBLE", "THROUGH", "MUFF")
         assert anim._misplay_role is not None
@@ -688,7 +691,7 @@ def test_a_muffed_catch_is_always_charged_as_an_error():
     """The counterfactual is unambiguous — the fielder was going to catch it,
     so the clean play was a certain out."""
     worst = d.profile_for(d.DefenseLevel.SANDLOT)
-    muffs = [a for a in _misplayed(worst, 400) if a._misplay_kind == "MUFF"]
+    muffs = [a for a in _misplayed(worst, 400, seed=808) if a._misplay_kind == "MUFF"]
     assert muffs, "no muffs in 400 balls against a sandlot defense"
     for anim in muffs:
         assert anim.is_error
@@ -700,7 +703,7 @@ def test_the_picture_and_the_record_cannot_disagree():
     this whole design is shaped to prevent. The label comes from the same
     branch as the fielding event, so a clean play can never carry it."""
     worst = d.profile_for(d.DefenseLevel.SANDLOT)
-    for anim in _plays(worst, 250, seed=77):
+    for anim in _sweep(worst, 400, seed=808):
         if anim.classified_outcome == "REACHED ON ERROR":
             assert anim.is_error
             assert anim._misplay_kind is not None
@@ -731,7 +734,7 @@ def test_a_clean_play_has_an_empty_error_window():
     `p_out` — the error window is [p_out, p_out_clean) and has to be empty."""
     best = d.profile_for(d.DefenseLevel.GOLD_GLOVE)
     seen = 0
-    for anim in _plays(best, 200, seed=9, shape="GROUNDER"):
+    for anim in _sweep(best, 260, seed=808):
         if anim._misplay_kind is None and anim.play_timing is not None:
             assert anim.play_timing.p_out_clean == anim.play_timing.p_out
             assert anim.play_timing.misplay_s == 0.0
