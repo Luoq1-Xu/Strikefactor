@@ -14,7 +14,7 @@ def _resume_stub():
     transitions = []
     game = SimpleNamespace(
         challenge_manager=ChallengeManager(),
-        settings_manager=SimpleNamespace(set_difficulty=lambda value: None),
+        settings_manager=SimpleNamespace(set_session_difficulty=lambda value: None),
         pitcher_manager=SimpleNamespace(
             set_current_pitcher=lambda name: None,
             get_current_pitcher=lambda: pitcher),
@@ -118,3 +118,28 @@ def test_invalid_saved_challenge_counts_cannot_grant_extra_challenges():
     manager.restore_remaining({'home': 999, 'away': 0, 'other': 999})
     assert manager.remaining('home') == manager.per_side
     assert manager.remaining('away') == 0
+
+
+def test_resuming_plays_the_games_difficulty_without_saving_it(monkeypatch, tmp_path):
+    """Resuming used to `set_difficulty`, which saved the resumed game's
+    difficulty over the player's own setting for every mode from then on."""
+    from strikefactor.settings_manager import SettingsManager
+
+    monkeypatch.setattr(gameday_sessions, 'SESSIONS_FILE',
+                        str(tmp_path / 'gameday_sessions.json'))
+    monkeypatch.setattr(PitchDatabaseService, 'get_instance',
+                        lambda: SimpleNamespace(current_game_id='game-1'))
+    manager = GameDayManager(difficulty='rookie', starter_name='sale')
+    Game.autosave_gameday_session(
+        SimpleNamespace(in_gameday_mode=True, gameday_manager=manager,
+                        challenge_manager=ChallengeManager()), 'SHOW_SCORE')
+
+    settings = SettingsManager()
+    settings.settings_file = str(tmp_path / 'settings.json')
+    settings.set_difficulty('hall_of_fame')
+    resumed, _ = _resume_stub()
+    resumed.settings_manager = settings
+    Game.resume_gameday_session(resumed, manager.session_uuid)
+
+    assert settings.get_difficulty().value == 'rookie'
+    assert settings.get_setting('difficulty') == 'hall_of_fame'

@@ -333,6 +333,11 @@ class Game:
     def _update_scaling(self):
         """Compute scale factor and letterbox offset for current window size."""
         win_w, win_h = self.window.get_size()
+        if (win_w <= 0 or win_h <= 0) and hasattr(self, '_scale'):
+            # A minimised window can report 0x0. Keep the last real scale: a
+            # zero one made `_window_to_internal` divide by zero.
+            return
+        win_w, win_h = max(1, win_w), max(1, win_h)
         scale_x = win_w / self.internal_width
         scale_y = win_h / self.internal_height
         self._scale = min(scale_x, scale_y)
@@ -716,6 +721,9 @@ class Game:
         """
         self.game_mode = mode
         self.scoreKeeper.unlimited_outs = mode == "sandbox"
+        # A challenge still open on the last session's final pitch must not
+        # restore that session's snapshot onto this one.
+        self.pending_challenge = None
         self._load_batter_profile_for_current_bucket()
 
     def _db_start_game(self, game_mode, pitcher_name=None):
@@ -856,9 +864,10 @@ class Game:
         self.gameday_manager = GameDayManager.from_dict(record['state'])
         self.in_gameday_mode = True
 
-        # Align the global difficulty with the resumed game so the batter-profile
-        # bucket (load + save) and gameplay difficulty match what was saved.
-        self.settings_manager.set_difficulty(self.gameday_manager.difficulty)
+        # Play at the resumed game's difficulty so the batter-profile bucket
+        # (load + save) and gameplay match what was saved — for this session
+        # only. The player's saved difficulty comes back at teardown.
+        self.settings_manager.set_session_difficulty(self.gameday_manager.difficulty)
 
         # Install the active opponent pitcher and re-link fatigue tracking.
         self.pitcher_manager.set_current_pitcher(
@@ -1005,6 +1014,10 @@ class Game:
         self.inning_ended = False
         self.in_gameday_mode = False
         self.gameday_manager = None
+        self.pending_challenge = None
+        # After the save above, which files the profile under the session's
+        # difficulty. A resumed GameDay game played at its own.
+        self.settings_manager.set_session_difficulty(None)
         # Reset game stats so a fresh game can be started
         self.game_stats.reset_game_stats()
         self._reset_review()
@@ -1382,8 +1395,20 @@ class Game:
             self.gameday_manager.event_log = self.gameday_manager.event_log[:gd['event_log_len']]
             self.gameday_manager.is_walkoff = gd['is_walkoff']
             self.gameday_manager.game_over = gd['game_over']
-            self.gameday_manager.opponent_pitcher_stats = copy.deepcopy(gd['opponent_pitcher_stats'])
-            self.gameday_manager.player_pitcher_stats = copy.deepcopy(gd['player_pitcher_stats'])
+            # In place: the pitcher on the mound holds his own `PitcherStats`
+            # for fatigue (`Pitcher.set_fatigue_stats`), and swapping in
+            # copies left him reading one the manager no longer updates.
+            for live, saved in ((self.gameday_manager.opponent_pitcher_stats,
+                                 gd['opponent_pitcher_stats']),
+                                (self.gameday_manager.player_pitcher_stats,
+                                 gd['player_pitcher_stats'])):
+                for name, stats in saved.items():
+                    if name in live:
+                        live[name].__dict__.update(copy.deepcopy(stats.__dict__))
+                    else:
+                        live[name] = copy.deepcopy(stats)
+                for name in set(live) - set(saved):
+                    del live[name]
             self.gameday_manager.player_inning_scores = list(gd['player_inning_scores'])
             self.gameday_manager.opponent_inning_scores = list(gd['opponent_inning_scores'])
 
@@ -1424,7 +1449,7 @@ class Game:
             self.banner.schedule_banner("WALK", delay=450)
             if self.in_gameday_mode and self.gameday_manager is not None:
                 self.gameday_manager.record_player_at_bat(
-                    'WALK', runs_scored=runs_scored, pitches_thrown=self.pitchnumber,
+                    'WALK', runs_scored=runs_scored,
                     play=self.scoreKeeper.last_play,
                     charges=self.scoreKeeper.take_charges(),
                 )
@@ -1458,7 +1483,7 @@ class Game:
             self.banner.schedule_banner("STRIKEOUT", delay=450)
             if self.in_gameday_mode and self.gameday_manager is not None:
                 self.gameday_manager.record_player_at_bat(
-                    'STRIKEOUT', runs_scored=0, pitches_thrown=self.pitchnumber
+                    'STRIKEOUT', runs_scored=0
                 )
             self.pitchnumber = 0
             self.currentstrikes = 0

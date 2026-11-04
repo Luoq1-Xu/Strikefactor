@@ -596,6 +596,7 @@ def test_cleanup_hands_the_ai_update_to_the_open_challenge(recorder):
     )
     sim = object.__new__(PitchSimulation)
     sim.game, sim.new_entry, sim.pitchtype, sim.outcome = game, {}, "FF", "ball"
+    sim.new_data_entry = {"Balls": 0, "Strikes": 0}
     sim.previous_state = (0, 0, 0)
     sim._score_before_pitch = sim._earned_before_pitch = 0
     sim.cleanup()

@@ -146,6 +146,10 @@ class SettingsManager:
             "baserunning_mode": "auto",
         }
         self.current_settings = self.load_settings()
+        # A difficulty one session plays at without it becoming the player's
+        # setting: a resumed GameDay game keeps the difficulty it was started
+        # at. None outside such a session. See `set_session_difficulty`.
+        self._session_difficulty = None
 
     def load_settings(self):
         """Load settings from file, create with defaults if doesn't exist."""
@@ -153,6 +157,12 @@ class SettingsManager:
             if os.path.exists(self.settings_file):
                 with open(self.settings_file, 'r') as f:
                     settings = json.load(f)
+                if not isinstance(settings, dict):
+                    # Valid JSON that is not an object (`[]`, `null`) would
+                    # crash startup below; read it as no settings at all.
+                    print(f"Warning: settings file {self.settings_file} does not "
+                          f"hold an object; falling back to defaults.")
+                    return self.default_settings.copy()
                 # Migrate legacy boolean minimal_hud → hud_mode string.
                 if "hud_mode" not in settings:
                     settings["hud_mode"] = "minimal" if settings.get("minimal_hud") else "legacy"
@@ -187,14 +197,33 @@ class SettingsManager:
 
     def get_difficulty(self):
         """Get current difficulty as enum."""
-        difficulty_str = self.get_setting("difficulty")
+        difficulty_str = self._session_difficulty or self.get_setting("difficulty")
         try:
             return DifficultyLevel(difficulty_str)
         except ValueError:
             return DifficultyLevel.AMATEUR
 
+    def set_session_difficulty(self, difficulty_level):
+        """Play the current session at `difficulty_level` without saving it.
+
+        `get_difficulty` reports it until it is cleared with None, and the
+        player's own setting on disk is untouched. Resuming a GameDay game
+        used to `set_difficulty` instead, which silently rewrote the player's
+        chosen difficulty for every mode from then on.
+        """
+        if difficulty_level is None:
+            self._session_difficulty = None
+            return
+        value = getattr(difficulty_level, 'value', difficulty_level)
+        try:
+            self._session_difficulty = DifficultyLevel(value).value
+        except ValueError:
+            print(f"Invalid difficulty level: {difficulty_level}")
+
     def set_difficulty(self, difficulty_level):
-        """Set difficulty level."""
+        """Set difficulty level. The player's own choice ends any session
+        difficulty (`set_session_difficulty`)."""
+        self._session_difficulty = None
         if isinstance(difficulty_level, DifficultyLevel):
             self.set_setting("difficulty", difficulty_level.value)
         elif isinstance(difficulty_level, str):

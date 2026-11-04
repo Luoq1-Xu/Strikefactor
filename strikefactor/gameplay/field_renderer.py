@@ -608,9 +608,23 @@ class FieldRenderer:
 
         except Exception as e:
             print(f"✗ Error loading batting statistics: {e}")
+            # Move the file aside before starting fresh. The next periodic
+            # save writes over `data_file`, and without this it would destroy
+            # the only copy of the player's batting history.
+            self._quarantine_data_file(e)
             print("Starting with fresh data.")
             self._buckets = {self._active_key: _fresh_bucket()}
             self._bind_instance_to_active()
+
+    def _quarantine_data_file(self, reason):
+        """Keep an unreadable stats file under a timestamped name for recovery."""
+        try:
+            stamp = datetime.now().strftime('%Y%m%d_%H%M%S')
+            corrupt_path = f"{self.data_file}.corrupt-{stamp}"
+            os.replace(self.data_file, corrupt_path)
+            print(f"  Unreadable batting statistics ({reason}) moved to {corrupt_path}")
+        except OSError as e:
+            print(f"  ⚠ Could not move unreadable batting statistics aside: {e}")
 
     def _archive_legacy(self, data: dict):
         """Copy the existing v1 file to *_legacy_v1.json verbatim."""

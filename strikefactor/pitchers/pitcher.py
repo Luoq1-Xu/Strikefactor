@@ -51,6 +51,19 @@ def colorize(text, color):
     return f"{color}{text}{Colors.RESET}"
 
 
+def count_state(balls, strikes):
+    """Classify a count for intent lookup and the batter's count tendencies."""
+    if balls == 0 and strikes == 0:
+        return 'first_pitch'
+    if balls == 3 and strikes == 2:
+        return 'full'
+    if strikes == 2 and balls <= 1:
+        return 'ahead'
+    if balls >= 2 and strikes <= 1:
+        return 'behind'
+    return 'even'
+
+
 class Pitcher:
 
     # Strike zone boundaries — single source in config.py.
@@ -244,7 +257,9 @@ class Pitcher:
 
     def recalculate_era(self):
         if not self.outs:
-            return
+            # Earned runs with no out recorded is an infinite ERA, not a
+            # perfect one. None (no ERA yet) only when nothing was charged.
+            return float('inf') if self.earned_runs else None
         era = 9 * (self.earned_runs / (self.outs / 3))
         return era
 
@@ -409,7 +424,7 @@ class Pitcher:
 
         # Format values
         ip_str = f"{ip:.1f}"
-        era_str = f"{era:.2f}"
+        era_str = "INF" if era == float('inf') else f"{era:.2f}"
         whip_str = f"{whip:.2f}"
         k9_str = f"{k9:.2f}"
         bb9_str = f"{bb9:.2f}"
@@ -500,17 +515,7 @@ class Pitcher:
         """Classify the current count into a state for intent lookup."""
         if not hasattr(self, '_game_ref') or self._game_ref is None:
             return 'even'
-        balls = self._game_ref.currentballs
-        strikes = self._game_ref.currentstrikes
-        if balls == 0 and strikes == 0:
-            return 'first_pitch'
-        if balls == 3 and strikes == 2:
-            return 'full'
-        if strikes == 2 and balls <= 1:
-            return 'ahead'
-        if balls >= 2 and strikes <= 1:
-            return 'behind'
-        return 'even'
+        return count_state(self._game_ref.currentballs, self._game_ref.currentstrikes)
 
     # Pitch categories for sequencing logic
     FASTBALL_TYPES = {'FF', 'SI'}

@@ -655,16 +655,19 @@ class PitchDataExtractor:
                 "pitcher_fatigue": None,
             }
         gm = sim.game.gameday_manager
-        # pitch_count on PitcherStats is incremented AFTER the pitch resolves
-        # via the gameplay flow; at extract time it reflects the count BEFORE
-        # this pitch (which is what we want for "pitcher_pitch_count entering
-        # this pitch"). The active stats object updates fatigue with it.
-        try:
-            stats = gm.get_active_pitcher_stats()
-            pc = stats.pitch_count
-            fatigue = stats.fatigue
-        except Exception:
-            pc, fatigue = None, None
+        # The count and fatigue entering this pitch. The simulation reads them
+        # just before it counts the pitch against the pitcher (see
+        # `PitchSimulation.__init__`), so by now the live stats already include
+        # this one. Read the live stats only when the sim did not record them.
+        pc = getattr(sim, "pitcher_pitch_count", None)
+        fatigue = getattr(sim, "pitcher_fatigue", None)
+        if pc is None:
+            try:
+                stats = gm.get_active_pitcher_stats()
+                pc = stats.pitch_count
+                fatigue = stats.fatigue
+            except Exception:
+                pc, fatigue = None, None
         is_starter = int(gm.current_pitcher_name == gm.opponent_pitcher_preset.get('starter'))
         return {
             "inning": gm.current_inning,
