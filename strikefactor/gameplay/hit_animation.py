@@ -69,6 +69,10 @@ from strikefactor.gameplay.running_play import (
 )
 
 HOME = (640, 670)
+# The field is drawn onto a 1280 x 720 surface, home plate 50 px above its
+# bottom edge. A dead foul that has gone out of this view has nothing left to
+# show — see `_update_foul`.
+VIEW_SIZE_PX = (1280.0, 720.0)
 
 # How many animated seconds one real second is shown over. This is the
 # *only* place presentation pacing is allowed to diverge from physics:
@@ -326,23 +330,56 @@ FOUL_LINE_SCREEN_LEFT_RAD  = math.pi - FOUL_LINE_SCREEN_RIGHT_RAD  # ≈ 149.3°
 # there is no angle here to bound. `spray.FOUL_OFF_MAX_DEG` is the survivor,
 # and `_setup_foul` reads severity back off the bearing rather than restating
 # the ramp.
-FOUL_LANDING_FT = {
-    "GROUNDER": (25, 110),
-    "LINER":    (90, 260),
-    "FLY":      (110, 330),
-}
-FOUL_POP_BACK_FT = (15, 50)     # straight-back pop radius behind the plate
-# Where a foul's landing has to stay to be on screen: inside the side margins,
-# and on the apron below home plate, of which the camera shows about 40 px.
-FOUL_SCREEN_X_PX = (15.0, 1265.0)
-FOUL_APRON_MAX_Y_PX = 712.0
-FOUL_FLIGHT_MS = {
-    "GROUNDER": 1600,
-    "LINER":    2200,
-    "FLY":      3000,
-    "POP_UP":   2700,
-}
-FOUL_HOLD_MS = 700              # dead-ball beat after the foul lands
+# A foul is flown like any other batted ball now: its carry and hang time are
+# `ball_flight`'s, off the launch angle and exit velocity the contact produced,
+# along the bearing `spray.foul_departure_deg` gave it. What used to be here was
+# a scripted flight — a random 15-50 ft for every pop-up, a fixed 2.7 s for
+# it, a fixed 700 ms hold, and a clamp (`_pull_onto_screen`) that dragged every
+# ball fouled back onto the 40 px of apron below the plate — so a liner into
+# the screen, a pop-up and a topped chopper all finished in the same spot by
+# the catcher. Where a foul goes is `park.foul_ground_verdict` of its flight:
+# into the net, into the stands, or down in foul ground a fielder can reach,
+# which is the one kind that is still live.
+#
+# A ground ball is not a projectile, so a foul grounder keeps a depth range
+# the way a fair one does (`IN_PLAY_LANDING_FT["GROUNDER"]`), indexed on exit
+# velocity rather than drawn — the same contact always rolls as far.
+FOUL_GROUNDER_FT = (25.0, 110.0)
+# The beat after a foul is dead before the play ends. Shorter than the 700 ms
+# the scripted flight held for: the umpire's arms go up the moment the ball is
+# foul, and a ball that has left the screen has nothing left to show.
+FOUL_DEAD_BALL_HOLD_S = 0.55
+# Long enough for the "!" over a fielder who dropped a foul fly to read.
+FOUL_MUFF_HOLD_S = 1.1
+# How high the backstop net reaches. A ball arriving lower is stopped by it
+# and drops down its face; one arriving higher carries on over it, into the
+# seats behind the plate. Both leave through the bottom of the screen.
+BACKSTOP_NET_HEIGHT_FT = 30.0
+GRAVITY_FTS2 = 32.17
+# A foul grounder that passes this close to the catcher comes off his gear
+# rather than going by him.
+CATCHER_GEAR_REACH_FT = 3.0
+# Who can go after a foul fly. Not the pitcher: on a pop-up he points.
+FOUL_CATCH_ROLES = ("C", "1B", "3B", "2B", "SS", "LF", "RF", "CF")
+# Who calls whom off, lowest first: outfielders, then infielders, then the
+# catcher, whose pop-up drifts back toward the field and away from him.
+FOUL_CALL_PRIORITY = {"LF": 0, "CF": 0, "RF": 0,
+                      "1B": 1, "2B": 1, "SS": 1, "3B": 1, "C": 2}
+# On a pop-up the catcher stands up, takes the mask off and goes: he is not
+# the crouched catcher `ROLE_MAX_INTERCEPT_DIST_FT` describes, and a foul pop
+# hangs 4.3-5.0 s (p10-p90 of the model player's), time enough to cover most
+# of the ground behind the plate. Range is bounded by his sprint like anyone
+# else's; this cap is only the edge of the area he owns.
+CATCHER_FOUL_RANGE_FT = 110.0
+# Out of the crouch and the mask off, on top of `ROLE_REACTION_BIAS_S["C"]`.
+CATCHER_MASK_OFF_S = 0.35
+# A second fielder converging on a foul fly stops this far short of it and
+# lets the first one take it.
+FOUL_BACKUP_SHORT_FT = 12.0
+# How close to the rail or the net a fielder can get. More than the 1.6 px
+# idle sway (`SWAY_AMPLITUDE`), so a fielder standing at the rail never sways
+# through it.
+FOUL_RAIL_MARGIN_FT = 2.0
 # "Foul home run" gate: well-barreled (quality) and only barely mistimed
 # (severity) fly/liner contact carries past the foul pole, with the HR
 # distance overlay reused for the tease.
@@ -1450,32 +1487,6 @@ def _pick_hit_landing(outcome, shape, quality=1.0, spray_field_rad=None,
         LANDING_WALL_MARGIN_PX)
 
 
-def _pull_onto_screen(point):
-    """A foul's landing, brought back **along its own bearing** until it is
-    on screen.
-
-    The camera shows very little behind the plate, so a ball fouled back has
-    to land short of where its distance says. It used to be clamped one axis
-    at a time, which keeps the distance and gives up the direction: a liner
-    fouled back over the catcher's shoulder slid along the bottom edge and
-    landed up to 49 degrees from the bearing it left on. That was rare while
-    a foul's bearing came off the bat alone. It is not now: a ball the bat
-    only tipped leaves behind the plate, and those are most fouls.
-
-    The bearing is the thing the swing replay draws beside this, so the
-    bearing is what is kept.
-    """
-    dx, dy = point[0] - HOME[0], point[1] - HOME[1]
-    scale = 1.0
-    if dx > 0.0:
-        scale = min(scale, (FOUL_SCREEN_X_PX[1] - HOME[0]) / dx)
-    elif dx < 0.0:
-        scale = min(scale, (FOUL_SCREEN_X_PX[0] - HOME[0]) / dx)
-    if dy > 0.0:
-        scale = min(scale, (FOUL_APRON_MAX_Y_PX - HOME[1]) / dy)
-    return (HOME[0] + dx * scale, HOME[1] + dy * scale)
-
-
 # The shape a caller who states neither a type nor a launch angle is taken to
 # mean: a line drive. Tests and legacy callers only; the game always states
 # both.
@@ -1526,6 +1537,26 @@ def _pick_shape(outcome, batted_ball_type=None, launch_deg=None):
         if r <= cum:
             return shape
     return weights[-1][0]
+
+
+_FOUL_RAIL_GEOMETRY = None
+
+
+def _foul_rail_geometry():
+    """The edge of playable foul ground, one screen polyline per side.
+
+    Static like the wall, so it is projected once. The source is
+    `park.foul_rail_ft`, the same boundary `park.foul_ground_verdict` judges
+    a ball against, so the drawn rail and the one a foul fly is caught or lost
+    at are one rail.
+    """
+    global _FOUL_RAIL_GEOMETRY
+    if _FOUL_RAIL_GEOMETRY is None:
+        _FOUL_RAIL_GEOMETRY = tuple(
+            [_to_screen(x, y) for x, y in park.foul_rail_ft(side)
+             if not _point_outside_wall(_to_screen(x, y))]
+            for side in (+1, -1))
+    return _FOUL_RAIL_GEOMETRY
 
 
 _WALL_GEOMETRY = None
@@ -2048,6 +2079,22 @@ class HitAnimation:
         # the overlay would just be noise on a ball that counts as a strike.
         self.hr_distance_ft = None
 
+        # What a foul does, settled by `_setup_foul`. `foul_destination` is
+        # where its flight ends (`park.PLAYABLE` / `BACKSTOP` / `STANDS`, or
+        # `outcomes.FOUL_GROUND` for a ground ball) and `foul_result` what
+        # became of it (`outcomes.FOUL_RESULTS`) — known at setup for a dead
+        # foul, and only once it is caught, dropped or lands for a live one.
+        self.live_foul = False
+        self.foul_destination = None
+        self.foul_result = None
+        self._foul_flight_ms = 0.0
+        self._foul_net_stop = None        # (path fraction, ms, height ft, drop ms)
+        self._foul_off_catcher = False
+        self._foul_backup_role = None
+        self._foul_dead_at_ms = None      # a live foul landed or was dropped
+        self._foul_caught = False
+        self._foul_out_of_view = False
+
         # True when the foul path took the "foul home run" branch: barreled
         # contact hooking just past the pole. Purely a flight-shape marker now
         # (HR carry model + HR peak), with no distance readout.
@@ -2061,11 +2108,12 @@ class HitAnimation:
         if outcome == "HOME RUN":
             self._setup_hit(outcome)
         elif outcome == "FOUL":
-            # Cosmetic foul playback: scripted timeout like HOME RUN
-            # (_needs_secure stays False, classified_outcome stays "FOUL").
-            # Critically, this must NOT fall into the else-branch below,
-            # which would rewrite the foul into a live in-play ball that
-            # never finishes until a fielder secures it.
+            # A foul finishes on its own clock, like HOME RUN: _needs_secure
+            # stays False. A dead one keeps classified_outcome "FOUL"; a live
+            # one (`live_foul`) leaves it None until it is caught, dropped or
+            # lands. Critically, this must NOT fall into the else-branch
+            # below, which would rewrite the foul into a ball in play that
+            # never finishes until a fielder secures it off the ground.
             self._setup_foul()
         else:
             self.outcome = "IN_PLAY"
@@ -2085,6 +2133,14 @@ class HitAnimation:
         if self.runner is not None:
             self._circuits["B"] = runner_motion.CircuitRun(self.runner, self._runner_sprint_fts(),
                                                           run_through_first=self.shape == "GROUNDER")
+        elif self.live_foul:
+            # The batter stays in the box on a foul fly — a catch retires him
+            # where he stands, and a drop puts him back in the count. He still
+            # needs a route, because the catch and the tag-up play that may
+            # follow it are written against one; this one never leaves home.
+            # League speed rather than `_runner_sprint_fts`, which draws one.
+            self._circuits["B"] = runner_motion.CircuitRun(
+                None, infield_timing.SPRINT_SPEED_LEAGUE_FTS, target_base=0)
         # Occupied bases remain visible on fouls too. Only live fair balls
         # send these runners; a foul leaves them holding their starting bags.
         if initial_bases is None:
@@ -2366,31 +2422,29 @@ class HitAnimation:
         self._assign_in_play_targets()
 
     def _setup_foul(self):
-        """Scripted foul-ball flight. **Direction is the bearing it was handed**,
-        shape is the vertical contact offset (already bucketed into
-        self.shape), and depth/foul-HR come from quality. No interception or
-        securing — the ball lands untouched and the animation finishes on
-        duration_ms.
+        """A foul ball, flown where it went and ended where its flight ends.
 
-        Direction has now been wrong here twice, in two different ways, and
-        the second is worth stating because it looked like the fix for the
-        first. It used to be the *sign of the swing's timing error* against a
-        window of hand-tuned milliseconds. `spray` replaced that — but only
-        the sign of it: this method went on inventing the magnitude out of
-        `quality` and three `random` draws, in render code, while the swing
-        replay drew `spray_deg`. Measured over 600 real fouls the two
-        disagreed by a median of **40.7 degrees**, 271 of them drawn by the
-        replay as a fair ray under a FOUL banner, and one identical contact
-        animated at eight different bearings across eight plays.
+        **Direction is the bearing it was handed** (`spray.foul_departure_deg`,
+        resolved once at the `PitchSimulation` handoff), and the flight is
+        `ball_flight`'s, off the launch angle and exit velocity the contact
+        produced — the same three numbers a fair ball is flown from. There is
+        no direction model and no depth model left in this method; what it
+        decides is how the play *ends*, which is a question about the park:
 
-        So the deflection a glancing blow puts on the ball is now
-        `spray.foul_departure_deg`, resolved once at the `PitchSimulation`
-        handoff and passed in as `spray_deg` — which means
-        `HitAnimation.spray_deg` says the same thing for a fair ball, a foul
-        and a home run alike: the bearing the ball left on. There is no
-        direction model left in this method. What stays is what it is for:
-        how deep the ball went, how high it arced, and which fielder drifts
-        after it.
+          * a ground ball is dead where it stops — against the net, at the
+            rail, off the catcher's gear, or rolling out in foul ground;
+          * a fly that comes down past the net or the rail
+            (`park.foul_ground_verdict`) goes into the net and out through the
+            bottom of the screen, or into the stands;
+          * a fly that comes down in foul ground a fielder can reach is
+            **live** (`live_foul`): caught, the batter is out and the runners
+            tag; dropped, it is a strike.
+
+        Scripted no longer means invented. This used to place a pop-up a
+        random 15-50 ft behind the plate over a fixed 2.7 s and clamp
+        everything fouled back onto the 40 px of apron the camera shows, so
+        every ball fouled back finished in the same spot by a catcher who was
+        sent to stop short of it on purpose.
         """
         # Which side of the field: +1 is the third-base / left-field side.
         # `spray_deg` is pull-positive for *either* batter, so it has to be put
@@ -2407,81 +2461,207 @@ class HitAnimation:
         severity = min(1.0, max(0.0, abs(self.spray_deg) - spray.FOUL_LINE_DEG)
                        / spray.FOUL_OFF_MAX_DEG)
 
-        if self.shape == "POP_UP":
-            # Severe undercut: popped up behind the plate. The camera leaves
-            # only ~50 px of screen below home, so the pop reads mostly
-            # through its tall arc; the landing is clamped onto the visible
-            # apron.
-            dist_ft = random.uniform(*FOUL_POP_BACK_FT)
-            self._hit_end = _pull_onto_screen(
-                _polar_point_ft(self.spray_field_rad, dist_ft))
-            self._foul_flight_ms = FOUL_FLIGHT_MS["POP_UP"]
-            drift_role = "C"
-        elif (q >= FOUL_HR_QUALITY_MIN and severity <= FOUL_HR_MAX_SEVERITY
+        # Human latencies are real seconds; bring them onto this play's clock
+        # the way `_setup_hit` does for a ball in play. On anything in the air
+        # the catcher also has to stand up and get his mask off.
+        for f in self.fielders.values():
+            if f.role == "C" and self.shape != "GROUNDER":
+                f.reaction_delay_s += CATCHER_MASK_OFF_S
+            f.reaction_delay_ms = self._anim_ms(f.reaction_delay_s)
+            f.break_delay_ms = self._anim_ms(f.break_delay_s)
+
+        if self.shape == "GROUNDER":
+            self._setup_foul_grounder(q)
+            return
+
+        if (q >= FOUL_HR_QUALITY_MIN and severity <= FOUL_HR_MAX_SEVERITY
                 and self.shape in ("FLY", "LINER")):
             # "Foul home run": barreled but barely mistimed — a deep fly
-            # hooking just past the pole. Reuses the HR carry model for the
-            # flight, but deliberately shows no distance: it's still a strike.
-            #
-            # Crossed into screen polar because the wall is a screen-space
-            # ellipse, through the one function that does that. It used to be
-            # a hand-picked 2-9 deg past the *screen* foul line, which is a
-            # second answer to a question the bearing already answers.
+            # hooking just past the pole. The same physical carry a fair ball
+            # gets, floored at the fence the way a home run's is; it shows no
+            # distance, because it is still a strike.
             self.shape = "FLY"
             self.is_foul_hr = True
-            # The same physical carry a fair ball gets — this one simply left
-            # on the wrong side of a pole. It used to reuse the home run's
-            # quality-indexed roll past the fence, which is the model that is
-            # gone; a foul home run is a real flight that happened to be foul,
-            # not a home run with an asterisk.
             carry_ft = max(
                 ball_flight.carry_distance_ft(self.launch_deg,
                                               self.exit_velocity_mph),
                 park.wall_distance_ft(self.spray_field_rad)
                 + HR_MIN_CLEARANCE_FT)
-            self._hit_end = _polar_point_ft(self.spray_field_rad, carry_ft)
-            self._foul_flight_ms = self._anim_ms(
-                ball_flight.hang_time_s(self.launch_deg, carry_ft))
-            pool = ("LF", "3B") if foul_side > 0 else ("RF", "1B")
-            drift_role = self._closest_role_in(pool, self._hit_end)
         else:
-            # Generic foul. Depth is quality-centered inside the per-shape
-            # range (same style as _pick_hit_landing); the bearing is the
-            # ball's own.
-            angle = self.spray_field_rad
-            dist_min, dist_max = FOUL_LANDING_FT[self.shape]
-            mid = dist_min + (dist_max - dist_min) * q
-            spread = (dist_max - dist_min) * 0.18
-            dist_ft = random.uniform(max(dist_min, mid - spread),
-                                     min(dist_max, mid + spread))
-            self._hit_end = _pull_onto_screen(_clamp_inside_wall(
-                _polar_point_ft(angle, dist_ft), LANDING_WALL_MARGIN_PX))
-            if self.shape == "GROUNDER":
-                dist_px = math.hypot(self._hit_end[0] - HOME[0],
-                                     self._hit_end[1] - HOME[1])
-                self._grounder_peaks = _grounder_peaks(q, dist_px)
-            self._foul_flight_ms = FOUL_FLIGHT_MS[self.shape]
-            if foul_side > 0:
-                pool = ("LF",) if dist_ft > 150 else ("3B",)
-            else:
-                pool = ("RF",) if dist_ft > 150 else ("1B",)
-            drift_role = pool[0]
+            carry_ft = ball_flight.carry_distance_ft(self.launch_deg,
+                                                     self.exit_velocity_mph)
+        self._setup_foul_flight(carry_ft, foul_side)
 
-        self.duration_ms = self._foul_flight_ms + FOUL_HOLD_MS
-
+    def _setup_foul_flight(self, carry_ft, foul_side):
+        """Fly an airborne foul its real carry, and settle how it ends."""
+        self._carry_ft = max(1e-6, carry_ft)
+        self._hit_end = _polar_point_ft(self.spray_field_rad, self._carry_ft)
         self._configure_flight_path()
+        end_ft = self.flight_path.endpoint_ft
+        self.flight_time_s = ball_flight.flight_time_s(
+            self.launch_deg, self.exit_velocity_mph, math.hypot(*end_ft))
+        flight_ms = self._anim_ms(self.flight_time_s)
 
-        # One side-appropriate fielder drifts toward the landing spot but
-        # pulls up short — sells "lets it drop foul". Everyone else keeps
-        # the standard lean-at-the-ball sway.
-        drift = self.fielders[drift_role]
-        ddx = self._hit_end[0] - drift.home_pos[0]
-        ddy = self._hit_end[1] - drift.home_pos[1]
-        d = math.hypot(ddx, ddy) or 1.0
-        back = min(25.0, d)
-        drift.target = (self._hit_end[0] - back * ddx / d,
-                        self._hit_end[1] - back * ddy / d)
-        self._lean_excluded = {drift_role}
+        verdict = park.foul_ground_verdict(*end_ft)
+        if verdict == park.FAIR:
+            # A foul that comes down between the lines. The game never builds
+            # one — `spray.foul_departure_deg` is foul by construction and
+            # `_configure_flight_path` keeps the curve on its side of the line
+            # — but a caller that hands this class a fair bearing gets a ball
+            # that falls dead, never a catch made in fair ground.
+            self.foul_destination = park.FAIR
+            self.foul_result = outcomes.FOUL_LANDED
+            self._foul_flight_ms = flight_ms
+            self.duration_ms = int(flight_ms + self._anim_ms(FOUL_DEAD_BALL_HOLD_S))
+            self._send_foul_chaser(self._fastest_foul_chaser(self._hit_end),
+                                   self._hit_end)
+            return
+        if verdict == park.PLAYABLE:
+            # Comes down where somebody can get to it. Live until it is
+            # caught, dropped, or lands.
+            self.foul_destination = park.PLAYABLE
+            self.live_foul = True
+            self.classified_outcome = None
+            self._foul_flight_ms = flight_ms
+            self.duration_ms = int(flight_ms + self._anim_ms(FOUL_DEAD_BALL_HOLD_S))
+            self._assign_live_foul_targets()
+            return
+
+        exit_s = self._foul_exit_progress()
+        ex, ey = self.flight_path.point_ft(exit_s)
+        behind = abs(ex) + ey <= 1e-6
+        self.foul_destination = park.BACKSTOP if behind else park.STANDS
+        self.foul_result = outcomes.FOUL_BACKSTOP if behind else outcomes.FOUL_STANDS
+        end_ms = flight_ms
+        height_ft = max(0.0, self._flight_height_ft(exit_s))
+        if behind and height_ft <= BACKSTOP_NET_HEIGHT_FT:
+            # Into the net, which stops it dead: it falls down the face from
+            # where it hit. The net is the bottom edge of the screen, so this
+            # is the ball reaching the edge and dropping out of the picture.
+            stop_ms = flight_ms * self._flight_time_fraction(exit_s)
+            drop_ms = self._anim_ms(math.sqrt(2.0 * height_ft / GRAVITY_FTS2))
+            self._foul_net_stop = (exit_s, stop_ms, height_ft, drop_ms)
+            end_ms = stop_ms + drop_ms
+        self._foul_flight_ms = end_ms
+        self.duration_ms = int(end_ms + self._anim_ms(FOUL_DEAD_BALL_HOLD_S))
+        # Somebody goes after it anyway, and pulls up at the rail or the net.
+        exit_px = _to_screen(ex, ey)
+        if self.is_foul_hr:
+            pool = ("LF", "3B") if foul_side > 0 else ("RF", "1B")
+            role = self._closest_role_in(pool, exit_px)
+        else:
+            role = self._fastest_foul_chaser(exit_px)
+        self._send_foul_chaser(role, exit_px)
+
+    def _setup_foul_grounder(self, q):
+        """A ground ball in foul territory: dead the moment it is foul, so all
+        that is left is where it stops — at the net, at the rail, off the
+        catcher, or out in foul ground."""
+        lo, hi = FOUL_GROUNDER_FT
+        roll_ft = lo + (hi - lo) * ball_flight.ground_depth_fraction(
+            self.exit_velocity_mph)
+        ux, uy = math.cos(self.spray_field_rad), math.sin(self.spray_field_rad)
+        self.flight_path = batted_ball_path.BattedBallPath(
+            self.spray_field_rad, roll_ft, 0.0)
+        end_ft = min(roll_ft, roll_ft * self._foul_exit_progress())
+        # A ball fouled straight back finds the catcher before the net.
+        cx, cy = _to_field_ft(self.fielders["C"].home_pos)
+        along = cx * ux + cy * uy
+        if 0.0 < along < end_ft and abs(cx * uy - cy * ux) <= CATCHER_GEAR_REACH_FT:
+            end_ft = along
+            self._foul_off_catcher = True
+        self.flight_path = batted_ball_path.BattedBallPath(
+            self.spray_field_rad, end_ft, 0.0)
+        self._hit_end = _to_screen(ux * end_ft, uy * end_ft)
+        dist_px = math.hypot(self._hit_end[0] - HOME[0], self._hit_end[1] - HOME[1])
+        self._grounder_peaks = _grounder_peaks(q, dist_px)
+        self.flight_time_s = ball_flight.ground_time_s(self.exit_velocity_mph, end_ft)
+        self._foul_flight_ms = self._anim_ms(self.flight_time_s)
+        self.duration_ms = int(self._foul_flight_ms + self._anim_ms(FOUL_DEAD_BALL_HOLD_S))
+        self.foul_destination = self.foul_result = outcomes.FOUL_GROUND
+        self._send_foul_chaser(self._fastest_foul_chaser(self._hit_end), self._hit_end)
+
+    def _foul_exit_progress(self):
+        """Path fraction at which this foul's ground track leaves playable
+        foul ground, or 1.0 if it never does. Bisected on the path, like the
+        fence crossing: once out, a ray from the plate stays out."""
+        def out(s):
+            return park.foul_ground_verdict(*self.flight_path.point_ft(s)) in (
+                park.BACKSTOP, park.STANDS)
+
+        if not out(1.0):
+            return 1.0
+        lo, hi = 0.0, 1.0
+        for _ in range(40):
+            mid = 0.5 * (lo + hi)
+            if out(mid):
+                hi = mid
+            else:
+                lo = mid
+        return lo
+
+    def _foul_point_in_play(self, point, margin_ft=FOUL_RAIL_MARGIN_FT):
+        """`point` (screen) brought back inside the rail and the net."""
+        return _to_screen(*park.clamp_to_foul_ground_ft(
+            *_to_field_ft(point), margin_ft))
+
+    def _fastest_foul_chaser(self, point):
+        """Whoever gets to `point` first — the fielder who would make the
+        play on a ball there, live or not."""
+        return min(FOUL_CATCH_ROLES, key=lambda role: (
+            self.fielders[role].reaction_delay_ms
+            + self._travel_ms(self.fielders[role], self.fielders[role].home_pos,
+                              self._foul_point_in_play(point))))
+
+    def _send_foul_chaser(self, role, point):
+        """Send `role` after a dead foul. He runs to the ball, or to the rail
+        or the net if that is where it went, and pulls up there."""
+        f = self.fielders[role]
+        f.target = self._foul_point_in_play(point)
+        self._primary_role = role
+        self._lean_excluded = {role}
+
+    def _assign_live_foul_targets(self):
+        """Route the defense to a foul fly that can be caught.
+
+        The fielder who gets under it first takes it, as on a ball in play;
+        a second within reach of it converges and stops short. Whether
+        anybody gets there is then the ordinary in-flight catch — the same
+        reach, glove height and misplay roll a fair fly is caught by.
+        """
+        landing = self._hit_end
+        def eta(role):
+            f = self.fielders[role]
+            if self._range_ft(f, landing) > self._max_intercept_dist(f):
+                return math.inf
+            return f.reaction_delay_ms + self._travel_ms(f, f.home_pos, landing)
+
+        def rank(role):
+            # Among those who get there in time, the ball belongs to the
+            # outfielder over the infielder and the infielder over the
+            # catcher — the order a defense calls a fly ball off in, because
+            # the one coming in on it has the easier catch. Nobody in time:
+            # the nearest goes, and watches it fall.
+            in_time = eta(role) <= self._foul_flight_ms + self._anim_ms(INTERCEPT_GRACE_S)
+            return (not in_time, FOUL_CALL_PRIORITY[role] if in_time else 0, eta(role))
+
+        ranked = sorted(FOUL_CATCH_ROLES, key=rank)
+        primary = ranked[0]
+        self._primary_role = primary
+        self.fielders[primary].target = self._range_limited_point(
+            self.fielders[primary], landing)
+        self.fielders[primary].decel_radius_px = SECURE_RADIUS_PX
+        self._lean_excluded = {primary}
+        backup = ranked[1]
+        if eta(backup) < math.inf and eta(backup) <= self._foul_flight_ms:
+            f = self.fielders[backup]
+            dx = landing[0] - f.home_pos[0]
+            dy = landing[1] - f.home_pos[1]
+            d_ft = _ft_dist(dx, dy) or 1.0
+            keep = max(0.0, d_ft - FOUL_BACKUP_SHORT_FT) / d_ft
+            f.target = (f.home_pos[0] + dx * keep, f.home_pos[1] + dy * keep)
+            self._lean_excluded.add(backup)
+            self._foul_backup_role = backup
 
     # ---- Helpers --------------------------------------------------------
 
@@ -2505,6 +2685,8 @@ class HitAnimation:
         crouched catcher genuinely do have tiny fielding zones at any
         pacing, and the 1B genuinely does owe the bag, so those stay.
         """
+        if self.live_foul and fielder.role == "C":
+            return CATCHER_FOUL_RANGE_FT
         max_dist = ROLE_MAX_INTERCEPT_DIST_FT.get(fielder.role, float('inf'))
         # The 1B's cap on grounders isn't mobility, it's responsibility:
         # every step away from the bag is a step back before the throw
@@ -2622,7 +2804,11 @@ class HitAnimation:
         converted by the one defender the trajectory is guaranteed to
         run through.
         """
-        if self.shape == "GROUNDER":
+        if self.live_foul:
+            # Foul ground: the catcher and the corners, the middle infield
+            # drifting over, the corner outfielders on a fly down the line.
+            pool = list(FOUL_CATCH_ROLES)
+        elif self.shape == "GROUNDER":
             pool = ["P", "1B", "2B", "SS", "3B"]
         elif self.shape == "POP_UP":
             # Real baseball: infielders always call off the pitcher and
@@ -4659,8 +4845,7 @@ class HitAnimation:
 
     def _sync_baserunning(self, now_s):
         control = self.baserunning
-        if (control.mode != "manual" or self.outcome not in ("IN_PLAY", outcomes.HOME_RUN)
-                or control.closed):
+        if control.mode != "manual" or not self._runs_bases() or control.closed:
             return
         ended = self._inning_end_s is not None and now_s >= self._inning_end_s
         candidates = self._controllable_runners(now_s)
@@ -4828,7 +5013,7 @@ class HitAnimation:
 
     def _advance_runners(self, now_s, *, preparing_return=False):
         self._sync_baserunning(now_s)
-        if (not self._circuits or self.outcome not in ("IN_PLAY", outcomes.HOME_RUN)
+        if (not self._circuits or not self._runs_bases()
                 or self._hr_confirmed_s is not None or self._inning_end_s is not None):
             return
         self._advance_forced_runners(now_s)
@@ -5808,6 +5993,9 @@ class HitAnimation:
         track becomes a two-base error, out of the same `extra_bases` model
         that already decides doubles — no new distance thresholds.
         """
+        if self.live_foul:
+            self._foul_muffed(role)
+            return
         f = self.fielders[role]
         self._hit_end = (f.pos[0], f.pos[1])
         self._init_ball_on_ground()
@@ -5861,6 +6049,12 @@ class HitAnimation:
         appropriate finishing sub-animation: throw-to-1B for grounders
         fielded by an infielder, a catch-hold for everything else.
         """
+        if self.live_foul:
+            # A caught foul is a fly ball out like any other: the batter is
+            # out, and the runners tag. Set first, so the running code below
+            # treats it as a play the runners run on.
+            self._foul_caught = True
+            self.foul_result = outcomes.FOUL_CAUGHT
         self._secured = True
         self._secured_in_flight = True
         self._post_fielding = True
@@ -6084,6 +6278,8 @@ class HitAnimation:
         # HOME RUN retreat eases `pos` rather than stepping toward a
         # target, and the post-catch flow pins fielders outright).
         self._contain_fielders()
+        if self.outcome == "FOUL":
+            self._contain_foul_fielders()
         self._continue_infield_running(self._elapsed / (1000*self.time_scale))
         self._advance_runners(self._elapsed / (1000*self.time_scale))
 
@@ -6151,19 +6347,123 @@ class HitAnimation:
         self._begin_return_play()
 
     def _update_foul(self, elapsed):
-        """Scripted foul flight: arc from home to the pre-picked landing
-        point over _foul_flight_ms, then rest as a dead ball through the
-        FOUL_HOLD_MS beat. No roll, no wall reflection, no interception —
-        the play is already over, this is pure presentation.
+        """One frame of a foul.
+
+        A dead foul is its flight played out: a ground ball hopping to where
+        it stops, a fly into the stands, or one into the net that stops there
+        and drops down its face. A live one is the same flight with the
+        defense allowed to catch it — the ordinary in-flight catch, so a foul
+        fly is caught or dropped by exactly the reach, glove height and
+        misplay roll a fair one is.
         """
-        t = min(1.0, elapsed / max(1, self._foul_flight_ms))
-        ground = self._flight_ground_point(t)
+        if self._post_fielding:
+            # Caught: the catch hold and any tag-up play own the ball, as on
+            # a fly ball out.
+            self._render_post_fielding(elapsed)
+            return
+        if self._foul_dead_at_ms is not None:
+            return  # down untouched, or dropped: it lies where it fell
         if self.shape == "GROUNDER":
+            t = min(1.0, elapsed / max(1.0, self._foul_flight_ms))
+            ground = self._flight_ground_point(t)
             self._ball = _arc_grounder(
                 HOME, self._hit_end, self._grounder_peaks, t, ground=ground)
-        else:
-            self._ball = (ground[0], ground[1] - self._flight_lift_px(t))
+            self._ball_shadow = ground
+            return
+        stop = self._foul_net_stop
+        if stop is not None and elapsed >= stop[1]:
+            # Stopped by the net: it falls straight down the face from the
+            # height it hit at, under gravity.
+            progress, stop_ms, height_ft, drop_ms = stop
+            fall = min(1.0, (elapsed - stop_ms) / max(1e-6, drop_ms))
+            ground = self._flight_ground_point(progress)
+            self._current_flight_progress = progress
+            self._ball = (ground[0],
+                          ground[1] - height_ft * (1.0 - fall * fall) * FT_TO_PX_Y)
+            self._ball_shadow = ground
+            return
+        phase = min(1.0, elapsed / max(1.0, self._anim_ms(self.flight_time_s)))
+        t = self._flight_path_fraction(phase)
+        self._current_flight_progress = t
+        ground = self._flight_ground_point(t)
+        self._ball = (ground[0], ground[1] - self._flight_lift_px(t))
         self._ball_shadow = ground
+        if not self.live_foul:
+            self._end_when_out_of_view(elapsed)
+            return
+        if self._check_in_flight_intercept():
+            if self._secured_in_flight:
+                self._render_post_fielding(elapsed)
+            return
+        if phase >= 1.0:
+            self._foul_comes_down(elapsed)
+
+    def _end_when_out_of_view(self, elapsed):
+        """A dead foul that has left the picture ends there.
+
+        A pop fouled back over the net comes down 100-200 ft behind the plate,
+        far below the bottom of the screen, and used to be flown for its whole
+        hang time with nothing on screen. Presentation pacing only — the ball
+        was foul from contact, so nothing is being decided here.
+        """
+        if self._foul_out_of_view:
+            return
+        width, height = VIEW_SIZE_PX
+        r = BALL_RADIUS_PX
+        def outside(point):
+            return (point[1] > height + r or point[0] < -r or point[0] > width + r)
+        if outside(self._ball) and outside(self._ball_shadow):
+            self._foul_out_of_view = True
+            self.duration_ms = min(self.duration_ms,
+                                   int(elapsed + self._anim_ms(FOUL_DEAD_BALL_HOLD_S)))
+
+    def _foul_comes_down(self, elapsed):
+        """A live foul reached the ground untouched: a dead ball and a strike."""
+        self._foul_dead_at_ms = elapsed
+        self.foul_result = outcomes.FOUL_LANDED
+        self._end_live_foul(elapsed, FOUL_DEAD_BALL_HOLD_S)
+
+    def _foul_muffed(self, role):
+        """Off the glove of a fielder who got to a foul fly.
+
+        Still a dead ball and a strike — the batter stays at the plate — but
+        it is an error in the scorebook, so the fielder wears the "!". Not
+        through `_charge_error`: that is the error a batter *reaches* on, and
+        `is_error` is what sends a play to REACHED ON ERROR.
+        """
+        f = self.fielders[role]
+        self._ball = self._ball_shadow = (f.pos[0], f.pos[1])
+        self._foul_dead_at_ms = self._elapsed
+        self.foul_result = outcomes.FOUL_MUFFED
+        self._error_role = role
+        self._error_marked_at_ms = self._elapsed
+        self._end_live_foul(self._elapsed, FOUL_MUFF_HOLD_S)
+
+    def _end_live_foul(self, elapsed, hold_s):
+        self.classified_outcome = "FOUL"
+        self.duration_ms = int(elapsed + self._anim_ms(hold_s))
+        # The play is dead. Whoever was going after it pulls up.
+        for role in self._lean_excluded:
+            f = self.fielders[role]
+            f.target = (f.pos[0], f.pos[1])
+
+    def _runs_bases(self):
+        """Is this a play the runners run on? A fair ball, or a foul fly that
+        was caught — which is a fly ball out, tag-ups and all."""
+        return self.outcome in ("IN_PLAY", outcomes.HOME_RUN) or self._foul_caught
+
+    def _foul_ball_gone(self):
+        """A foul that came down in the seats is out of sight once it lands."""
+        return (self.outcome == "FOUL" and self.foul_destination == park.STANDS
+                and self._elapsed >= self._foul_flight_ms)
+
+    def _contain_foul_fielders(self):
+        """Keep the defense on the field on a foul: the rail and the net are
+        walls. Only on fouls, so no fair ball's fielding can change."""
+        for f in self.fielders.values():
+            # The margin keeps the drawn body, idle sway included, this side.
+            x, y = self._foul_point_in_play(f.pos)
+            f.pos[0], f.pos[1] = x, y
 
     def _update_hit(self, elapsed):
         # Post-intercept sub-animations (the in-flight catch + the throw
@@ -6495,6 +6795,11 @@ class HitAnimation:
             return False
         if self.outcome == "HOME RUN":
             return self._hr_confirmed_s is not None
+        if self.outcome == "FOUL" and not self._foul_caught:
+            # A strike once it is dead: from contact for most fouls, and from
+            # the moment it lands or is dropped for a live one. A caught one
+            # is a fly ball out, and waits like one.
+            return not self.live_foul or self._foul_dead_at_ms is not None
         if self._inning_end_s is not None:
             return self._elapsed >= self._anim_ms(self._inning_end_s)
         if self._return_race is not None:
@@ -6656,14 +6961,19 @@ class HitAnimation:
                           p.arrival_s > now_s and p.arrival_s <= p.cutoff_s and p.base != route.target_base))
         owed = tuple((rid, duty.base) for rid, duty in sorted(self._duties.items())
                      if self._owes_retouch(rid, now_s))
+        gone = self._foul_ball_gone()
         return FieldingFrame(self._elapsed, tuple(self._ball), tuple(self._ball_shadow),
-                             not self._ball_behind_wall(), not _point_outside_wall(self._ball_shadow),
+                             not self._ball_behind_wall() and not gone,
+                             not _point_outside_wall(self._ball_shadow) and not gone,
                              tuple(fielders), error, distance, runner, call, others, base_call, send, owed)
 
     def draw(self, screen):
         from strikefactor.ui.fielding_renderer import draw_frame
         draw_frame(screen, self.presentation_frame())
-        if self.banner_fired or self.can_continue_early:
+        # A foul can be skipped with any key once it is dead, but the prompt
+        # waits for the banner: on most fouls that is from contact, and a
+        # prompt over the whole flight would only be in the way.
+        if self.banner_fired or (self.can_continue_early and self.outcome != "FOUL"):
             self._draw_continue_prompt(screen)
 
     def _draw_continue_prompt(self, screen):

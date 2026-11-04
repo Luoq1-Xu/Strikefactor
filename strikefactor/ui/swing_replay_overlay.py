@@ -117,6 +117,7 @@ import math
 
 import pygame
 
+from strikefactor import outcomes
 from strikefactor.gameplay import bat_contact, bat_path, spray
 from strikefactor.ui import gameday_theme as gdt
 
@@ -1156,5 +1157,7 @@ class SwingReplayOverlay:
         if rec.made_contact == "swung_and_miss":
             return "WHIFF"
         if rec.made_contact == "fouled":
-            return "FOUL"
+            # A foul fly that was caught is recorded as the out it was.
+            return (outcomes.FOUL_OUT_DISPLAY
+                    if rec.outcome in outcomes.BATTED_OUT_OUTCOMES else "FOUL")
         return (rec.outcome or "IN PLAY").upper()

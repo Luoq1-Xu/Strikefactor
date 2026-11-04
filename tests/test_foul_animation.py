@@ -1,12 +1,15 @@
 """Foul-ball animation guards.
 
-The FOUL outcome is purely cosmetic — the count/DB/AI effects are already
-settled by pitch_simulation before the animation starts — but the animation
+Most fouls are dead from contact — their strike is settled by
+pitch_simulation before the animation starts — and for those the animation
 must (a) not be coerced into a live in-play ball (which would wait forever
 for a fielder to secure it), (b) land in foul territory on the side implied
 by the signed swing timing, and (c) never show a distance readout — that
 overlay belongs to home runs, including on the barreled-but-barely-late
 "foul home run", which keeps the deep flight but not the number.
+
+The foul that comes down where a fielder can reach it is live, and is
+guarded in tests/test_foul_play.py.
 """
 
 import math
@@ -175,13 +178,14 @@ def test_the_fielder_who_drifts_after_a_foul_is_on_its_side(hand, timing, shape,
         assert drift in ("RF", "1B"), f"{hand}HB foul to RF side chased by {drift}"
 
 
-def test_severe_undercut_pops_straight_back():
+def test_a_tipped_pop_comes_down_behind_the_plate():
+    """A pop the bat only got under goes up and back over the catcher. Where
+    it lands is its own carry now, not a random 15-50 ft clamped onto the
+    apron, so it can come down in the net or over it — but behind the plate."""
     anim = _make(shape="POP_UP", quality=0.3)
     assert anim.shape == "POP_UP"
-    # Behind the plate, still on the visible apron.
     assert anim._hit_end[1] > HOME[1]
-    assert anim._hit_end[1] <= 712.0
-    assert 0 <= anim._hit_end[0] <= 1280
+    assert anim.foul_destination in ("PLAYABLE", "BACKSTOP", "STANDS")
 
 
 def test_severe_overcut_is_a_short_foul_grounder():
@@ -259,19 +263,20 @@ def test_settings_default_enables_foul_animation():
 @pytest.mark.parametrize("shape", ["GROUNDER", "LINER", "FLY", "POP_UP"])
 @pytest.mark.parametrize("bearing", [100.0, 150.0, 178.0, -120.0, -164.0])
 def test_a_ball_fouled_back_lands_on_the_bearing_it_left_on(hand, shape, bearing):
-    """Most fouls leave behind the plate now, because a ball the bat only
-    tipped carries on back. The camera shows about 40 px of ground there, so
-    the landing has to be brought in, and it is brought in **along the
-    bearing**. Clamped one axis at a time it slid along the bottom edge: a
-    liner fouled back over the catcher's shoulder landed up to 49 degrees
-    from the ray the swing replay draws for it."""
+    """Most fouls leave behind the plate, because a ball the bat only tipped
+    carries on back, and the camera shows about 45 ft of ground there.
+
+    That used to be solved by bringing the landing in onto the 40 px of apron,
+    which put every ball fouled back in the same spot by the catcher. It is
+    not brought in now: it flies its own distance, and the net — which is the
+    bottom edge of the screen — or the seats behind it are where it ends. What
+    is kept is the bearing, which is what the swing replay draws beside it.
+    """
     random.seed(3)
     anim = HitAnimation(_StubGame(hand), outcome="FOUL",
                         on_complete=lambda: None, quality=0.4,
                         batted_ball_type=shape, spray_deg=bearing)
-    x, y = anim._hit_end
-    assert 0.0 <= x <= 1280.0 and y <= 712.0 + 1e-6, "landed off screen"
-    assert y > HOME[1], "a ball fouled back should land behind the plate"
+    assert anim._hit_end[1] > HOME[1], "a ball fouled back should land behind the plate"
     want = spray.field_angle_deg(bearing, spray.spin_for(hand))
     got = _real_field_angle_deg(anim)
     assert abs(((got - want) + 180.0) % 360.0 - 180.0) < 1e-6, (

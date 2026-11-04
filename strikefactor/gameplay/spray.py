@@ -144,9 +144,10 @@ def is_foul(spray_deg):
 FOUL_OFF_MAX_DEG = 45.0           # how far past the line a fully glancing blow goes
 FOUL_OFF_MIN_DEG = 2.0            # a ball a degree past the pole draws a degree past it
 FOUL_GROUNDER_MIN_OFF_DEG = 10.0  # a chopper has to clearly leave fair ground
-# A pop-up comes down near where it was struck, so it is behind the plate
-# rather than out past a pole: 165 deg (nearly straight back over the catcher)
-# when the bat was square, swinging round to 120 as the bat turns.
+# A pop-up the bat only tipped comes down near where it was struck, so it is
+# behind the plate rather than out past a pole: 165 deg (nearly straight back
+# over the catcher) when the bat was square, swinging round to 120 as the bat
+# turns. One the bat sent past a line flies that bearing like any other ball.
 FOUL_POP_BACK_DEG = (120.0, 165.0)
 
 
@@ -184,7 +185,17 @@ def foul_departure_deg(spray_deg, quality, shape="LINER"):
     """
     side = 1.0 if spray_deg >= 0.0 else -1.0
     severity = foul_severity(spray_deg, quality)
-    if shape == "POP_UP":
+    if shape == "POP_UP" and not is_foul(spray_deg):
+        # Tipped: the bat was pointed fair and only got under it, so the ball
+        # goes up and back over the catcher.
+        #
+        # **Only when the bat was pointed fair.** A pop the bat itself sent
+        # past a line was struck, not tipped — it goes up and drifts out over
+        # foul ground beside that line, which is the foul pop the first and
+        # third basemen camp under by the dugouts. Every pop used to be sent
+        # behind the plate here, those included, so the commonest catchable
+        # foul in the game came down in the seats behind the net. It takes the
+        # rule every other shape does below, from the bat's own bearing.
         lo, hi = FOUL_POP_BACK_DEG
         turned = min(1.0, abs(spray_deg) / FOUL_LINE_DEG)
         return side * (hi - (hi - lo) * turned)

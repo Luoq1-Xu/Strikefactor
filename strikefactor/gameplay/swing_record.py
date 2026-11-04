@@ -658,7 +658,10 @@ def from_simulation(sim):
         # `_finalize_batted_ball` mirrors `fielder_role` and `play_margin_s`.
         # `cleanup()` is downstream of the animation finishing, so the track is
         # settled by the time this is built.
-        flight_path=getattr(getattr(sim, "hit_animation", None),
+        # A foul played out of sight (foul animation off) never becomes
+        # `hit_animation`, but it was flown all the same.
+        flight_path=getattr(getattr(sim, "hit_animation", None)
+                            or getattr(sim, "_foul_play", None),
                             "flight_path", None),
         resolved_aim_ft=sim.swing_aim_ft,
     )

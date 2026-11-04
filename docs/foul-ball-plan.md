@@ -1,6 +1,36 @@
-# Foul balls: real flights, a backstop, and foul outs — proposed plan
+# Foul balls: real flights, a backstop, and foul outs
 
-Status: proposal. Nothing here is implemented yet.
+Status: phases 0-4 implemented; phase 5 (optional polish) not started. The
+plan below is kept as written. Where the build went differently:
+
+- **Decisions taken.** The backstop is at the bottom edge of the screen
+  (`park.BACKSTOP_FT = 45`). With the foul animation off, a live foul is still
+  played, out of sight and with the runners on Auto, and only its result is
+  shown (`PitchSimulation._resolve_foul_out_of_sight`).
+- **Calibration.** `tools/calibrate_fouls.py` is the phase-0 report. The
+  dial turned out to be how far the rail pinches in at the poles:
+  `park.FOUL_GROUND_AT_POLE_FT = 40` gives 2.3% / 2.5% of fouls caught
+  (RHB / LHB, 26,000 swings a hand) against MLB's ~2.5%. Catches split
+  3B / 1B / C, weighted to the pull side. Fair-ball fielding is bit-identical:
+  `tools.calibrate_defense --by-shape` prints the same table before and after.
+- **One fix upstream, in `spray.foul_departure_deg`.** Every pop-up was sent
+  behind the plate, including the half the bat had already pointed past a
+  line. Those were the catchable fouls (the pop by the dugout), and they all
+  came down in the seats behind the net, so foul outs were 0.6%. A pop the
+  bat sent foul now flies the bat's own bearing, like every other shape; only
+  a pop it merely tipped goes back over the catcher. Which contacts are fair is
+  unchanged, so CLAUDE.md rule 5 does not apply.
+- **One column, not two.** `foul_result` (schema v16) holds `GROUND`,
+  `BACKSTOP`, `STANDS`, `LANDED`, `MUFFED` or `CAUGHT` (`outcomes.FOUL_RESULTS`).
+  A caught foul is recorded as the out it was, with `batted_ball_type` set;
+  `foul_result = CAUGHT` is what tells it from a fair one.
+- **A dropped foul fly** shows the "!" over the fielder and records `MUFFED`,
+  but is not added to the box score's error count: box-score errors are still
+  counted only from REACHED ON ERROR results.
+- **Runners cannot be sent while a foul is in the air.** They hold, and Send
+  opens at the catch for the tag-up.
+- **A dead foul can be skipped** with any key from contact (the prompt still
+  waits for the banner).
 
 ## The problem
 
