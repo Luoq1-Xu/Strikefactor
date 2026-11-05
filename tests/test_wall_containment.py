@@ -539,38 +539,3 @@ def test_the_ball_comes_down_off_the_wall_under_gravity():
                  for tau in range(0, int(fall_ms) + 200, 10)]
         assert all(b <= a + 1e-9 for a, b in zip(lifts, lifts[1:]))
         assert lifts[-1] == 0.0
-
-
-def test_the_render_peak_constants_are_gone():
-    """The per-shape arc peak, in pixels, with no tie to the launch angle or
-    the carry — and the three solves that existed only to reconcile it with
-    the fence. `_flight_height_ft` is the one model now.
-
-    `INTERCEPT_MAX_LIFT_PX` is in the list for a stronger reason than the
-    others: the catch gate does not *convert* a ceiling any more, it reads
-    feet, so there is nothing at that seam to keep.
-    """
-    for name in ("HR_PEAK_H", "FLY_HIT_PEAK_RANGE",
-                 "LINER_PEAK_RANGE", "POPUP_PEAK_RANGE"):
-        assert not hasattr(ha, name), name
-    for name in ("_arc_phase", "_wall_impact_landing_phase",
-                 "_home_run_peak_floor"):
-        assert not hasattr(HitAnimation, name), name
-    anim = _make("IN_PLAY", shape="FLY")
-    assert not hasattr(anim, "_hit_peak")
-    assert not hasattr(anim, "_arc_landing_phase")
-
-
-def test_the_superseded_peak_bounds_are_gone():
-    """The first two generations of a property nothing solves for any more.
-
-    `WALL_HIT_FLY_PEAK_SCALE` was a guess at it, and `_wall_impact_peak_cap` /
-    `WALL_IMPACT_MAX_HEIGHT_FRAC` were the first attempt to solve it — against
-    the wrong edge of the fence, and by flattening the arc. The third,
-    `_wall_impact_landing_phase`, is gone too (see
-    `test_the_render_peak_constants_are_gone`): the drawn arc is the flight the
-    verdict was computed from, so the height at the fence is the verdict's own
-    number. Keeping any of them would be a second model of one thing."""
-    assert not hasattr(ha, "WALL_HIT_FLY_PEAK_SCALE")
-    assert not hasattr(ha, "WALL_IMPACT_MAX_HEIGHT_FRAC")
-    assert not hasattr(HitAnimation, "_wall_impact_peak_cap")

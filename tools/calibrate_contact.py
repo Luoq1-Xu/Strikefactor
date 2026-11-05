@@ -169,7 +169,13 @@ def run(n, seed=17, hand="R", level="amateur", power=False, jobs=1,
     if jobs <= 1:
         return [swing_once(w) for w in work]
     with Pool(jobs) as pool:
-        return pool.map(swing_once, work, chunksize=max(1, n // (jobs * 8)))
+        swings = pool.map(swing_once, work, chunksize=max(1, n // (jobs * 8)))
+        # Let the workers exit on their own before the `with` block terminates
+        # them. Termination is a SIGTERM, which a worker forked from a process
+        # that has initialised pygame ignores (SDL installed a handler for it).
+        pool.close()
+        pool.join()
+    return swings
 
 
 # ---- Reading a run ---------------------------------------------------------

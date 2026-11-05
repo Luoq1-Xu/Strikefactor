@@ -26,13 +26,26 @@ from tools import sim
 N = 2600
 
 
-@functools.lru_cache(maxsize=None)
+#
+# The cache sits behind a wrapper that passes every argument positionally.
+# `lru_cache` keys on the call as written, so `_swings()` and
+# `_swings("amateur", "R", N, 17)` used to be two entries for one run, and the
+# 2600 swings were simulated twice.
 def _swings(level="amateur", hand="R", n=N, seed=17):
+    return _cached_swings(level, hand, n, seed)
+
+
+def _summary(level="amateur", hand="R", n=N, seed=17):
+    return _cached_summary(level, hand, n, seed)
+
+
+@functools.lru_cache(maxsize=None)
+def _cached_swings(level, hand, n, seed):
     return tuple(harness.run(n, seed=seed, hand=hand, level=level))
 
 
 @functools.lru_cache(maxsize=None)
-def _summary(level="amateur", hand="R", n=N, seed=17):
+def _cached_summary(level, hand, n, seed):
     return harness.summarise(list(_swings(level, hand, n, seed)))
 
 
@@ -145,8 +158,13 @@ def test_difficulty_runs_one_way_down_the_ladder():
     """Contact falls and the foul share of contact rises, at every rung.
 
     The aim assist is what turns swings into balls in play and the timing
-    window is what turns whiffs into contact; neither may run backwards."""
-    rows = [_summary(level=level.value, n=1200) for level in DifficultyLevel]
+    window is what turns whiffs into contact; neither may run backwards.
+
+    Every level is shown the same pitches with the same aim and timing error
+    (a swing is a function of its seed and index), so the rungs are compared
+    swing for swing and the ordering holds at a sample this size; 1200 a
+    rung told it nothing more."""
+    rows = [_summary(level=level.value, n=600) for level in DifficultyLevel]
     contact = [s["contact"] for s in rows]
     fouled = [s["foul_of_contact"] for s in rows]
     fair = [s["fair"] for s in rows]

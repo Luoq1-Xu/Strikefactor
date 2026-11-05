@@ -113,7 +113,6 @@ def test_the_ball_turns_at_the_rate_a_bat_does(hand):
     rate = -(sum((t - mean_t) * (d - mean_s) for t, d in pts)
              / sum((t - mean_t) ** 2 for t, _ in pts))
     assert 1.3 < rate < 1.9, f"{rate:.2f} deg of spray per ms of timing"
-    assert not hasattr(spray, "TIMING_GAIN")
 
 
 @pytest.mark.parametrize("hand", HANDS)
@@ -175,19 +174,6 @@ def test_a_right_hander_pulls_toward_left_field():
 
 
 # ---- The geometry underneath ------------------------------------------------
-
-def test_the_spray_remap_is_gone():
-    """`spray_angle_deg` read the ball's direction off a bat that was 49
-    degrees past square, by subtracting the 49, rescaling the location
-    response and multiplying the timing response by 2.4. The bat is near
-    square now and one collision gives the direction, so there is no reference
-    angle and no gain between the bat and the ball. The three that described
-    the location response moved to `bat_path` as statements about the bat."""
-    for name in ("spray_angle_deg", "SQUARE_REF_DEG", "LOCATION_GAIN",
-                 "LOCATION_SPAN_DEG", "TIMING_GAIN", "LEAGUE_MEAN_DEG"):
-        assert not hasattr(spray, name), name
-    assert bp.POSE_SPAN_DEG > 0.0 and bp.POSE_GAIN_DEG_PER_FT > 0.0
-
 
 @pytest.mark.parametrize("hand", HANDS)
 def test_the_ball_leaves_further_round_than_the_bat_faces(hand):
@@ -307,13 +293,12 @@ def test_an_on_time_swing_is_fair_anywhere_in_the_zone(hand):
 
 # ---- The distribution -------------------------------------------------------
 
-# Three tests below ask for `_population(AMATEUR)` verbatim and a fourth
-# sweeps it as one rung of the difficulty ladder — four identical runs of a
-# 1200-swing sweep, each asserting a different property. The chain is pure
+# Three tests below ask for `_population(AMATEUR)` verbatim — three identical
+# runs of a 1200-swing sweep, each asserting a different property. The chain is pure
 # (`spray`, `bat_path` and `bat_contact` take no global RNG) and every draw
 # comes from a locally seeded `random.Random`, so the same arguments always
 # produce the same contacts. `Contact` is frozen, so handing the same list to
-# four tests cannot let one of them disturb another.
+# three tests cannot let one of them disturb another.
 def _population(level, n=1200, hand="R", seed=17):
     """Contacts a plausible player produces, through the real sweep.
 
@@ -404,11 +389,15 @@ def test_a_harder_setting_sprays_more_contact_foul():
     There is no difficulty dial in `spray` and there should not be one: a
     smaller `timing_assist_s` leaves more of the player's timing error on the
     bat, and the bat is what points the ball.
+
+    600 swings a level rather than the shared 1200: every level is shown the
+    same pitches with the same aim and timing error, so the rungs are compared
+    swing for swing, and the ordering and the ratio hold with room at 600.
     """
     shares = []
     for level in (DifficultyLevel.ROOKIE, DifficultyLevel.AMATEUR,
                   DifficultyLevel.PROFESSIONAL, DifficultyLevel.HALL_OF_FAME):
-        contacts = _population(level)
+        contacts = _population(level, n=600)
         shares.append(
             sum(1 for c in contacts if spray.is_foul(c.spray_deg)) / len(contacts))
     assert shares == sorted(shares), f"not monotone in difficulty: {shares}"

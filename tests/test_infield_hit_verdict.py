@@ -57,56 +57,15 @@ def _play(seed, quality, hand="R", modifier=1.0, spray_deg=0.0):
     return anim
 
 
-# Contact quality is NOT uniform, and assuming it is has now caused the
-# same class of miscalibration three times in this codebase (see
-# contact_audio.EV_CALIBRATION and ball_flight.carry_distance_ft). Quality
-# is only computed for swings that squared the ball up enough to put it in
-# play, so its real distribution is crowded against 1.0 — nothing like the
-# `(i % 50) / 50.0` sweep these tests used to run. That sweep reported a
-# 7.6% infield-hit rate where the real distribution gave 3.8%, which is how
-# the model came to be calibrated against a batter who does not exist.
-#
-# Re-derived most recently for the square bat and the bat-ball collision
-# (`tools/calibrate_contact.py --anchors`): fair contact is squarer than it
-# was, so every quantile rose. It was 0.649 / 0.720 / 0.807 / 0.883 / 0.941.
-# These must stay in step with EV_CALIBRATION, which is anchored to the same
-# quantiles — move one without the other and this file silently starts
-# describing a different batter from the one the exit-velocity model does.
-#
-# Approximated here by its quantiles rather than read from the DB: a test
-# that needs strikefactor.db is a test that breaks on a fresh checkout.
-_QUALITY_QUANTILES = (
-    (0.10, 0.757), (0.25, 0.798), (0.50, 0.850), (0.75, 0.928), (0.90, 0.967),
-)
-
-# **And spray is not uniform either.** This is the same trap one axis over, and
-# it bites harder: a `HitAnimation` built without a `spray_deg` sends the ball
-# to *exactly* dead centre, so a sweep that forgets it hits every grounder over
-# second base — the one place middle infielders cannot reach — and reports an
-# infield-hit rate of 17% against a real 6-8%. Before `spray` the landing angle
-# was drawn from `random.uniform(50°, 130°)` inside the animation, so tests got
-# a spread for free; now the swing supplies it and the harness has to.
-#
-# Measured over the fair balls a plausible player produces at AMATEUR.
-# Pull-positive, so a right-handed batter's positive is toward third.
-_SPRAY_MEAN_DEG, _SPRAY_SD_DEG = 1.81, 21.5
-
-
-# Both samplers now live in conftest, because test_defense.py draws from the
-# same distributions and two copies of these numbers is exactly how the four
-# miscalibrations CLAUDE.md records happened. The module-level constants above
-# are kept as the documented anchors and pinned to the shared ones below.
+# The batter: contact quality and spray drawn from the distributions players
+# actually produce. `tools/sim.py` owns the numbers and explains them. Neither
+# is uniform, and sweeping either as if it were is how this file once reported
+# a 7.6% infield-hit rate against a real 3.8% (quality) and 17% against 6-8%
+# (no spray: every grounder over second base). There used to be a copy of the
+# numbers here, pinned to the shared ones by a test; the shared ones are the
+# only copy now.
 _realistic_spray = conftest.realistic_spray
 _realistic_quality = conftest.realistic_quality
-
-
-def test_the_sampler_constants_have_not_drifted_from_the_shared_ones():
-    """`_QUALITY_QUANTILES` here and `EV_CALIBRATION` in contact_audio are
-    anchored to the same measured distribution. If this file's copy and
-    conftest's ever disagree, one of them is describing a different batter."""
-    assert _QUALITY_QUANTILES == conftest.QUALITY_QUANTILES
-    assert (_SPRAY_MEAN_DEG, _SPRAY_SD_DEG) == (conftest.SPRAY_MEAN_DEG,
-                                                conftest.SPRAY_SD_DEG)
 
 
 # One sample, many assertions. `_sample` is deterministic — `_play` seeds the
@@ -137,17 +96,63 @@ def test_the_sampler_constants_have_not_drifted_from_the_shared_ones():
 _SEED_N = 800
 _RAW_CACHE = {}
 
+# One draw stream for every setting, so that play `i` is the same ball off the
+# bat whatever the hand or difficulty: that is what lets `_paired` compare two
+# settings play by play. Pinned at the value the default (R, 1.0) sample has
+# always used, so the calibrated `_sample(800)` is unchanged.
+_SEED = _SEED_N * 7919 + 101
+
+
+def _raw(n, hand="R", modifier=1.0):
+    """The first `n` grounders, fielded or not, in draw order.
+
+    A left-hander's spray is mirrored. Spray is pull-positive, so the same
+    angle would send a left-hander's ball to the other side of the infield;
+    mirrored, play `i` lands on the same spot for both hands.
+    """
+    key = (hand, modifier)
+    raw, rng = _RAW_CACHE.get(key) or ([], random.Random(_SEED))
+    mirror = -1.0 if hand == "L" else 1.0
+    for i in range(len(raw), n):
+        quality = _realistic_quality(rng)
+        raw.append(_play(i, quality, hand, modifier,
+                         spray_deg=mirror * _realistic_spray(rng)))
+    _RAW_CACHE[key] = (raw, rng)
+    return raw[:n]
+
 
 def _sample(n=600, hand="R", modifier=1.0):
     """Grounders that an infielder actually came up with."""
-    key = (hand, modifier)
-    raw, rng = _RAW_CACHE.get(key) or ([], random.Random(
-        _SEED_N * 7919 + len(hand) + int(modifier * 100)))
-    for i in range(len(raw), n):
-        raw.append(_play(i, _realistic_quality(rng), hand, modifier,
-                         spray_deg=_realistic_spray(rng)))
-    _RAW_CACHE[key] = (raw, rng)
-    return [a for a in raw[:n] if a.play_timing is not None]
+    return [a for a in _raw(n, hand, modifier) if a.play_timing is not None]
+
+
+def _paired(n, a, b):
+    """Play `i` under settings `a` beside play `i` under settings `b`.
+
+    The same ball, the same fielders and the same draws, so the only thing
+    that differs is the setting. A comparison between two independent samples
+    needed 700 plays a side to stay clear of its own noise; paired, a setting
+    that helps the runner has to win *every* close play, which is both a
+    stronger claim and one that 200 plays settle.
+    """
+    pairs = list(zip(_raw(n, **a), _raw(n, **b)))
+    for x, y in pairs:
+        assert (x.play_timing is None) == (y.play_timing is None), \
+            "a setting about the runner changed who fielded the ball"
+    return [(x, y) for x, y in pairs if x.play_timing is not None]
+
+
+def _assert_only_the_runner_moved(pairs):
+    """`faster` beats out every play `slower` does, on an identical defense."""
+    gained = 0
+    for faster, slower in pairs:
+        assert faster.play_timing.defense_s == pytest.approx(
+            slower.play_timing.defense_s, abs=1e-9)
+        assert faster.play_timing.runner_s <= slower.play_timing.runner_s
+        assert _reached(faster) or not _reached(slower), \
+            "the faster runner was thrown out on a play the slower one beat"
+        gained += _reached(faster) and not _reached(slower)
+    assert gained > 0, "the faster runner never turned a close play"
 
 
 # The batter reaching first, however they got there. An error is reaching:
@@ -255,16 +260,17 @@ def test_close_plays_exist_at_all():
 def test_left_handed_batters_beat_out_more_infield_hits():
     """Their half-step down the line is worth ~0.10 s, which only shows up
     on plays that were close to begin with."""
-    def rate(hand):
-        f = _sample(700, hand=hand)
-        return sum(1 for a in f if _reached(a)) / len(f)
-    assert rate("L") > rate("R")
+    pairs = _paired(200, dict(hand="L"), dict(hand="R"))
+    for lefty, righty in pairs:
+        assert lefty.play_timing.runner_s < righty.play_timing.runner_s
+    _assert_only_the_runner_moved(pairs)
 
 
 def test_difficulty_moves_the_runners_clock():
     """Harder difficulty = more outs, expressed as a slower batter rather
-    than a thumb on the verdict."""
-    def rate(modifier):
-        f = _sample(700, modifier=modifier)
-        return sum(1 for a in f if _reached(a)) / len(f)
-    assert rate(0.7) > rate(1.6)      # ROOKIE beats out more than HALL_OF_FAME
+    than a thumb on the verdict: the defense is untouched and ROOKIE beats
+    out every play HALL_OF_FAME does, and more."""
+    pairs = _paired(200, dict(modifier=0.7), dict(modifier=1.6))
+    for rookie, hall_of_fame in pairs:
+        assert rookie.play_timing.runner_s < hall_of_fame.play_timing.runner_s
+    _assert_only_the_runner_moved(pairs)

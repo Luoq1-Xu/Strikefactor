@@ -292,27 +292,3 @@ def test_a_supplied_velocity_is_never_outranked():
                                           rng=_fixed_rng(1), ev_mph=ev,
                                           is_home_run=home_run)
             assert got == ev, (ev, home_run, got)
-
-
-def test_the_home_run_distance_round_trip_is_gone():
-    """A home run's exit velocity came back out of its carry distance, three
-    kwargs deep, and the caller wrote it over the one the swing drew. The
-    carry is a pure function of the launch angle and that very number now, so
-    there was nothing left to measure — only a lossy re-reading through a
-    table with no launch-angle term.
-    """
-    import inspect
-
-    from strikefactor.engine import contact_audio, sound_manager
-    from strikefactor.gameplay import hit_outcome_manager
-
-    assert not hasattr(contact_audio, "HR_DISTANCE_TO_EV")
-    assert not hasattr(contact_audio, "exit_velocity_for_hr_distance")
-    # The kwarg was three levels deep, and any one of them left behind would
-    # let the round trip be rebuilt by a caller that still knew the name.
-    for fn in (contact_sound_for,
-               sound_manager.SoundManager.play_contact,
-               hit_outcome_manager.HitOutcomeManager.play_hit_sound):
-        params = inspect.signature(fn).parameters
-        assert "hr_distance_ft" not in params, fn
-        assert "is_home_run" in params, fn

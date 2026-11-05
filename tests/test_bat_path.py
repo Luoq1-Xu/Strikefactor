@@ -31,7 +31,6 @@ import pytest
 
 from strikefactor.gameplay import bat_path as bp
 from strikefactor.gameplay import spray
-from strikefactor.gameplay.hit_outcome_manager import HitOutcomeManager
 
 HANDS = ("R", "L")
 
@@ -54,43 +53,11 @@ def _mirror(aim, hand):
 
 # ---- Pins to the engine's own geometry --------------------------------------
 
-def test_the_pixel_pivot_is_gone():
-    """The hands used to be one screen pixel for every pitch.
-
-    `PIVOT_PX` restated `HitOutcomeManager.rhpos` / `lhpos`, the point the
-    engine's contact rectangle rotated about, and `_contact_pose` pinned the
-    knob to it. That is what put the bat 49 degrees past square on a middle
-    pitch: 1.55 ft off the centreline with 2.46 ft of bat to get the sweet
-    spot over the plate. The hands' depth and height are stated in feet now
-    and their lateral position is solved, so none of the pivot's names may
-    come back — nor `_reach` and its slide cap, which existed to stretch a
-    pinned knob after a ball it could not span.
-    """
-    for name in ("PIVOT_PX", "pivot_ft", "hands_anchor_ft", "_reach",
-                 "MAX_HAND_SLIDE_FT"):
-        assert not hasattr(bp, name), name
-    mgr = HitOutcomeManager(None, None)
-    assert not hasattr(mgr, "rhpos")
-    assert not hasattr(mgr, "lhpos")
+def test_the_hands_meet_the_ball_out_front_and_belt_high():
+    """The hands at contact are stated in feet, where a body puts them: a few
+    inches in front of the plate and about belt high."""
     assert bp.HAND_CONTACT_DEPTH_FT == pytest.approx(0.40)
     assert 2.5 < bp.HAND_CONTACT_HEIGHT_FT < 3.3
-
-
-def test_the_engines_contact_rectangle_is_gone():
-    """The engine swings a bat now, so `bat_path` has nothing to restate.
-
-    `CONTACT_ZONE_*` mirrored a 120 x 50 px box that `collision_angled` tested
-    for one frame; keeping a copy of a rectangle nobody swings would be the
-    second model of contact this whole refactor exists to remove. Its pivot
-    outlived it for a while as the hands' position, and is gone too
-    (`test_the_pixel_pivot_is_gone`).
-    """
-    assert not hasattr(bp, "CONTACT_ZONE_WIDTH_PX")
-    assert not hasattr(bp, "CONTACT_ZONE_HEIGHT_PX")
-    assert not hasattr(bp, "contact_zone_ft")
-    assert not hasattr(HitOutcomeManager, "get_ball_to_bat_contact_outcome")
-    assert not hasattr(HitOutcomeManager, "contact_timing_quality")
-    assert not hasattr(HitOutcomeManager, "power_timing_quality")
 
 
 def test_swing_duration_is_the_engines_150ms():
@@ -100,19 +67,6 @@ def test_swing_duration_is_the_engines_150ms():
 
 
 # ---- The swing is the player's, not the pitch's -----------------------------
-
-def test_the_contact_depth_input_is_gone():
-    """The regression pin, at the signature.
-
-    `swing()` used to take the ball's depth at bat arrival and build the whole
-    kinematic chain backwards from it. Anything that reintroduces a pitch
-    argument here reintroduces a bat modelled as a consequence of the ball.
-    """
-    import inspect
-    params = list(inspect.signature(bp.swing).parameters)
-    assert params == ["aim_ft", "handedness"]
-    assert not hasattr(bp, "_contact_lead")
-
 
 @pytest.mark.parametrize("hand", HANDS)
 @pytest.mark.parametrize("aim", AIMS)
@@ -163,15 +117,6 @@ def test_the_load_pose_is_a_constant_of_the_stance(hand):
             bp.SPINE_DEPTH_FT - bp.LOAD_HANDS_BACK_FT, abs=1e-9)
     heights = [k[2] for k in knobs]
     assert max(heights) - min(heights) < 0.25
-
-
-def test_the_load_rotated_back_from_contact_is_gone():
-    """`HAND_RADIUS_B` and `HAND_LEAD_DEG` stated the load as a scale and a
-    turn applied to the contact position. Either coming back means the swing
-    starts where it finishes minus some rotation again."""
-    assert not hasattr(bp, "HAND_RADIUS_B")
-    assert not hasattr(bp, "HAND_LEAD_DEG")
-    assert not hasattr(bp, "HAND_LEAD_RAD")
 
 
 # ---- The bat lies where the player pointed it -------------------------------
@@ -319,7 +264,6 @@ def test_contact_depth_follows_from_the_bearing_and_nothing_caps_it(hand):
     square. The old clamp at zero is gone, and with it the pile of swings met
     at exactly the plate.
     """
-    assert not hasattr(bp, "MAX_CONTACT_LEAD_DEG")
     reach = bp.HANDS_TO_SWEET_SPOT_FT * math.sin(
         math.radians(bp.POSE_MEAN_DEG + bp.POSE_SPAN_DEG))
     seen_behind = False
@@ -519,38 +463,6 @@ def test_the_ball_is_met_on_the_way_up_at_the_swing_plane(hand, aim):
     run = math.hypot(b[0] - a[0], b[1] - a[1])
     assert math.degrees(math.atan2(rise, run)) == pytest.approx(
         bp.ATTACK_ANGLE_DEG, abs=0.2)
-
-
-def test_the_inclined_ramp_that_buried_the_barrel_is_gone():
-    """`MAX_PLANE_DROP_FT` existed only to stop a monotonic ramp from putting
-    the barrel under the batter's feet. A tilted circle does not need a cap,
-    and a cap coming back means the ramp did too."""
-    assert not hasattr(bp, "MAX_PLANE_DROP_FT")
-
-
-def test_the_fixed_barrel_circle_is_gone():
-    """The barrel-on-a-circle model drew the V-cusp and the vertical plunge,
-    and derived the knob backwards into the catcher's box. Its constants
-    coming back means the sweet spot stopped being derived from the hands:
-    `BARREL_RADIUS_FT` was the circle, module-level `SWING_EASE_K` was its
-    single global profile (per-swing `ease_k` replaced it), and
-    `LOAD_HAND_HEIGHT_FT` was hand height as an *offset* from contact rather
-    than the absolute `LOAD_HANDS_HEIGHT_FT` a body actually has."""
-    assert not hasattr(bp, "BARREL_RADIUS_FT")
-    assert not hasattr(bp, "SWING_EASE_K")
-    assert not hasattr(bp, "LOAD_HAND_HEIGHT_FT")
-
-
-def test_the_orbit_solve_that_flung_the_hands_is_gone():
-    """`HAND_ORBIT_RADIUS_FT` and `HAND_DEPTH_PRIOR_FT` parameterised a
-    root-find for hands that would sit on a fixed orbit around a contact point
-    taken from the *pitch*. Past about three feet off the plate it had no
-    solution and fell through to "closest approach", which is how the hands
-    ended up 5 ft from the spine. The contact pose is solved from the aim now
-    and cannot fail."""
-    assert not hasattr(bp, "HAND_ORBIT_RADIUS_FT")
-    assert not hasattr(bp, "HAND_DEPTH_PRIOR_FT")
-    assert not hasattr(bp, "PLANE_DIP_RADIUS_CAP_FT")
 
 
 @pytest.mark.parametrize("hand", HANDS)

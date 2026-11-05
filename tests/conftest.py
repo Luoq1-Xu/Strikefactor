@@ -15,6 +15,12 @@ import pytest
 
 os.environ.setdefault("SDL_VIDEODRIVER", "dummy")
 os.environ.setdefault("SDL_AUDIODRIVER", "dummy")
+# SDL otherwise catches SIGTERM and SIGINT and turns them into quit events, and
+# a process forked from this one inherits that handler and ignores SIGTERM. A
+# `multiprocessing.Pool` stops its workers with SIGTERM, so a test that ran one
+# (test_calibrate_contact.py) hung for ever whenever a worker was still alive
+# when the pool shut down.
+os.environ.setdefault("SDL_NO_SIGNAL_HANDLERS", "1")
 
 # The player's data directory (strikefactor/paths.py), pointed at a scratch
 # directory for the whole run — per process, so each xdist worker gets its

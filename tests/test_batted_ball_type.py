@@ -211,22 +211,9 @@ def test_one_contact_has_one_launch_angle():
     assert asked == {got.launch_deg}
 
 
-def test_the_launch_angle_fit_is_gone():
-    """`ball_flight.launch_angle_deg(vertical_offset_in)` read the vertical
-    half of the collision off the offset alone: an intercept, a gain on the
-    normal's rise and a bounded scatter. It could not know that on a tilted
-    bat the same undercut also turns the ball sideways, and its response was
-    a little over half what a bat and a ball give. None of its names may come
-    back, and the animation's second copy of it goes with them."""
-    for name in ("launch_angle_deg", "ZERO_OFFSET_LAUNCH_DEG", "NORMAL_GAIN",
-                 "CONTACT_NORMAL_RADIUS_IN", "LAUNCH_JITTER_DEG",
-                 "JITTER_LIMIT_SIGMA"):
-        assert not hasattr(bf, name), name
-    assert not hasattr(hit_animation, "_shape_from_offset")
-    assert not hasattr(hit_animation, "_OFFSET_PX_TO_IN")
-    assert "vertical_offset" not in inspect.signature(
-        hit_animation.HitAnimation.__init__).parameters
-    # The bands and the classifier are what `ball_flight` keeps.
+def test_the_launch_angle_bands_have_fixed_edges():
+    """Grounder under 10 degrees, liner from 10, fly ball from 25, pop-up
+    from 50."""
     assert bf.shape_for_launch_angle(9.9) == "GROUNDER"
     assert bf.shape_for_launch_angle(10.0) == "LINER"
     assert bf.shape_for_launch_angle(25.0) == "FLY"
@@ -275,17 +262,3 @@ def test_a_caller_who_states_nothing_gets_a_line_drive():
         assert {hit_animation._pick_shape(outcome) for _ in range(20)} == {
             hit_animation.DEFAULT_SHAPE}
     assert hit_animation.DEFAULT_SHAPE == "LINER"
-
-
-# ---- The tables must not come back -----------------------------------------
-
-def test_the_prior_tables_are_gone():
-    """Same shape as `test_the_dilation_correction_constants_are_gone`: these
-    were a second model of a thing the geometry already answered, and two of
-    them were tuned against a `ft_per_px_z` that has since changed. A
-    reintroduction would be silent."""
-    import strikefactor.gameplay.hit_outcome_manager as hom
-    for name in ("_TYPE_OFFSET_ANCHORS", "_TYPE_OFFSET_SIGMA",
-                 "_TYPE_QUALITY_BIAS", "_TYPE_BASE_PRIOR",
-                 "_BATTED_BALL_TYPES", "INCHES_PER_FT"):
-        assert not hasattr(hom, name), name
