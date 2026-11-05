@@ -24,7 +24,7 @@ from datetime import datetime, timedelta
 
 from strikefactor import outcomes, paths
 
-SCHEMA_VERSION = 15  # Bumped when migrations are added; see PitchDB._migrate.
+SCHEMA_VERSION = 16  # Bumped when migrations are added; see PitchDB._migrate.
 
 # v5 renamed the pop-up outcome from "POP_UP" to "POP UP", so it reads like
 # every other recorded outcome ("HOME RUN", "LINEOUT"). Data written before v5
@@ -121,6 +121,7 @@ class PitchDB:
         running_play_json TEXT,
         baserunning_mode TEXT,
         spray_angle_deg REAL,
+        foul_result TEXT,
 
         -- Umpire / ABS
         ai_umpire_strike INTEGER,
@@ -396,6 +397,19 @@ class PitchDB:
     # pitches with no recorded intent; never back-filled.
     V15_PITCHES_COLUMNS = [("aimed_by", "TEXT")]
 
+    # v16: what became of a ball the batter fouled off (`outcomes.FOUL_RESULTS`):
+    # a ground ball, into the net, into the seats, or — the only kind that is
+    # still live — down in foul ground a fielder could reach, where it was
+    # CAUGHT, MUFFED or LANDED untouched. A caught one is recorded as the out
+    # it was (`outcome` POP_UP / FLYOUT / LINEOUT, with `batted_ball_type`
+    # set, as on any ball an out was made on), so this column is what tells a
+    # foul out from a fair one.
+    #
+    # NULL on every pitch that was not fouled off, and on every row before
+    # v16 — before v16 no foul could be caught, and nothing recorded where one
+    # went. Never back-filled.
+    V16_PITCHES_COLUMNS = [("foul_result", "TEXT")]
+
     # Backup policy
     BACKUP_DIR_NAME = "backups"
     BACKUP_MIN_INTERVAL = timedelta(hours=1)  # don't backup more than once per hour
@@ -432,7 +446,7 @@ class PitchDB:
                              + self.V9_PITCHES_COLUMNS + self.V10_PITCHES_COLUMNS
                              + self.V11_PITCHES_COLUMNS + self.V12_PITCHES_COLUMNS
                              + self.V13_PITCHES_COLUMNS + self.V14_PITCHES_COLUMNS
-                             + self.V15_PITCHES_COLUMNS):
+                             + self.V15_PITCHES_COLUMNS + self.V16_PITCHES_COLUMNS):
                 if col not in existing_pitches:
                     self.conn.execute(f"ALTER TABLE pitches ADD COLUMN {col} {decl}")
 
@@ -762,6 +776,7 @@ class PitchDataExtractor:
             "running_play_json": getattr(sim, "running_play_json", None),
             "baserunning_mode": getattr(sim, "baserunning_mode", None),
             "spray_angle_deg": getattr(sim, "spray_angle_deg", None),
+            "foul_result": getattr(sim, "foul_result", None),
             "ai_umpire_strike": _nullable_int(getattr(sim, "ai_umpire_strike", None)),
             "truth_strike": _nullable_int(getattr(sim, "truth_strike", None)),
             "abs_challenged": int(bool(getattr(sim, "abs_challenged", False))),

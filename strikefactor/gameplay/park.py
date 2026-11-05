@@ -131,3 +131,120 @@ def fence_verdict(launch_deg, ev_mph, field_rad):
         return SHORT_OF_WALL
     height_ft = ball_flight.height_at_distance_ft(launch_deg, carry_ft, wall_ft)
     return OUT_OF_PARK if height_ft > FENCE_HEIGHT_FT else OFF_THE_WALL
+
+
+# --- Foul ground -------------------------------------------------------------
+#
+# The wall above bounds fair territory. This bounds the foul ground beside it:
+# where a fielder can still run, and so where a foul fly can still be caught.
+# Same contract as the wall — real feet, one answer, asked by the animation,
+# the fielders and the catch gate alike.
+#
+# **The backstop is the bottom edge of the screen.** Home plate is drawn 50 px
+# above it at `FT_TO_PX_Y = 1.10`, which is 45.5 ft, and real backstops stand
+# 45-60 ft behind the plate. Putting the net there keeps every catchable foul
+# on screen, catcher included, and it gives "the ball left the bottom of the
+# screen" a meaning: it went into the net.
+#
+# The rail is stated as a distance *from fair territory*, so one rule draws all
+# of it: a 45 ft arc behind the plate (where the nearest fair ground is the
+# plate itself) that runs straight into rails 45 ft off each foul line. Real
+# parks put the dugouts 40-60 ft off the line and pinch the corners, so the
+# rail closes in to `FOUL_GROUND_AT_POLE_FT` by the foul pole.
+#
+# **That width is the calibration of the foul out.** Whether a foul fly is
+# caught is the defense getting under it, and nothing else, so how much foul
+# ground there is to get under it in is the dial. MLB caught about 2.5% of
+# fouls in 2019 (1.4 foul outs a game against ~54 fouls); `tools.calibrate_
+# fouls` measured, over 26,000 swings a hand, 1.8% / 1.9% (RHB / LHB) at
+# 25 ft, and 2.3% / 2.5% at 40 ft. 45 — no pinch at all — overshoots to 2.7%.
+BACKSTOP_FT = 45.0
+FOUL_GROUND_AT_POLE_FT = 40.0
+FOUL_POLE_FT = wall_distance_ft(math.pi / 4.0)
+
+# Where a ball in foul ground is. `FAIR` is there so the question is total;
+# nothing that asks it should be handed a fair ball.
+FAIR = "FAIR"
+PLAYABLE = "PLAYABLE"     # foul ground a fielder can reach
+BACKSTOP = "BACKSTOP"     # behind the plate, past the net
+STANDS = "STANDS"         # past the rail beside a line, or past the pole
+
+
+def foul_ground_width_ft(along_ft):
+    """How far the rail stands off a foul line, `along_ft` feet down it."""
+    frac = max(0.0, min(1.0, along_ft / FOUL_POLE_FT))
+    return BACKSTOP_FT + (FOUL_GROUND_AT_POLE_FT - BACKSTOP_FT) * frac
+
+
+def foul_ground_verdict(x_ft, y_ft):
+    """What is at this point of the field: fair ground, playable foul ground,
+    the backstop or the stands.
+
+    `x_ft` is lateral (positive toward first base) and `y_ft` toward centre
+    field, the frame `hit_animation._to_field_ft` returns. Foul lines at 45
+    degrees, so a point is fair exactly when `|x| <= y`.
+    """
+    ax = abs(x_ft)
+    if ax <= y_ft:
+        return FAIR
+    root2 = math.sqrt(2.0)
+    along = (ax + y_ft) / root2
+    if along <= 0.0:
+        # Behind the plate: the nearest fair ground is home itself.
+        return PLAYABLE if math.hypot(x_ft, y_ft) <= BACKSTOP_FT else BACKSTOP
+    off = (ax - y_ft) / root2
+    if along > FOUL_POLE_FT or off > foul_ground_width_ft(along):
+        return STANDS
+    return PLAYABLE
+
+
+def foul_rail_ft(side, samples=48):
+    """The playable foul ground's outer edge on one side, in field feet.
+
+    `side` is +1 for the first-base side and -1 for third. Starts on the
+    centre line behind the plate and runs out to the rail's end at the pole,
+    so the two sides drawn together are the whole boundary.
+    """
+    root2 = math.sqrt(2.0)
+    points = []
+    arc = max(2, samples // 4)
+    # The arc behind the plate: from straight back round to the line's
+    # perpendicular, which is 45 degrees either side of straight back.
+    for i in range(arc + 1):
+        a = -math.pi / 2.0 + side * (math.pi / 4.0) * i / arc
+        points.append((BACKSTOP_FT * math.cos(a), BACKSTOP_FT * math.sin(a)))
+    for i in range(1, samples + 1):
+        along = FOUL_POLE_FT * i / samples
+        off = foul_ground_width_ft(along)
+        points.append((side * (along + off) / root2, (along - off) / root2))
+    return points
+
+
+def clamp_to_foul_ground_ft(x_ft, y_ft, margin_ft=0.0):
+    """The nearest point to `(x_ft, y_ft)` that a fielder can stand on.
+
+    Fair ground comes back unchanged, and so does foul ground at least
+    `margin_ft` inside the rail and the net. Anything nearer, or past them, is
+    pulled straight in toward the plate behind it and square back to the rail
+    beside a line — the rail is a wall, and a fielder chasing a ball into the
+    seats stops at it.
+    """
+    ax = abs(x_ft)
+    if ax <= y_ft:
+        return (x_ft, y_ft)
+    root2 = math.sqrt(2.0)
+    sign = 1.0 if x_ft >= 0.0 else -1.0
+    along = (ax + y_ft) / root2
+    if along <= 0.0:
+        r = math.hypot(x_ft, y_ft)
+        limit = max(0.0, BACKSTOP_FT - margin_ft)
+        if r <= limit:
+            return (x_ft, y_ft)
+        return (x_ft * limit / r, y_ft * limit / r)
+    off = (ax - y_ft) / root2
+    held = min(along, FOUL_POLE_FT)
+    limit = max(0.0, foul_ground_width_ft(held) - margin_ft)
+    if held == along and off <= limit:
+        return (x_ft, y_ft)
+    off = min(off, limit)
+    return (sign * (held + off) / root2, (held - off) / root2)

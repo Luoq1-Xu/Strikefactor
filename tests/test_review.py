@@ -167,6 +167,7 @@ def test_completed_play_publishes_all_views_before_continue(game, monkeypatch, c
     sim.hit_animation, sim._fielding_recorder = anim, recorder
     sim._publish_review = lambda: PitchSimulation._publish_review(sim)
     sim._complete_hit_animation = lambda: PitchSimulation._complete_hit_animation(sim)
+    sim._play_animation_sounds = lambda: PitchSimulation._play_animation_sounds(sim)
     calls = []
     anim.on_complete = lambda: calls.append('finalized')
     sim._finish_pitch = lambda: pytest.fail('Review advanced the pitch')

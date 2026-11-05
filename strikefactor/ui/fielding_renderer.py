@@ -6,6 +6,9 @@ from strikefactor.gameplay import hit_animation as ha
 
 # A runner who left before a caught fly was touched and still has to get back.
 RETOUCH_COLOR = (255, 170, 60)
+# The rail and backstop at the edge of playable foul ground. Dimmer than the
+# foul lines: it is where play stops, not a line the ball is judged against.
+RAIL_COLOR = (78, 78, 78)
 
 
 def _base_name(base):
@@ -164,6 +167,13 @@ def draw_field(screen):
     line_color = (150, 150, 150)
     pygame.draw.line(screen, line_color, (hx, hy), foul_right_base, 1)
     pygame.draw.line(screen, line_color, (hx, hy), foul_left_base, 1)
+
+    # The edge of playable foul ground: the rail beside each line and the
+    # backstop arc behind the plate (`park.foul_rail_ft`). Faint, because it
+    # is context rather than a line of play — it is where a foul fly stops
+    # being catchable. Cached: the geometry never changes.
+    for rail in ha._foul_rail_geometry():
+        pygame.draw.lines(screen, RAIL_COLOR, False, rail, 1)
 
     # Foul poles — short vertical bars rising from the wall corners. Match
     # the glove yellow so the only non-gray elements are the two play-

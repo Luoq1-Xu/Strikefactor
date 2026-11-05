@@ -302,6 +302,12 @@ class PitchSimulation:
         # which is only ever set on a ball in play; widening it would silently
         # change what every existing aggregate over that column means.
         self._foul_shape = None
+        # What became of the foul (`outcomes.FOUL_RESULTS`): into the net or
+        # the seats, on the ground, or — the one kind that is still live —
+        # down where a fielder could reach it, in which case it was caught,
+        # dropped, or fell in. None on anything that was not fouled off.
+        self.foul_result = None
+        self._foul_play = None            # the foul's HitAnimation, shown or not
         self.ai_umpire_strike = None      # set in _make_ball_strike_call (taken pitches only)
         self.truth_strike = None          # set in _make_ball_strike_call (taken pitches only)
         # Always False when the row is written: the challenge window is still
@@ -795,21 +801,64 @@ class PitchSimulation:
             self.contact.spray_deg, quality, self._foul_shape)
 
     def _handle_foul_ball(self):
-        """Handle foul ball outcome."""
+        """A foul ball: a strike, unless somebody catches it.
+
+        Most fouls are dead the moment they are hit — on the ground, into the
+        net, into the seats — and their strike is charged now, as it always
+        was. One that comes down where a fielder can reach it is live
+        (`HitAnimation.live_foul`): the count waits for it, and caught it is a
+        fly ball out, runners tagging and all.
+
+        The animation is the one thing that decides which, off the ball's own
+        flight, so it is built for every foul. With the foul animation
+        switched off a live foul is still played, just out of sight and to
+        the end, and only its result is shown.
+        """
         self._compute_foul_contact_metrics()
         self.outcome = 'foul'
         self.game.strikes += 1
-        self.is_strike = True
-        self.new_entry['foul'] = True
         self.made_contact = "fouled"
         self.pitch_results_done = True
         self.game.pitchnumber += 1
-        if self.game.currentstrikes < 2:
-            self.game.currentstrikes += 1
-        if self.game.settings_manager.get_setting("foul_animation_enabled"):
-            self._start_foul_animation()
+        animate = self.game.settings_manager.get_setting("foul_animation_enabled")
+        anim = self._build_foul_animation(watched=animate)
+        self._foul_play = anim
+        self.foul_result = anim.foul_result
+        if anim.live_foul:
+            self._pending_hit_score_before = (
+                self.game.scoreKeeper.get_score() if self.game.in_gameday_mode else 0)
+        else:
+            self._charge_foul_strike()
+        if animate:
+            self._start_foul_animation(anim)
+        elif anim.live_foul:
+            self._resolve_foul_out_of_sight(anim)
         else:
             self.game._display_pitch_results("FOUL", self.pitchtype, self.speed_mph)
+
+    def _charge_foul_strike(self):
+        """The foul's strike: one, unless the batter already has two."""
+        self.outcome = 'foul'
+        self.is_strike = True
+        self.new_entry['foul'] = True
+        if self.game.currentstrikes < 2:
+            self.game.currentstrikes += 1
+
+    def _resolve_foul_out_of_sight(self, anim, step_ms=16.0, limit_ms=60000.0):
+        """Play a live foul to the end without drawing it.
+
+        The foul animation is off, but whether a foul fly is caught is decided
+        by the defense getting to it, and nowhere else — so the play is run,
+        frame by frame on the same clock, and only its result is shown. Nobody
+        can press Send in a play they cannot see, so it is built with the
+        runners on Auto (`_build_foul_animation`).
+        """
+        t = 0.0
+        anim.update(t)
+        while not anim.finished and t < limit_ms:
+            t += step_ms
+            anim.update(t)
+        self._finalize_foul(anim, banner=anim.classified_outcome != "FOUL")
 
     def _handle_successful_hit(self):
         """Handle successful hit outcome."""
@@ -926,15 +975,20 @@ class PitchSimulation:
         self.game.currentstrikes = 0
         self.game.currentballs = 0
 
-    def _finalize_batted_ball(self):
+    def _finalize_batted_ball(self, anim=None):
         """Apply deferred state once the animation has classified the
         contact into its final outcome — FLYOUT, GROUNDOUT, SINGLE,
         DOUBLE, or TRIPLE. Wired as the on_complete callback for the
         unified IN_PLAY animation.
+
+        `anim` is the play being finalized, which is `hit_animation` except
+        for a caught foul played out of sight (`_resolve_foul_out_of_sight`),
+        which never becomes the pitch's on-screen animation.
         """
+        anim = anim if anim is not None else self.hit_animation
         # Safety fallback in case classification didn't run (animation
         # ended without resolving — shouldn't happen, but treat as SINGLE).
-        classified = getattr(self.hit_animation, 'classified_outcome', None) or "SINGLE"
+        classified = getattr(anim, 'classified_outcome', None) or "SINGLE"
         score_before = getattr(self, '_pending_hit_score_before', 0)
 
         # Mirror the animation's fielding record for the DB (schema v7). The
@@ -942,21 +996,21 @@ class PitchSimulation:
         # the distinction that makes the column falsifiable: a ball nobody
         # fielded has no margin, and recording a 0.0 for it would put a spike
         # at dead-even in a distribution whose whole purpose is its shape.
-        self.fielder_role = getattr(self.hit_animation, 'fielder_role', None)
-        timing = getattr(self.hit_animation, 'play_timing', None)
+        self.fielder_role = getattr(anim, 'fielder_role', None)
+        timing = getattr(anim, 'play_timing', None)
         self.play_margin_s = timing.margin_s if timing is not None else None
         # The other race, for the ball that got past the infield. Its own
         # column, for the reason `play_margin_s` is only ever the throw to
         # first: the two are different races and share only their sign.
-        self.extra_base_margin_s = getattr(self.hit_animation,
+        self.extra_base_margin_s = getattr(anim,
                                            'extra_base_margin_s', None)
 
         # Three states, not two. Reaching on an error is neither an out nor a
         # hit, and the old binary put it in the `else` — crediting the batter
         # a hit, incrementing `game.hits`, and feeding it to the batting
         # heatmap as though they had earned it.
-        running_result = getattr(self.hit_animation, "running_result", None)
-        control = getattr(self.hit_animation, "baserunning", None)
+        running_result = getattr(anim, "running_result", None)
+        control = getattr(anim, "baserunning", None)
         self.baserunning_mode = control.mode if control is not None else None
         if running_result is not None:
             import json
@@ -968,7 +1022,7 @@ class PitchSimulation:
         running_outs = running_result.running_outs if running_result is not None else 0
         self.baserunning_outs = running_outs if running_result is not None else None
         self.batter_final_base = running_result.batter.final_base if running_result is not None else None
-        race = getattr(self.hit_animation, "_return_race", None)
+        race = getattr(anim, "_return_race", None)
         self.tag_margin_s = race.tag_margin_s if race is not None and race.kind == "tag" else None
         outs_before = self.game.currentouts
         is_out = classified in outcomes.BATTED_OUT_OUTCOMES
@@ -1013,8 +1067,8 @@ class PitchSimulation:
             play = self.game.hit_outcome_manager.apply_classified_outcome(
                 classified,
                 outs=self.game.currentouts - (1 if is_out else 0),
-                bases=getattr(self.hit_animation, 'error_bases', 1),
-                clean_outcome=getattr(self.hit_animation, 'error_out', None),
+                bases=getattr(anim, 'error_bases', 1),
+                clean_outcome=getattr(anim, 'error_out', None),
             )
         # A sacrifice fly is a plate appearance and not an at-bat.
         if play.sacrifice_fly:
@@ -1051,6 +1105,10 @@ class PitchSimulation:
         self.outcome = classified
 
         display = running_result.display_name if running_result is not None else self._format_display_outcome(classified)
+        if getattr(anim, "live_foul", False) and not (
+                running_result is not None and running_result.double_play):
+            # Recorded as the out it was; called what it was.
+            display = outcomes.FOUL_OUT_DISPLAY
         if running_result is not None and running_result.batter_on_throw_base is not None:
             base = running_result.batter_on_throw_base
             where = "HOME" if base == 4 else f"{base}B"
@@ -1426,38 +1484,25 @@ class PitchSimulation:
         except Exception:
             return defense.NEUTRAL
 
-    def _start_foul_animation(self):
-        """Begin the cosmetic foul-ball animation; defers the FOUL result
-        display until it ends.
+    def _build_foul_animation(self, watched=True):
+        """The foul's play, built from the numbers resolved at contact.
 
-        Deliberately does not go through _start_hit_animation: that path
-        reads a stale last_batted_ball_type from the previous hit (fouls
-        never run the hit outcome pipeline) and writes a blue "hit"
-        trail marker where track mode expects the foul's red strike entry.
+        Deliberately not through `_start_hit_animation`: that path reads a
+        stale last_batted_ball_type from the previous hit (fouls never run the
+        hit outcome pipeline) and writes a blue "hit" trail marker where track
+        mode expects the foul's red strike entry.
         """
         from strikefactor.gameplay.hit_animation import HitAnimation
 
-        quality = self._foul_quality
-
-        def on_complete():
-            self.game._display_pitch_results("FOUL", self.pitchtype, self.speed_mph)
-            self.game.banner.show_banner("FOUL BALL")
-
-        # Replicate the trail entry the non-animated foul path writes via
-        # _update_pitch_trajectory (pitch_results_done + is_strike -> red
-        # "strike" marker) — the trajectory tracker stops running once the
-        # animation owns the frame, so track mode would otherwise lose the
-        # foul's contact-point marker.
-        self._append_pitch_trace([
-            self.game.ball[0], self.game.ball[1],
-            self.game.fourseamballsize, (227, 75, 80), "strike",
-        ])
-
-        self.hit_animation = HitAnimation(
+        entry = getattr(self, "new_data_entry", None)
+        bases = None if entry is None else tuple(
+            b for b, key in ((1, "RunnerFirst"), (2, "RunnerSecond"), (3, "RunnerThird"))
+            if entry.get(key, False))
+        return HitAnimation(
             self.game,
             outcome="FOUL",
-            on_complete=on_complete,
-            quality=quality,
+            on_complete=self._finalize_foul,
+            quality=self._foul_quality,
             # Both resolved in `_compute_foul_contact_metrics`, which runs on
             # every foul rather than only the animated ones. `departure_deg`
             # is where the ball went as opposed to where the collision sent
@@ -1469,7 +1514,69 @@ class PitchSimulation:
                              - self.contact.pose_attack_deg),
             ev_mph=self.exit_velocity_mph,
             launch_deg=self.launch_angle_deg,
+            initial_bases=bases,
+            baserunning_mode=self._baserunning_mode() if watched else "auto",
+            send_key_name=self._send_key_name(),
+            retreat_key_name=self._retreat_key_name(),
+            select_key_name=self._select_key_name(),
         )
+
+    def _start_foul_animation(self, anim):
+        """Show the foul's play; the FOUL result waits for it to end."""
+        # Replicate the trail entry the non-animated foul path writes via
+        # _update_pitch_trajectory (pitch_results_done + is_strike -> red
+        # "strike" marker) — the trajectory tracker stops running once the
+        # animation owns the frame, so track mode would otherwise lose the
+        # foul's contact-point marker. A caught foul recolours it.
+        self._append_pitch_trace([
+            self.game.ball[0], self.game.ball[1],
+            self.game.fourseamballsize, (227, 75, 80), "strike",
+        ])
+        self.hit_animation = anim
+
+    def _finalize_foul(self, anim=None, banner=True):
+        """What the foul came to, once its play is over.
+
+        A dead foul's strike was charged at contact. A live one is charged
+        now if it fell — untouched or off a glove — and if it was caught, it
+        is a fly ball out and goes the way of every other one.
+        """
+        anim = anim if anim is not None else self.hit_animation
+        self.foul_result = anim.foul_result
+        if anim.live_foul and anim.classified_outcome in outcomes.BATTED_OUT_OUTCOMES:
+            self._finalize_foul_out(anim)
+            return
+        if anim.live_foul:
+            self._charge_foul_strike()
+        self.game._display_pitch_results("FOUL", self.pitchtype, self.speed_mph)
+        if banner:
+            self.game.banner.show_banner(
+                "DROPPED FOUL" if anim.foul_result == outcomes.FOUL_MUFFED else "FOUL BALL")
+
+    def _finalize_foul_out(self, anim):
+        """A foul fly was caught: the batter is out on a ball in play.
+
+        The pitch is a ball in play now, not a strike, and the at-bat is over
+        — so the count resets the way `_handle_contact_result` resets it for a
+        ball in play, and the out, the runners and the scoring all go through
+        `_finalize_batted_ball`, exactly as a fly ball out in fair ground
+        does. That includes the sacrifice fly: a runner who tags and scores on
+        a caught foul fly is one.
+        """
+        self.is_strike = False
+        # The shape is recorded on a ball in play, and a caught foul is one —
+        # the out was made on it. A foul that fell is not, and keeps it None.
+        self.batted_ball_type = self._foul_shape
+        self.game.pitchnumber = 0
+        self.game.currentstrikes = 0
+        self.game.currentballs = 0
+        if self.game.last_pitch_information:
+            last = self.game.last_pitch_information[-1]
+            if len(last) >= 5 and last[4] == "strike":
+                last[3], last[4] = outcomes.OUT_COLOR, "out"
+        self.game._display_pitch_results(outcomes.FOUL_OUT_DISPLAY,
+                                         self.pitchtype, self.speed_mph)
+        self._finalize_batted_ball(anim)
 
     def _handle_hit_animation_phase(self, current_time, time_delta):
         """Render the hit animation; fire deferred banner; wait for player input.
@@ -1524,6 +1631,7 @@ class PitchSimulation:
             deferred.append(event)
         self.hit_animation.update(current_time)
         self._fielding_recorder.capture(self.hit_animation)
+        self._play_animation_sounds()
         self.hit_animation.draw(self.game.screen)
 
         self._complete_hit_animation()
@@ -1565,6 +1673,15 @@ class PitchSimulation:
                     self._complete_hit_animation()
                 self._finish_pitch()
                 return
+
+    def _play_animation_sounds(self):
+        """Play what the play on screen made a sound for this frame — a
+        foul caught, a foul into the net. Only here: a play run out of sight
+        or replayed from frames is silent."""
+        sounds = getattr(self.game, "sound_manager", None)
+        for cue, gain in self.hit_animation.take_sound_cues():
+            if sounds is not None:
+                sounds.play_cue(cue, gain)
 
     def _complete_hit_animation(self):
         """Finalize statistics and publish the clip once, including early exits."""

@@ -70,6 +70,29 @@ TERMINAL_OUTCOMES = (STRIKEOUT, WALK) + IN_PLAY_OUTCOMES
 HIT_BASES = {SINGLE: 1, DOUBLE: 2, TRIPLE: 3, HOME_RUN: 4}
 
 
+# ---- What became of a foul ---------------------------------------------------
+#
+# The `foul_result` column. Set on every pitch the batter fouled off, including
+# the ones a fielder caught (whose `outcome` is the out, spelled as above), and
+# NULL on everything else. Its own vocabulary rather than new outcomes: a foul
+# that drops is still a foul and a foul that is caught is still a pop up, so
+# every group above already counts both correctly.
+
+FOUL_GROUND = "GROUND"        # a ground ball, dead where it stopped
+FOUL_BACKSTOP = "BACKSTOP"    # back into the net, or over it
+FOUL_STANDS = "STANDS"        # into the seats beside a line
+FOUL_LANDED = "LANDED"        # came down untouched where it could be caught
+FOUL_MUFFED = "MUFFED"        # a fielder got there and dropped it
+FOUL_CAUGHT = "CAUGHT"        # caught: the batter is out
+
+FOUL_RESULTS = (FOUL_GROUND, FOUL_BACKSTOP, FOUL_STANDS, FOUL_LANDED,
+                FOUL_MUFFED, FOUL_CAUGHT)
+
+# What a caught foul is called on the banner. The recorded outcome stays the
+# out it was (`POP UP`, `FLYOUT`, `LINEOUT`).
+FOUL_OUT_DISPLAY = "FOUL OUT"
+
+
 # ---- Spelling ---------------------------------------------------------------
 
 def db_key(outcome):
