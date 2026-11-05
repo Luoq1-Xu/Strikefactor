@@ -62,7 +62,10 @@ def draw_frame(screen, frame):
             sx - ha.BALL_SHADOW_W_PX // 2, sy - ha.BALL_SHADOW_H_PX // 2,
             ha.BALL_SHADOW_W_PX, ha.BALL_SHADOW_H_PX))
     if frame.ball_visible:
-        pygame.draw.circle(screen, (255, 255, 255), tuple(map(int, frame.ball)), ha.BALL_RADIUS_PX)
+        # Bigger the higher it is (`drawn_ball_radius_px`): the gap to the
+        # shadow is the height, and a high ball is nearer the camera.
+        radius = ha.drawn_ball_radius_px(frame.shadow[1] - frame.ball[1])
+        pygame.draw.circle(screen, (255, 255, 255), tuple(map(int, frame.ball)), radius)
     if frame.distance is not None:
         feet, x, y, alpha = frame.distance
         y = max(_font(36).get_height() // 2 + 4, y)

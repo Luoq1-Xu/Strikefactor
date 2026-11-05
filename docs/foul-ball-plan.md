@@ -1,7 +1,9 @@
 # Foul balls: real flights, a backstop, and foul outs
 
-Status: phases 0-4 implemented; phase 5 (optional polish) not started. The
-plan below is kept as written. Where the build went differently:
+Status: phases 0-4 implemented, and three of phase 5's four extras — the
+catch sound, the net thud and the ball growing with height. Foul tips and
+"let it drop" are not started. The plan below is kept as written. Where the
+build went differently:
 
 - **Decisions taken.** The backstop is at the bottom edge of the screen
   (`park.BACKSTOP_FT = 45`). With the foul animation off, a live foul is still
@@ -31,6 +33,19 @@ plan below is kept as written. Where the build went differently:
   opens at the catch for the tag-up.
 - **A dead foul can be skipped** with any key from contact (the prompt still
   waits for the banner).
+- **Sounds are cues, not playback.** `HitAnimation` records `(cue, gain)`
+  pairs (`take_sound_cues`) and only the play on screen plays them
+  (`PitchSimulation._play_animation_sounds` -> `SoundManager.play_cue`), so a
+  foul resolved out of sight, a replay and every calibration sweep are silent.
+  A foul catch reuses the glove pop, quieter the further from the plate; fair
+  catches are still silent, as before.
+- **The net thud is synthesized** by `tools/make_net_thud.py` into
+  `assets/sounds/net/thud.mp3` — a low thump with a short rustle, pitched at
+  110-220 Hz so laptop speakers can play it. Replace the file with a
+  recording to change it.
+- **The ball grows only above 15 ft**, a pixel of radius per 30 ft up to 6 px,
+  because every fence-drawing guarantee is stated at the 3 px ball. It
+  applies to every batted ball and to replays.
 
 ## The problem
 

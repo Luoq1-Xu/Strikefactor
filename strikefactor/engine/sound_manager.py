@@ -32,7 +32,9 @@ class SoundManager:
     # way umpire_sounds/ already was:
     #
     #   contact/       bat on ball, weakest -> hardest
-    #   mitt/          catcher receiving a pitch
+    #   mitt/          catcher receiving a pitch, or a fielder catching a foul fly
+    #   net/           a foul into the backstop net (synthesized by
+    #                  tools/make_net_thud.py; replace the file to change it)
     #   umpire_sounds/ ball / strike / strike_3 calls
     #
     # Keys are named for what the sample sounds like, never for an outcome.
@@ -43,6 +45,7 @@ class SoundManager:
     # is what stops a mitt slap being wired in as a bat sound again.
     CONTACT_DIR = "contact"
     MITT_DIR = "mitt"
+    NET_DIR = "net"
     UMPIRE_DIR = "umpire_sounds"
 
     SOUND_FILES = {
@@ -58,7 +61,14 @@ class SoundManager:
         'mitt_pop_long': f"{MITT_DIR}/long.mp3",
         # Ball travelling through the air.
         'sizzle': "pitch_sizzle.mp3",
+        # A foul into the backstop net.
+        'net_thud': f"{NET_DIR}/thud.mp3",
     }
+
+    # The sounds a fielding play can ask for (`HitAnimation.take_sound_cues`),
+    # by the cue names `hit_animation.CUE_*` define. Kept in step with them by
+    # tests/test_foul_sounds.py.
+    CUES = ("catch", "net")
 
     def load_sounds(self):
         # Load all game sounds
@@ -159,16 +169,24 @@ class SoundManager:
             play_time = pygame.time.get_ticks() + delay
             self.pending_sounds.append((play_time, sound_name))
     
-    def glovepop(self):
-        """Catcher receiving a pitch. Weighted toward the short pop."""
+    def glovepop(self, volume=None):
+        """A ball into a glove: the catcher receiving a pitch, or a fielder
+        catching a foul fly. Weighted toward the short pop."""
         rand = random.randint(2, 5)
         if rand == 2:
-            self.play('mitt_pop_short')
+            self.play('mitt_pop_short', volume=volume)
         elif rand == 3:
-            self.play('mitt_pop_long')
+            self.play('mitt_pop_long', volume=volume)
         else:
-            self.play('mitt_pop_medium')
+            self.play('mitt_pop_medium', volume=volume)
         return
+
+    def play_cue(self, cue, volume=None):
+        """Play a sound a fielding play asked for (see `CUES`)."""
+        if cue == "catch":
+            self.glovepop(volume=volume)
+        elif cue == "net":
+            self.play('net_thud', volume=volume)
 
     def update(self):
         """Check and play scheduled sounds. This should be called once per frame."""

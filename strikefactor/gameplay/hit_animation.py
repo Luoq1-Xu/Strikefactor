@@ -373,6 +373,19 @@ FOUL_CALL_PRIORITY = {"LF": 0, "CF": 0, "RF": 0,
 CATCHER_FOUL_RANGE_FT = 110.0
 # Out of the crouch and the mask off, on top of `ROLE_REACTION_BIAS_S["C"]`.
 CATCHER_MASK_OFF_S = 0.35
+# What a play sounds like, as cues for whoever is listening
+# (`HitAnimation.take_sound_cues`). The animation has no speaker: it says what
+# happened and how loud, and `SoundManager.play_cue` turns that into a sample.
+CUE_CATCH = "catch"     # a foul fly into a glove
+CUE_NET = "net"         # a foul into the backstop net
+# A catch is heard from the plate, where the broadcast microphones are: full
+# at the catcher, fading with distance, never silent.
+CATCH_SOUND_FALLOFF_FT = 250.0
+CATCH_SOUND_MIN_GAIN = 0.3
+# How hard the net is hit, as exit velocity: soft at the bottom, full at the
+# top. The ball's own exit velocity, so it is drawn nowhere new.
+NET_SOUND_EV_MPH = (55.0, 95.0)
+NET_SOUND_GAIN = (0.45, 1.0)
 # A second fielder converging on a foul fly stops this far short of it and
 # lets the first one take it.
 FOUL_BACKUP_SHORT_FT = 12.0
@@ -879,6 +892,37 @@ FIELDER_WALL_MARGIN_PX  = BODY_RADIUS_PX
 BALL_RADIUS_PX          = 3
 BALL_SHADOW_W_PX        = 8             # ellipse, flattened by the camera tilt
 BALL_SHADOW_H_PX        = 3
+
+# The drawn ball grows as it climbs, toward a camera above and behind the
+# plate. Height on this field is otherwise only the gap between the ball and
+# its shadow, and that gap is drawn straight up the screen — so a pop-up hit
+# almost straight up read as a ball travelling out toward the mound. A bigger
+# ball is a ball nearer the camera, which is what a pop-up is.
+#
+# **Not below the fence.** Every guarantee about the drawn ball at the wall —
+# a ball off the wall drawn wholly under the rim, a home run wholly over it
+# (WALL_IMPACT_MAX_LIFT_PX, HR_FENCE_MIN_LIFT_PX, BALL_WALL_MARGIN_PX) — is
+# stated at BALL_RADIUS_PX, so the ball keeps that size to a little over the
+# fence's 12 ft. Above it the gap to the rim grows by FT_TO_PX_Y px a foot and
+# the radius by 1/BALL_GROWTH_FT_PER_PX, so a home run stays clear of the
+# rim. Drawing only: nothing decided reads the drawn radius.
+BALL_GROWTH_START_FT    = 15.0
+BALL_GROWTH_FT_PER_PX   = 30.0          # a pixel of radius per 30 ft of height
+BALL_MAX_RADIUS_PX      = 6
+
+
+def drawn_ball_radius_px(lift_px):
+    """The ball's drawn radius for a ball drawn `lift_px` above its shadow.
+
+    Read off the lift because that is what a drawn frame — live or replayed —
+    carries: the ball and its ground point. The lift is the height in feet at
+    FT_TO_PX_Y, the scale it was drawn at.
+    """
+    height_ft = max(0.0, lift_px) / FT_TO_PX_Y
+    grown = BALL_RADIUS_PX + max(0.0, height_ft - BALL_GROWTH_START_FT) / BALL_GROWTH_FT_PER_PX
+    # Half up, not Python's half-to-even, so the steps are a pixel per 30 ft.
+    return int(min(BALL_MAX_RADIUS_PX, grown) + 0.5)
+
 
 # At the fence, the whole drawn ball is on one side of its rim: below it for
 # a ball off the wall, above it for a home run. Stated against the drawn
@@ -2094,6 +2138,10 @@ class HitAnimation:
         self._foul_dead_at_ms = None      # a live foul landed or was dropped
         self._foul_caught = False
         self._foul_out_of_view = False
+        self._foul_grounder_reaches_net = False
+        self._foul_net_heard = False
+        # Sounds made since they were last collected — see `take_sound_cues`.
+        self._sound_cues = []
 
         # True when the foul path took the "foul home run" branch: barreled
         # contact hooking just past the pole. Purely a flight-shape marker now
@@ -2563,13 +2611,17 @@ class HitAnimation:
         ux, uy = math.cos(self.spray_field_rad), math.sin(self.spray_field_rad)
         self.flight_path = batted_ball_path.BattedBallPath(
             self.spray_field_rad, roll_ft, 0.0)
-        end_ft = min(roll_ft, roll_ft * self._foul_exit_progress())
+        exit_s = self._foul_exit_progress()
+        end_ft = min(roll_ft, roll_ft * exit_s)
+        ex, ey = self.flight_path.point_ft(exit_s)
+        self._foul_grounder_reaches_net = exit_s < 1.0 and abs(ex) + ey <= 1e-6
         # A ball fouled straight back finds the catcher before the net.
         cx, cy = _to_field_ft(self.fielders["C"].home_pos)
         along = cx * ux + cy * uy
         if 0.0 < along < end_ft and abs(cx * uy - cy * ux) <= CATCHER_GEAR_REACH_FT:
             end_ft = along
             self._foul_off_catcher = True
+            self._foul_grounder_reaches_net = False
         self.flight_path = batted_ball_path.BattedBallPath(
             self.spray_field_rad, end_ft, 0.0)
         self._hit_end = _to_screen(ux * end_ft, uy * end_ft)
@@ -6055,6 +6107,9 @@ class HitAnimation:
             # treats it as a play the runners run on.
             self._foul_caught = True
             self.foul_result = outcomes.FOUL_CAUGHT
+            catch_ft = math.hypot(*_to_field_ft(self.fielders[catcher_role].pos))
+            self._sound_cues.append((CUE_CATCH, max(
+                CATCH_SOUND_MIN_GAIN, 1.0 - catch_ft / CATCH_SOUND_FALLOFF_FT)))
         self._secured = True
         self._secured_in_flight = True
         self._post_fielding = True
@@ -6369,9 +6424,12 @@ class HitAnimation:
             self._ball = _arc_grounder(
                 HOME, self._hit_end, self._grounder_peaks, t, ground=ground)
             self._ball_shadow = ground
+            if t >= 1.0 and self._foul_grounder_reaches_net:
+                self._hear_the_net()
             return
         stop = self._foul_net_stop
         if stop is not None and elapsed >= stop[1]:
+            self._hear_the_net()
             # Stopped by the net: it falls straight down the face from the
             # height it hit at, under gravity.
             progress, stop_ms, height_ft, drop_ms = stop
@@ -6397,6 +6455,28 @@ class HitAnimation:
             return
         if phase >= 1.0:
             self._foul_comes_down(elapsed)
+
+    def _hear_the_net(self):
+        """The ball reached the backstop net: one thud, as loud as it was hit."""
+        if self._foul_net_heard:
+            return
+        self._foul_net_heard = True
+        (ev_lo, ev_hi), (lo, hi) = NET_SOUND_EV_MPH, NET_SOUND_GAIN
+        frac = max(0.0, min(1.0, (self.exit_velocity_mph - ev_lo) / (ev_hi - ev_lo)))
+        self._sound_cues.append((CUE_NET, lo + (hi - lo) * frac))
+
+    def take_sound_cues(self):
+        """The sounds this play has made since the last call, as
+        `(cue, gain)` pairs, oldest first. Collecting them empties the list.
+
+        Cues rather than playback because this class is a simulation with no
+        speaker: it is run out of sight with the foul animation off, replayed
+        from frames, and swept thousands of times by the calibration tools,
+        and none of those should make a sound. Whoever is showing the play
+        collects them once a frame (`PitchSimulation._handle_hit_animation_phase`).
+        """
+        cues, self._sound_cues = self._sound_cues, []
+        return cues
 
     def _end_when_out_of_view(self, elapsed):
         """A dead foul that has left the picture ends there.

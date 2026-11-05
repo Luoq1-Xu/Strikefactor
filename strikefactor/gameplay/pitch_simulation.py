@@ -1631,6 +1631,7 @@ class PitchSimulation:
             deferred.append(event)
         self.hit_animation.update(current_time)
         self._fielding_recorder.capture(self.hit_animation)
+        self._play_animation_sounds()
         self.hit_animation.draw(self.game.screen)
 
         self._complete_hit_animation()
@@ -1672,6 +1673,15 @@ class PitchSimulation:
                     self._complete_hit_animation()
                 self._finish_pitch()
                 return
+
+    def _play_animation_sounds(self):
+        """Play what the play on screen made a sound for this frame — a
+        foul caught, a foul into the net. Only here: a play run out of sight
+        or replayed from frames is silent."""
+        sounds = getattr(self.game, "sound_manager", None)
+        for cue, gain in self.hit_animation.take_sound_cues():
+            if sounds is not None:
+                sounds.play_cue(cue, gain)
 
     def _complete_hit_animation(self):
         """Finalize statistics and publish the clip once, including early exits."""
