@@ -893,37 +893,6 @@ BALL_RADIUS_PX          = 3
 BALL_SHADOW_W_PX        = 8             # ellipse, flattened by the camera tilt
 BALL_SHADOW_H_PX        = 3
 
-# The drawn ball grows as it climbs, toward a camera above and behind the
-# plate. Height on this field is otherwise only the gap between the ball and
-# its shadow, and that gap is drawn straight up the screen — so a pop-up hit
-# almost straight up read as a ball travelling out toward the mound. A bigger
-# ball is a ball nearer the camera, which is what a pop-up is.
-#
-# **Not below the fence.** Every guarantee about the drawn ball at the wall —
-# a ball off the wall drawn wholly under the rim, a home run wholly over it
-# (WALL_IMPACT_MAX_LIFT_PX, HR_FENCE_MIN_LIFT_PX, BALL_WALL_MARGIN_PX) — is
-# stated at BALL_RADIUS_PX, so the ball keeps that size to a little over the
-# fence's 12 ft. Above it the gap to the rim grows by FT_TO_PX_Y px a foot and
-# the radius by 1/BALL_GROWTH_FT_PER_PX, so a home run stays clear of the
-# rim. Drawing only: nothing decided reads the drawn radius.
-BALL_GROWTH_START_FT    = 15.0
-BALL_GROWTH_FT_PER_PX   = 30.0          # a pixel of radius per 30 ft of height
-BALL_MAX_RADIUS_PX      = 6
-
-
-def drawn_ball_radius_px(lift_px):
-    """The ball's drawn radius for a ball drawn `lift_px` above its shadow.
-
-    Read off the lift because that is what a drawn frame — live or replayed —
-    carries: the ball and its ground point. The lift is the height in feet at
-    FT_TO_PX_Y, the scale it was drawn at.
-    """
-    height_ft = max(0.0, lift_px) / FT_TO_PX_Y
-    grown = BALL_RADIUS_PX + max(0.0, height_ft - BALL_GROWTH_START_FT) / BALL_GROWTH_FT_PER_PX
-    # Half up, not Python's half-to-even, so the steps are a pixel per 30 ft.
-    return int(min(BALL_MAX_RADIUS_PX, grown) + 0.5)
-
-
 # At the fence, the whole drawn ball is on one side of its rim: below it for
 # a ball off the wall, above it for a home run. Stated against the drawn
 # ball rather than its centre because the ball is 3 px of radius on a face

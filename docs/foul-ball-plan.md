@@ -1,9 +1,11 @@
 # Foul balls: real flights, a backstop, and foul outs
 
-Status: phases 0-4 implemented, and three of phase 5's four extras — the
-catch sound, the net thud and the ball growing with height. Foul tips and
-"let it drop" are not started. The plan below is kept as written. Where the
-build went differently:
+Status: phases 0-4 implemented, and two of phase 5's extras — the catch
+sound and the net thud. The ball growing with height was built and taken
+back out: a ball swelling toward its apex and shrinking again on the way
+down read as awkward rather than as height. Foul tips and "let it drop" are
+not started. The plan below is kept as written. Where the build went
+differently:
 
 - **Decisions taken.** The backstop is at the bottom edge of the screen
   (`park.BACKSTOP_FT = 45`). With the foul animation off, a live foul is still
@@ -43,9 +45,6 @@ build went differently:
   `assets/sounds/net/thud.mp3` — a low thump with a short rustle, pitched at
   110-220 Hz so laptop speakers can play it. Replace the file with a
   recording to change it.
-- **The ball grows only above 15 ft**, a pixel of radius per 30 ft up to 6 px,
-  because every fence-drawing guarantee is stated at the 3 px ball. It
-  applies to every batted ball and to replays.
 
 ## The problem
 

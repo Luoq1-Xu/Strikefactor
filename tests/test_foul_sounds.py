@@ -1,4 +1,4 @@
-"""What a foul sounds like, and how big a ball is drawn the higher it goes.
+"""What a foul sounds like.
 
 A fielding play has no speaker: `HitAnimation` says what happened and how
 loud (`take_sound_cues`), and only the play on screen turns that into sound
@@ -12,16 +12,13 @@ import random
 from types import SimpleNamespace
 
 import numpy as np
-import pygame
 import pytest
 
 from strikefactor.config import get_path
 from strikefactor.engine.sound_manager import SoundManager
 from strikefactor.gameplay import defense as defense_model
 from strikefactor.gameplay import hit_animation as ha
-from strikefactor.gameplay.fielding_record import FieldingFrame
 from strikefactor.gameplay.pitch_simulation import PitchSimulation
-from strikefactor.ui.fielding_renderer import draw_frame
 from tools import make_net_thud
 
 HANDS = ("R", "L")
@@ -160,44 +157,3 @@ def test_the_net_thud_is_mostly_where_a_small_speaker_can_play_it():
     freqs = np.fft.rfftfreq(x.size, 1.0 / make_net_thud.SAMPLE_RATE)
     assert power[freqs >= 150.0].sum() / power.sum() > 0.5
 
-
-# ---- The ball's size --------------------------------------------------------------
-
-def test_the_ball_keeps_its_size_up_to_a_little_over_the_fence():
-    """Every guarantee about the drawn ball at the wall is stated at
-    BALL_RADIUS_PX, so nothing near the fence may change size."""
-    for height_ft in (0.0, 5.0, 12.0, ha.BALL_GROWTH_START_FT):
-        assert ha.drawn_ball_radius_px(height_ft * ha.FT_TO_PX_Y) == ha.BALL_RADIUS_PX
-
-
-def test_the_ball_grows_with_height_and_stops_growing():
-    sizes = [ha.drawn_ball_radius_px(h * ha.FT_TO_PX_Y) for h in range(0, 300, 5)]
-    assert sizes == sorted(sizes)
-    assert sizes[-1] == ha.BALL_MAX_RADIUS_PX
-    assert ha.drawn_ball_radius_px(-10.0) == ha.BALL_RADIUS_PX
-
-
-def test_a_home_run_is_still_drawn_clear_of_the_rim_at_any_height():
-    """Above BALL_GROWTH_START_FT the lift outgrows the radius, so a ball over
-    the fence stays wholly over the drawn rim however big it is drawn."""
-    for height_ft in np.arange(ha.BALL_GROWTH_START_FT, 200.0, 0.5):
-        lift_px = height_ft * ha.FT_TO_PX_Y
-        radius = ha.drawn_ball_radius_px(lift_px)
-        assert lift_px - radius >= ha.WALL_FACE_HEIGHT_PX - 0.5, height_ft
-
-
-def _drawn_ball_width(lift_px):
-    screen = pygame.Surface((1280, 720))
-    screen.fill((0, 0, 0))
-    ball = (640.0, 300.0 - lift_px)
-    frame = FieldingFrame(0, ball, (640.0, 300.0), True, False, (), None, None,
-                          None, None, (), None, None, ())
-    draw_frame(screen, frame)
-    # Only the ball is pure white in a column above the shadow.
-    column = [x for x in range(600, 681)
-              if screen.get_at((x, int(ball[1]))) == pygame.Color(255, 255, 255)]
-    return len(column)
-
-
-def test_a_pop_up_is_drawn_bigger_than_a_grounder():
-    assert _drawn_ball_width(100.0 * ha.FT_TO_PX_Y) > _drawn_ball_width(0.0)
