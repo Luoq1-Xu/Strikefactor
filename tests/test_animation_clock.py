@@ -124,30 +124,7 @@ def test_ranging_range_is_a_circle_on_the_field_not_on_the_screen():
         assert anim._range_ft(pitcher, clamped) == pytest.approx(cap_ft, rel=1e-6)
 
 
-# ---- The caps are gone, and the physics reproduces them ---------------------
-
-def test_the_dilation_correction_constants_are_gone():
-    """Named explicitly so re-adding one is a deliberate act. Each existed
-    only to correct the clock; a real sprint against a real flight time
-    reproduces the ~30 ft of infield range the first of them hand-set."""
-    for name in ("INFIELD_LOW_BALL_RANGE_PX", "INFIELD_CHASE_RANGE_PX",
-                 "FIRST_BASE_GROUNDER_RANGE_PX", "FIELDER_MAX_SPEED_PX_MS",
-                 "ROLLING_DECEL_PX_MS2", "RETRIEVE_TIME_SINGLE_MAX_MS",
-                 "RETRIEVE_TIME_DOUBLE_MAX_MS"):
-        assert not hasattr(ha, name), f"{name} is back"
-
-
-def test_the_post_landing_render_unit_constants_are_gone():
-    """The same fault one phase later, and the reported bug: every one of
-    these stated a physical property of a bouncing ball in pixels or
-    animated milliseconds. `gameplay/ground_roll.py` owns them now, in feet
-    and seconds."""
-    for name in ("SHAPE_LAND_FACTOR", "ROLLING_DECEL_FT_S2", "BOUNCE_COR",
-                 "BOUNCE_INITIAL_DURATION_MS", "BOUNCE_HEIGHT_THRESHOLD_PX",
-                 "BOUNCE_HORIZONTAL_RETENTION", "SHAPE_BOUNCE_HEIGHT_FRAC",
-                 "BOUNCE_HEIGHT_MAX_PX"):
-        assert not hasattr(ha, name), f"{name} is back"
-
+# ---- The physics reproduces what the caps used to hand-set -----------------
 
 def test_an_infielder_covers_about_thirty_feet_on_a_grounder():
     """The payoff, and the reason the caps could go: 55 px (~30 ft) was

@@ -219,13 +219,6 @@ class _StubGame:
         self.gameday_manager = manager
 
 
-def test_the_two_line_per_side_pitching_strip_is_gone():
-    """The strip is what hid the arms. If it comes back, so does the bug."""
-    assert not hasattr(GameDayTransitionState, '_LOG_PITCHERS_H')
-    assert not hasattr(GameDayTransitionState, '_render_log_pitchers')
-    assert 'PITCHING' in GameDayTransitionState._LOG_TABS
-
-
 def test_log_tabs_cycle_and_select_the_right_panel():
     state = GameDayTransitionState(_StubGame(None))
     state._pbp = object()

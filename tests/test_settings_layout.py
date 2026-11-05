@@ -61,44 +61,6 @@ def _rendered_keybinds(surface, bindings):
     return panel
 
 
-# ── The old grid is gone ─────────────────────────────────────────────────
-
-# Every button the off-centre settings/keybind grid used to define. If one
-# comes back, a screen has grown a second, hand-placed source of layout truth.
-_RETIRED_BUTTONS = [
-    'difficulty_rookie', 'difficulty_amateur', 'difficulty_professional',
-    'difficulty_allstar', 'difficulty_halloffame',
-    'toggle_ump_sound_settings', 'toggle_strikezone_settings',
-    'toggle_abs_settings', 'toggle_foul_anim_settings',
-    'display_fps_setting', 'engine_fps_setting', 'toggle_hud_mode_settings',
-    'bind_toggle_ui', 'bind_toggle_strikezone', 'bind_toggle_sound',
-    'bind_toggle_batter', 'bind_quick_pitch', 'bind_view_pitches',
-    'bind_main_menu', 'bind_toggle_track', 'bind_challenge',
-]
-
-
-@pytest.mark.parametrize("name", _RETIRED_BUTTONS)
-def test_the_hardcoded_settings_grid_is_gone(name):
-    """A setting is a row and a binding is a row. Neither screen has a button
-    per value any more, in the footer or anywhere else."""
-    for panel_cls in (SettingsPanel, KeyBindingsPanel):
-        assert name not in {b.action for b in panel_cls().footer_buttons()}
-    assert name not in MenuState._FOOTER_ACTIONS
-    assert name not in MenuState._SETTINGS_ACTIONS
-
-
-def test_nothing_pushes_text_into_settings_buttons_any_more():
-    """The per-widget text updaters went with the widgets: a row reads its
-    value when it is drawn."""
-    from strikefactor.main import Game
-
-    for gone in ('update_settings_button_states', 'show_settings_info',
-                 'update_key_binding_buttons', 'show_key_bindings_info'):
-        assert not hasattr(Game, gone)
-        assert not hasattr(SettingsPanel, gone)
-        assert not hasattr(KeyBindingsPanel, gone)
-
-
 # ── Footer nav is derived, not literal ───────────────────────────────────
 
 @pytest.mark.parametrize("panel_cls,names", [

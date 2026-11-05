@@ -113,7 +113,6 @@ def test_the_ball_turns_at_the_rate_a_bat_does(hand):
     rate = -(sum((t - mean_t) * (d - mean_s) for t, d in pts)
              / sum((t - mean_t) ** 2 for t, _ in pts))
     assert 1.3 < rate < 1.9, f"{rate:.2f} deg of spray per ms of timing"
-    assert not hasattr(spray, "TIMING_GAIN")
 
 
 @pytest.mark.parametrize("hand", HANDS)
@@ -175,19 +174,6 @@ def test_a_right_hander_pulls_toward_left_field():
 
 
 # ---- The geometry underneath ------------------------------------------------
-
-def test_the_spray_remap_is_gone():
-    """`spray_angle_deg` read the ball's direction off a bat that was 49
-    degrees past square, by subtracting the 49, rescaling the location
-    response and multiplying the timing response by 2.4. The bat is near
-    square now and one collision gives the direction, so there is no reference
-    angle and no gain between the bat and the ball. The three that described
-    the location response moved to `bat_path` as statements about the bat."""
-    for name in ("spray_angle_deg", "SQUARE_REF_DEG", "LOCATION_GAIN",
-                 "LOCATION_SPAN_DEG", "TIMING_GAIN", "LEAGUE_MEAN_DEG"):
-        assert not hasattr(spray, name), name
-    assert bp.POSE_SPAN_DEG > 0.0 and bp.POSE_GAIN_DEG_PER_FT > 0.0
-
 
 @pytest.mark.parametrize("hand", HANDS)
 def test_the_ball_leaves_further_round_than_the_bat_faces(hand):

@@ -155,7 +155,7 @@ New, each for both hands (rule 9) and each on the extreme deterministic case, no
 - The hands stay within the reach bound and on the plate side of the body at every aim, however absurd.
 - Collision: a horizontal square bat turns a vertical offset into launch angle and no spray; a barrel-down bat sends an undercut ball toward the opposite field; a bat over the ball never produces a fly ball; a stationary bat reflects the ball near the mirror direction.
 - Ball direction turns between 1.3° and 1.9° per ms of residual timing error, measured as a rate.
-- `test_the_spray_remap_is_gone`, `test_the_launch_angle_fit_is_gone`, `test_the_pixel_pivot_is_gone`.
+- `test_the_spray_remap_is_gone`, `test_the_launch_angle_fit_is_gone`, `test_the_pixel_pivot_is_gone`. (Since removed, with the suite's other tests that only checked removed code had not come back. The launch-angle band edges and the hands' contact position they also pinned live on in `test_the_launch_angle_bands_have_fixed_edges` and `test_the_hands_meet_the_ball_out_front_and_belt_high`.)
 - The replay's drawn ray is the bearing the animation flew, and on an on-time middle pitch it lies within 10° of the drawn bat's face normal.
 
 ## Acceptance

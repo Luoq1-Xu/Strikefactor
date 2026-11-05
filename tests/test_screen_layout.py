@@ -323,16 +323,6 @@ def _transition_on(game, phase):
     return state
 
 
-@pytest.mark.parametrize('state_cls', [
-    gs.ModeSelectState, gs.MenuState, gs.SandboxMenuState, gs.SummaryState])
-def test_the_typewriter_titles_are_gone(state_cls):
-    """These four screens typed their titles out a letter at a time. If the
-    counters come back, a screen has left the shared chrome."""
-    state = state_cls(_game())
-    for gone in ('messages', 'counter', 'textoffset', 'messages_finished'):
-        assert not hasattr(state, gone), gone
-
-
 # ── Pitcher select ───────────────────────────────────────────────────────
 
 def _select(extras=None):
@@ -720,40 +710,6 @@ def test_the_sidebar_and_continue_are_drawn_above_the_hud():
     """They go in `render_overlay`, which the frame draws after the HUD."""
     assert gs.SandboxGameplayState.render_overlay is not gs.GameState.render_overlay
     assert gs.InningEndState.render_overlay is not gs.GameState.render_overlay
-
-
-# ── Names that must not come back ────────────────────────────────────────
-
-# The in-game sidebar. Each of these duplicated a key binding (Z, B, V, M,
-# ESC), or opened a feature that went with it (the scouting report and the lap
-# log). If one comes back, gameplay has grown a second way to do something a
-# key already does.
-_RETIRED_BUTTONS = [
-    'strikezone', 'toggle_batter', 'view_pitches', 'toggle_ump_sound',
-    'main_menu', 'scout', 'lap_stats', 'view_laps',
-    'sandbox_sound', 'sandbox_exit',
-]
-
-
-def _flat(action):
-    """Action ids are strings, or ('pitcher', name) pairs on the sidebar."""
-    return set(action) if isinstance(action, tuple) else {action}
-
-
-@pytest.mark.parametrize('name', _RETIRED_BUTTONS)
-def test_the_in_game_sidebar_buttons_are_gone(name):
-    for screen, buttons in SCREENS.items():
-        used = set().union(*(_flat(b.action) for b in buttons()))
-        assert name not in used, f"'{name}' is a button on '{screen}'"
-
-
-def test_the_scouting_and_lap_panels_are_gone():
-    from strikefactor.main import Game
-
-    for gone in ('scouting_panel', 'lap_log_panel', 'toggle_scouting_panel',
-                 'toggle_lap_log_panel'):
-        assert not hasattr(Game, gone)
-        assert not hasattr(gs.GameplayState, gone)
 
 
 # ── A click must not carry into the next screen ──────────────────────────
